@@ -13,31 +13,9 @@ on:
       - 'docs/**'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  autoformat:
-    name: Temporary trusted-branch rustfmt
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    if: github.event.pull_request.head.repo.full_name == github.repository
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-      - name: Apply rustfmt and push only formatting
-        run: |
-          cargo fmt --all
-          if git diff --quiet; then
-            echo 'No rustfmt changes required.'
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add Cargo.toml gateway-core site-adapter-api plugins/generic-direct
-          git commit -m 'style: apply rustfmt for R001'
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
-
   deterministic:
     name: J1 deterministic x64
     runs-on: ubuntu-latest
