@@ -1,6 +1,6 @@
 # Codex / Agent Working Rules
 
-本文件定义本仓库长期 Agent 约束。Task 契约位于 `docs/tasks/`，多环境路由见 `docs/development-environments.md`，自动执行架构见 `docs/runner-execution-architecture.md`，外部 Codex fallback 入口位于 `docs/codex/`。
+本文件定义本仓库长期 Agent 约束。Task 契约位于 `docs/tasks/`，多环境路由见 `docs/development-environments.md`，自动执行架构见 `docs/runner-execution-architecture.md`，Codex Task 入口位于 `docs/tasks/handoffs/` 与 `.agents/skills/`。
 
 ## 1. 开始任何任务前
 
@@ -49,7 +49,7 @@ Research 结果只使用：
 
 “理论上支持”“应该可行”“看起来没问题”不能当 PASS。
 
-当前 P0 顺序：
+当前 P0 证据聚合顺序：
 
 ```text
 R007 Playback concurrency contract closure
@@ -59,6 +59,8 @@ R007 Playback concurrency contract closure
 → R008 Egress / Secret baseline
 → Core Feasibility Review
 ```
+
+这个顺序不自动等于 Task publication dependency；hard dependency 以具体 Task Contract 为准。
 
 R004 Jellyfin 可并行但不是 Core blocker；R005 验证真实 Site Plugin Contract；R006 Native Panel 非 Core blocker。
 
@@ -129,42 +131,52 @@ Evidence
 - 不 force push / 重写他人已引用历史，除非明确要求。
 - 提交前检查 Secret、账号数据、Cookie、Token、敏感 URL、大型实验文件。
 - Verification Evidence 能回指 Candidate SHA 和实际 run/job/环境。
+- 已有可恢复 Candidate/PR 的 Task 发生 Worker 卡死时，优先保留同一 Issue/PR 进入下一 Attempt，不从头重建。
 
-## 9. Web-first / Runner-driven 协同
+## 9. Codex-first / Runner-driven 协同
 
 默认原则：
 
-> **Web-first，GitHub-hosted-first，Target-runner-for-proof，Codex-for-interaction，Manual-for-UX。**
+> **Codex-first，GitHub-hosted-first，Target-runner-for-proof，Web-for-coordination/review，Manual-for-UX。**
 
-### 9.1 网页两种会话
+这里的 `Codex-first` 指 **Worker/client 路由**；它不改变 GitHub Actions/Runner/Target 的验证职责。
+
+### 9.1 会话角色
 
 ```text
 Web Coordinator
-= 长生命周期、全局控制面
+= 长生命周期、项目级控制面
+= priority / Task split / publication / Review / Gate / recovery
+
+Codex Worker
+= 默认短生命周期、单 Task 仓库执行者
+= code / tests / CI authoring / PR integration / fix / interactive repo work
 
 Web Worker
-= 短生命周期、单 Task 执行者
+= fallback / GitHub-only 轻量 Worker
+= 仅当 Task 不值得启动 coding workspace、Codex 不合适或 Coordinator 明确指定
 ```
 
-Coordinator 负责优先级、拆 Task、Claims/Success Criteria/Evidence、Review、Gate Decision。
+普通仓库 implementation / combined Task 默认先考虑 Codex Cloud (`env:cloud`)；不要仅因为历史上 Web Worker 可写 GitHub 就继续把代码任务默认派给 Web。
 
-Web Worker 是默认最高优先级 Implementation Worker，并可作为 GitHub Actions Orchestrator。
-
-### 9.2 Web Worker 可以获得真实 runtime Evidence
-
-默认闭环：
+### 9.2 默认 Codex 开发闭环
 
 ```text
-Web Worker
+Codex Worker
+→ read Issue / task.md / current main / existing candidate PR
 → code / tests / Candidate commit
 → GitHub Actions
 → matching Runner
-→ Web Worker read run/job/log/artifact
+→ read run/job/log/artifact
 → fix / rerun
+→ [EXECUTION REPORT]
+→ status:review
 → Coordinator Review
 ```
 
-不要因为需要 build/test 就自动路由 WSL/Codex；也不要因为需要通用 ARM64 就自动占用目标手机。
+已有 Candidate/PR 时，下一 Attempt 优先续用并 rebase/integrate；不要因为 Worker 切换而复制业务 Task。
+
+GitHub Actions 仍是真实 runtime Evidence 的默认执行面。Codex 本地命令可以用于开发/诊断，但 required Verification Evidence 仍以 `task.md` 为准。
 
 ### 9.3 GitHub Actions 是统一自动执行总线
 
@@ -186,18 +198,29 @@ Real TV / Manual
 
 Runner 不是 Agent，不 claim Issue。
 
-### 9.4 Cloud 不部署 Runner
+### 9.4 Codex Cloud 是默认通用代码 Worker，不是 Runner
 
-Cloud 资源有限，不建立 self-hosted Runner，也不作为普通 long-running 默认后端。
+`env:cloud` 默认用于不需要设备专属交互能力的仓库实现/修复/重构/test/CI authoring。
 
-大量 repeated race / benchmark / regression 优先使用 GitHub-hosted matrix/sharding。
+Cloud Codex 可以：
 
-Cloud Codex 只用于：
+- 修改代码/文档/tests/workflows；
+- 维护 candidate branch/PR；
+- 读取/触发 GitHub Actions；
+- 分析 artifacts/logs 并迭代；
+- 执行需要 coding workspace 的 repository integration/rebase。
 
-- Cloud-specific 复现；
-- Actions 不适合的长期交互 state；
-- 明确授权的 Tailscale remote orchestration；
-- 其他需要 Cloud 主机交互能力的 Task。
+但：
+
+```text
+Cloud Codex
+!= GitHub Actions Runner
+!= Ubuntu ARM64 phone
+!= 家庭 LAN
+!= TV Evidence
+```
+
+大量 repeated race / benchmark / regression 仍优先使用 GitHub-hosted matrix/sharding；不要让 Cloud shell 代替可审计 Actions Evidence。
 
 ### 9.5 Ubuntu ARM64 优先作为 Target Runner
 
@@ -211,12 +234,14 @@ Cloud Codex 只用于：
 - target media path；
 - device-specific stable behavior。
 
-只有 Actions job 无法表达的交互式 target debug、设备恢复、现场诊断才启动 Ubuntu ARM64 Codex。
+只有 Actions job 无法表达的交互式 target debug、设备恢复、现场诊断才启动 Ubuntu ARM64 Codex (`env:ubuntu-arm64`)。
 
-### 9.6 WSL / Windows 是交互式 fallback
+### 9.6 WSL / Windows 是能力路由，不是默认代码环境
 
-- WSL：Actions failure 的交互式 Linux debug、本地进程/文件、快速 failure investigation。
-- Windows：ADB、Android host、手机重启/恢复/部署协调。
+- WSL (`env:wsl`)：本地 Linux 交互 debug、本地进程/文件、Actions failure investigation。
+- Windows (`env:windows`)：ADB、Android host、手机重启/恢复/部署协调。
+
+Task 不需要这些能力时优先 Codex Cloud，而不是为了“本地更真实”机械路由。
 
 ### 9.7 Target Runner 安全不变量
 
@@ -243,6 +268,8 @@ Task
 ↓
 Claims
 ↓
+Required Worker capabilities
+↓
 Verification Jobs
 ↓
 Runner / Target
@@ -251,8 +278,8 @@ Runner / Target
 禁止反过来：
 
 ```text
-“有 x64 / ARM64 / phone 三个环境”
-→ 所以创建三个业务 Task
+“有 Cloud / x64 / ARM64 / phone 三个环境”
+→ 所以创建多个相同业务 Task
 ```
 
 Task 表示“做什么/证明什么”，有独立 Scope、Owner、Success Criteria 和 Review 生命周期。
@@ -266,7 +293,7 @@ Job 表示“在哪里、用什么命令验证某个 Claim 切片”，不 claim
 默认普通工程任务使用 `combined`：
 
 ```text
-Web implementation
+Codex implementation
 → Candidate SHA
 → standard GitHub Actions Jobs
 → Coordinator Review
@@ -282,7 +309,7 @@ Web implementation
 
 Implementation Task 完成只代表候选实现已接受，不自动表示 Parent Goal / Research Gate 已通过。
 
-### 9.10 Task 使用 Capability，不静态绑定环境
+### 9.10 Task 使用 Capability，再选择 Codex 环境
 
 Task kind：
 
@@ -315,12 +342,23 @@ jellyfin-tv
 manual-observation
 ```
 
+默认环境映射：
+
+```text
+generic repo coding → env:cloud
+interactive Linux-specific → env:wsl
+Windows/ADB → env:windows
+target-phone interactive → env:ubuntu-arm64
+physical TV → env:manual-tv
+GitHub-only lightweight fallback → env:web-gpt
+```
+
 ### 9.11 Evidence 必须分开记录执行层次
 
 例如：
 
 ```text
-Orchestrator = web-gpt
+Orchestrator = codex-cloud
 Execution Plane = github-actions
 Runner = github-hosted-arm64
 Target = generic Linux ARM64
@@ -329,7 +367,7 @@ Target = generic Linux ARM64
 或：
 
 ```text
-Orchestrator = web-gpt
+Orchestrator = codex-cloud
 Execution Plane = github-actions
 Runner = ubuntu-arm64-self-hosted
 Target = ubuntu-arm64-phone
@@ -405,7 +443,7 @@ status:draft
 - create/update 工具返回成功只说明写操作成功，不等于 Task 已发布；
 - `status:ready` 必须是发布流程的最后写入步骤之一，不在 Issue 刚创建时提前设置；
 - 在切 `status:ready` 前，必须重新读取 Issue、`task.md`、`prompt.md`，确认真实存在且互相引用正确；
-- 切 `status:ready` 后，必须使用与目标 Worker 等价的队列查询（例如 `status:ready + env:ubuntu-arm64`）确认目标 Task 实际可见、无 active owner；
+- 切 `status:ready` 后，必须使用与目标 Worker 等价的队列查询（例如 `status:ready + env:cloud` / `env:ubuntu-arm64`）确认目标 Task 实际可见、无 active owner；
 - 如果读回或队列查询失败，任务发布失败，保持/退回 `status:draft`，修复后重新验证；
 - 在完整 read-back PASS 前，不得告诉用户“任务已创建 / 已发布 / 可以领取”；
 - 发布验证 PASS 后，必须向用户给出真实的下游 Worker 执行入口提示词，不能只说“任务已发布”。
@@ -430,11 +468,7 @@ Environment: env:<real environment>
 Prompt: docs/tasks/<real-issue>-<real-slug>/prompt.md
 ```
 
-并提供可直接复制的新会话入口：
-
-```text
-读取 `AGENTS.md` 和 `docs/tasks/<real-issue>-<real-slug>/prompt.md`，执行当前 Task。
-```
+并提供该环境可直接复制的入口。Codex 环境优先使用 `$task-worker`；Web/Manual 使用各自 handoff profile。
 
 所有值必须来自发布后的 GitHub read-back，不得保留 placeholder。如果 queue verification 失败，不得输出该入口。
 
@@ -484,7 +518,7 @@ Decision: ACCEPT | REVISE | BLOCK | SPLIT | NOT_PLANNED
 - `REVISE`：如果 Contract 没变，`task.md` / `prompt.md` 不变，Issue → `status:ready`，输出下一轮 downstream entry；
 - `BLOCK`：Issue → `status:blocked`；解阻后评论 `[COORDINATOR UNBLOCK]`，再 `status:ready`；
 - `SPLIT`：只有独立 Scope/lifecycle/Success Criteria/Evidence Authority 才建 child Task；不能按 Runner/环境拆；
-- Contract 改变：先回 `status:draft`，更新 canonical docs / `task.md`，再走 read-back / ready / queue verification；
+- Contract/routing bootstrap 改变：先回 `status:draft`，更新 canonical/process docs / `task.md` / `prompt.md`，再走 read-back / ready / queue verification；
 - `ACCEPT`：只有 Final Acceptance Gate 全部满足后才允许 `status:done` + close。
 
 Issue Comment 标准类型：
@@ -525,23 +559,26 @@ Worker 不得自行 `done` 或关闭 Issue。
 1. 读取 `AGENTS.md`；如果 Task Package 有 `prompt.md`，先用它完成 bootstrap；
 2. 读取 Issue、全部 relevant comments、`task.md`、`docs/tasks/issue-lifecycle-protocol.md` 以及 Task 引用的适用 canonical /专题文档；
 3. 确认 Task kind、Scope 和执行路径满足 Required Capabilities；
-4. 确认 Issue `status:ready` 且无 active owner；
+4. 确认 Issue `status:ready`、当前 environment eligible 且无 active owner；
 5. claim + `status:in-progress`，确定新的 `Attempt N`；
-6. 只执行 Scope；
-7. 提交 candidate / Evidence；
-8. 正常完成时评论 `[EXECUTION REPORT]`，阻塞时评论 `[BLOCKER REPORT]`；
-9. 记录真实 Task/Claim/Attempt/Job、Orchestrator/Execution Plane/Runner/Target；
-10. 正常完成 → Issue `status:review`；阻塞 → `status:blocked`；
-11. 释放 active execution ownership；
-12. 停止，不自动开始下一项。
+6. 如果 Issue 历史存在前一 Attempt Candidate/PR，先评估复用/rebase/继续，不机械重建；
+7. 只执行 Scope；
+8. 提交 candidate / Evidence；
+9. 正常完成时评论 `[EXECUTION REPORT]`，阻塞时评论 `[BLOCKER REPORT]`；
+10. 记录真实 Task/Claim/Attempt/Job、Orchestrator/Execution Plane/Runner/Target；
+11. 正常完成 → Issue `status:review`；阻塞 → `status:blocked`；
+12. 释放 active execution ownership；
+13. 停止，不自动开始下一项。
 
 GitHub Actions Job 不参与 claim。大型 Research Item 可以拆多个 Task；最终 Gate 由 Web Coordinator 汇总已接受 Evidence 决定。
 
-推荐新会话只给：
+Codex 环境推荐入口：
 
-> 读取 `AGENTS.md` 和 `docs/tasks/<issue>-<slug>/prompt.md`，执行当前 Task。
+```text
+$task-worker Execute Issue #<issue> using `docs/tasks/<issue>-<slug>/prompt.md`.
+```
 
-如果旧 Task 没有 `prompt.md`，仍可使用 `AGENTS.md` + Issue + `task.md` 执行。
+Skill 不可见时，使用对应 `docs/tasks/handoffs/<env>.md` fallback。
 
 ## 12. Coordinator Review / Closure 协议
 
@@ -558,14 +595,20 @@ Coordinator 不能只在聊天中 Review。
 7. 如果回到 `status:ready`，重新给用户真实 downstream entry；
 8. 只有 `[FINAL ACCEPTANCE]` 后才能 `status:done` 并关闭 Issue。
 
+如果 Worker session 卡死但 GitHub 已存在 Candidate/PR/Evidence，Coordinator 应保留这些 durable 结果，结束僵死 ownership，并在同一 Issue 下一 Attempt 重新路由；不能依赖旧聊天恢复状态。
+
 聊天只是操作界面；Task 的可恢复协作历史必须留在 GitHub。
 
-## 13. 外部 Codex 入口
+## 13. Codex Task 入口
 
-优先使用标准 Task Package。
+普通仓库代码 Task 的首选入口是对应 Codex 环境 handoff，默认：
 
-阶段性 fallback：
+```text
+env:cloud
+→ docs/tasks/handoffs/cloud.md
+→ $task-worker Execute Issue #<issue> using `docs/tasks/<issue>-<slug>/prompt.md`.
+```
 
-- `docs/codex/technical-feasibility.md`
+需要特定交互能力时按 capability 改用 WSL / Windows / Ubuntu ARM64 Codex。
 
-只有 GitHub Actions / Target Runner / Manual 无法提供、且需要交互式能力时才路由外部 Codex。
+`docs/codex/technical-feasibility.md` 仅保留为没有标准 Task Package 时的阶段性 fallback；已有 Issue + task.md + prompt.md 时不得绕过 Task lifecycle。
