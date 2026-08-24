@@ -141,7 +141,7 @@ Rust trait + workspace，一起编译发布。重点是先证明 SiteAdapter Con
 5. `DisplayAdapter`
 6. scoped SiteAccess + EgressPolicy
 
-随后进入风险驱动技术可行性验证，而不是直接假设真实设备路径已经成立：
+随后进入风险驱动技术可行性验证：
 
 ```text
 R007 Playback concurrency contract
@@ -186,27 +186,35 @@ ADR：
 
 ## Agent / 多环境开发
 
-仓库长期 Agent 规则见 [AGENTS.md](AGENTS.md)，完整多环境协同模型见 [docs/development-environments.md](docs/development-environments.md)。
+仓库长期规则见 [AGENTS.md](AGENTS.md)，完整调度模型见 [docs/development-environments.md](docs/development-environments.md)，Task 协议见 [docs/tasks/README.md](docs/tasks/README.md)。
 
-默认工作方式是：
+默认执行方式：
 
 ```text
 Web Coordinator
-→ Web Worker（最高执行优先级）
-→ 只有缺少 capability 时才路由 WSL / Windows / ARM64 / Cloud / TV
-→ commit / PR / Evidence
+→ Web Worker implementation（默认最高优先级）
+→ GitHub Actions automated verification
+→ Cloud long-running verification
+→ WSL / Windows interactive debugging（按需）
+→ Ubuntu ARM64 / Real TV target proof（按需）
 → Web Coordinator Review
 ```
 
-网页明确区分两种会话：
+网页明确区分：
 
 - **Web Coordinator Session**：长生命周期、项目全局控制面；
-- **Web Worker Session**：短生命周期、单 Task 执行者，使用 `env:web-gpt`。
+- **Web Worker Session**：短生命周期、单 Task 执行者。
 
-具体跨会话/跨环境任务优先使用 GitHub Issue + `docs/tasks/<issue>-<slug>/task.md`。Issue 保存实时状态与 owner；`task.md` 只保存稳定执行契约。
+重要边界：
 
-只有 Web Worker 无法产生任务所需真实 Evidence 时，才进入 [docs/codex/](docs/codex/) 的外部 Codex Worker 路径或真实设备实验。
+- GitHub Actions 是 execution/verification backend，不是会 claim Issue 的 Worker；
+- Cloud 主要承担长时间、无人值守、重复执行；
+- WSL/Windows 主要承担交互式调试和 host-specific 能力；
+- ARM64/TV 只在 claim 必须依赖目标环境真实性时使用；
+- Implementation Result、Verification Result、Coordinator Gate Decision 必须区分。
+
+具体跨会话任务优先使用 GitHub Issue + `docs/tasks/<issue>-<slug>/task.md`。只有 Web + Actions/Cloud 缺少所需 capability 时，才进入 [docs/codex/](docs/codex/) 的外部 Codex Worker 路径。
 
 ## 当前状态
 
-设计收敛完成到可编码契约阶段；技术可行性验证框架和 Web-first 多环境工作流已经建立，尚未把真实设备/真实媒体路径标记为已验证，也尚无可运行正式版本。
+设计收敛完成到可编码契约阶段；技术可行性验证框架和 Web-first / automated-verification 多环境工作流已经建立。尚未把真实设备/真实媒体路径标记为已验证，也尚无可运行正式版本；仓库当前也尚未建立实际 `.github/workflows/`，应在第一个可运行 Rust workspace/测试落地时再建立真实 CI。
