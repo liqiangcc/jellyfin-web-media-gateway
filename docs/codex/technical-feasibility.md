@@ -2,7 +2,42 @@
 
 继续 `liqiangcc/jellyfin-web-media-gateway` 的技术预研与可行性验证。
 
-本任务必须实际读取和修改当前仓库，不要仅给建议或生成一份聊天报告。
+本文件是**外部 Codex Worker 的阶段性 fallback 入口**，不是默认任务调度器。
+
+项目执行优先级：
+
+```text
+Web Worker implementation
+→ GitHub Actions automated verification
+→ Cloud long-running verification
+→ WSL / Windows interactive capability
+→ Ubuntu ARM64 / Real TV target proof
+```
+
+如果已有明确 GitHub Issue + `docs/tasks/<issue>-<slug>/task.md`，必须优先执行该 Task，不使用本文件自行选择其他工作。
+
+## 0. External Worker Routing Gate
+
+没有明确 Issue/Task 时，先判断：
+
+> 当前最高优先级未完成工作是否真的需要当前外部环境提供 Web + Actions/Cloud 无法覆盖的 capability？
+
+如果答案是否定的：
+
+- 不因为已经打开 Codex 会话就抢占该任务；
+- 不自行把 Web/Actions 工作改成外部 Codex 工作；
+- 停止并把任务留给 Web Coordinator 路由。
+
+典型外部 capability：
+
+```text
+WSL: interactive-linux-debug / local process interaction
+Windows: adb / android-device-control
+Ubuntu ARM64: arm64-runtime / device-metrics / thermal-metrics
+Real TV: tv-browser / remote-control / manual-observation
+```
+
+Cloud 如果只是普通长时间自动执行，应优先被视为 long-running backend；只有当前 Cloud Worker 已被明确分派对应 Task 时才执行。
 
 ## 1. 开始前
 
@@ -16,17 +51,18 @@
 6. `docs/technical-feasibility-validation.md`
 7. `docs/mvp-plan.md`
 8. `docs/security.md`
-9. 当前 Research Item 直接相关的专题文档 / ADR
+9. `docs/development-environments.md`
+10. 当前 Research Item 直接相关的专题文档 / ADR
 
-先检查当前 Git 状态、最近提交、已有 Research 状态和 Evidence。不要根据旧聊天假设仓库状态。
+先检查 Git 状态、最近提交、已有 Research 状态、Issue/Task 和 Evidence。不要根据旧聊天假设仓库状态。
 
 ## 2. 当前目标
 
-从 `docs/technical-feasibility-validation.md` 的 Research Matrix 中选择：
+如果没有明确 Issue/Task，并且 Routing Gate 确认当前外部环境确实提供所需 capability，再从 `docs/technical-feasibility-validation.md` 的 Research Matrix 中选择：
 
-> 当前最高优先级、尚未完成、且前置条件已经满足的 Research Item。
+> 当前最高优先级、尚未完成、前置条件满足、并且需要当前环境 capability 的 Research 工作。
 
-当前 P0 顺序原则：
+P0 顺序：
 
 ```text
 R007 Playback concurrency contract closure
@@ -37,47 +73,79 @@ R007 Playback concurrency contract closure
 → Core Feasibility Review
 ```
 
-说明：
+注意：
 
-- 如果某项已经有有效 PASS Evidence，不重复执行。
-- 如果某项已是 CONDITIONAL PASS，先判断其条件是否已经满足/需要补证据，再决定是否继续。
-- 如果真实设备、外部依赖或测试环境缺失，记录 `BLOCKED` 和准确缺口；不得伪造实验结果。
+- R007 contract/design/test authoring 应优先 Web；portable automated tests 应优先 Actions。只有需要 interactive debug 时才进入 WSL。
+- R001 portable build/test 优先 Web + Actions；长时间稳定性可 Cloud；目标 ARM64 数据另行 target verification。
+- R002 最终 audible autoplay / remote UX 必须真实 TV。
+- R003 最终资源数据必须 Ubuntu ARM64；脚本/工具实现仍优先 Web。
+- R008 portable security suite 优先 Web + Actions；环境相关边界按 Required Capability 路由。
 - R004 Jellyfin 可以并行，但不是 Web-only Core blocker。
 - R005 Real Site 用于验证 Site Plugin Contract。
 - R006 Site Browser Worker / Native Site Panel 非 Core blocker。
 
-除非当前最高优先级项目被真实阻塞，否则不要提前进入后续 Research Item。
+如果某项已有有效 PASS Evidence，不重复执行。
 
-## 3. 执行方式
+## 3. Implementation 与 Verification
 
-对选中的 Research Item：
+不要把“写了代码”和“证明了 claim”混成一个结果。
 
-1. 明确当前 Hypothesis。
-2. 检查实验开始前定义的 Success Criteria，禁止实验后降低标准来制造 PASS。
-3. 设计/复用最小可复现实验。
-4. 实际运行代码、测试、浏览器、媒体链路或真实设备验证（按该 Research Item 需要）。
-5. 收集 Evidence 和 Metrics。
-6. 覆盖必要失败路径，不只验证 happy path。
-7. 根据证据给出：
-   - `PASS`
-   - `CONDITIONAL PASS`
-   - `FAIL`
-   - `BLOCKED`
-8. 给出 Architecture Decision：
-   - `Continue`
-   - `Change`
-   - `Defer`
-   - `Drop`
-9. 更新对应研究文档/矩阵/证据。
-10. 如果证据推翻现有契约，按 `AGENTS.md` 的设计变更流程同步 canonical 文档；不要只改 PoC。
-11. 运行与改动对应的测试。
-12. 提交本 Research Item 的所有有效修改。
+```text
+Implementation
+→ Candidate commit
 
-## 4. 证据规则
+Verification
+→ Candidate SHA + Claims + Required Capabilities
+→ actual Executor / Target
+→ Evidence
 
-有效结论必须来自实际执行结果。
+Coordinator
+→ Gate Decision
+```
 
-禁止将以下文字当作完成证据：
+当前外部 Worker 如果只负责 Verification，不应顺手扩大实现 Scope；如果发现必须修改实现，记录 blocker/follow-up 或按 Task 契约处理。
+
+## 4. 执行方式
+
+对当前被明确分派的 Research/Verification 工作：
+
+1. 明确 Hypothesis / Claims to Verify。
+2. 检查实验前定义的 Success Criteria，禁止事后降低标准。
+3. 记录 Candidate commit SHA。
+4. 确认当前环境正好提供 Required Capabilities。
+5. 实际运行需要的代码、测试、媒体链路或设备验证。
+6. 收集 Evidence / Metrics。
+7. 覆盖必要失败路径。
+8. 根据证据给出：`PASS / CONDITIONAL PASS / FAIL / BLOCKED`。
+9. 给出 Architecture Decision：`Continue / Change / Defer / Drop`。
+10. 更新对应 Research Evidence；如果证据推翻契约，走 `AGENTS.md` 设计变更流程。
+11. 提交当前 Scope 的有效修改/Evidence。
+12. 转 `status:review` 后停止，不自动开始下一项。
+
+## 5. Evidence 规则
+
+有效结论必须来自实际执行。
+
+Evidence 至少记录：
+
+```text
+Role: verification
+Orchestrator:
+Executor:
+Execution host:
+Target host/device:
+OS / architecture:
+Relevant versions:
+Network path:
+Candidate commit:
+Commands / steps:
+Metrics / artifacts / raw evidence:
+Result:
+```
+
+如果 Cloud/Windows/WSL 远程在目标设备执行，必须记录真正的 Execution host / Target。
+
+禁止把以下文字当完成证据：
 
 - 理论上支持
 - 应该可以
@@ -85,42 +153,27 @@ R007 Playback concurrency contract closure
 - 看代码没问题
 - 预计目标设备支持
 
-文档/源码分析可以帮助设计实验，但不能代替需要真实运行时验证的外部行为。
+无法运行真实实验则 `BLOCKED`，并写清缺失环境、权限、设备、网络或版本。
 
-如果无法运行真实实验：
+## 6. 安全与架构边界
 
-```text
-Status = BLOCKED
-```
-
-并记录：
-
-- 缺失什么环境；
-- 为什么现有环境无法替代；
-- 已完成哪些不依赖该环境的准备工作；
-- 恢复执行所需的最小输入/设备/配置。
-
-不要为了避免 BLOCKED 而把模拟结果写成真实设备 PASS。
-
-## 5. 安全与架构边界
-
-任何 Spike 都不得通过以下方式获得成功：
+任何 Spike 都不得通过以下方式成功：
 
 - Core 直接调用具体站点代码或 yt-dlp；
 - Site Plugin 绕过 `SiteAdapterRegistry`；
 - 关闭 SSRF / Egress 检查；
-- 将任意 private network URL 当普通用户媒体来源；
+- 将任意 private URL 当普通用户媒体来源；
 - 把 Cookie / Authorization / bearer token 下发给 Display；
 - 直接向浏览器暴露 Vault/Profile；
 - 将 Media Gateway 做成 arbitrary open proxy；
 - shell 字符串拼接调用 FFmpeg / yt-dlp / Chromium；
 - 让 Jellyfin、浏览器 `<video>` 或站点 Chromium 覆盖 Gateway `PlaybackSession` authority。
 
-PoC 如果只有破坏这些边界才能工作，应记录 FAIL/架构问题，而不是提交绕过方案。
+PoC 只有破坏这些边界才能工作时，记录 FAIL/架构问题。
 
-## 6. R007 特别要求
+## 7. R007 特别要求
 
-如果当前项是 R007，至少闭合并测试：
+R007 至少闭合并测试：
 
 ### session revision
 
@@ -132,7 +185,7 @@ PoC 如果只有破坏这些边界才能工作，应记录 FAIL/架构问题，�
 
 ### handoff transition
 
-明确 target 已启动但 `active_display` 尚未 commit 期间的 callback/generation 语义；旧 Display/旧 transition 的回调不得成为 authority。
+明确 target 已启动但 `active_display` 尚未 commit 期间的 callback/generation 语义；旧 Display/旧 transition 回调不得成为 authority。
 
 ### minimum tests
 
@@ -146,11 +199,18 @@ PoC 如果只有破坏这些边界才能工作，应记录 FAIL/架构问题，�
 - overlapping handoff；
 - two-Control concurrent mutation。
 
-如果这要求修改 `implementation-contracts.md`，先把契约收敛，再实现测试骨架。
+优先路由：
 
-## 7. R001 特别要求
+```text
+contract + test authoring → Web Worker
+automated concurrency suite → GitHub Actions
+large repeated race → Cloud
+interactive failure debug → WSL
+```
 
-如果当前项是 R001，最小链路必须保持：
+## 8. R001 特别要求
+
+最小链路保持：
 
 ```text
 Test Source
@@ -169,16 +229,16 @@ Test Source
 - pause/play；
 - seek；
 - Range；
-- relative/redirect URL（适用时）；
+- relative/redirect URL；
 - Display 不获得上游 Secret；
 - Jellyfin 关闭时链路仍成立；
 - Gateway 不是 arbitrary proxy。
 
-DASH 如果本轮环境不足可以作为明确后续子项，但不能无说明地宣称已覆盖。
+DASH 环境不足可以明确留后续子项，不能无说明宣称覆盖。
 
-## 8. R002 特别要求
+## 9. R002 特别要求
 
-如果当前项是 R002，必须区分：
+最终验证必须区分：
 
 - muted autoplay；
 - audible autoplay；
@@ -188,7 +248,7 @@ DASH 如果本轮环境不足可以作为明确后续子项，但不能无说明
 - 页面刷新后；
 - 浏览器/电视恢复后。
 
-核心用户场景是：
+核心场景：
 
 ```text
 TV opens /display
@@ -197,34 +257,32 @@ TV opens /display
 → audible media starts or gives explicit recoverable action
 ```
 
-如果目标电视要求一次用户初始化，可以给 CONDITIONAL PASS；如果每次远程播放都要求操作电视，应记录严重 UX 限制而不是弱化问题。
+真实 TV Evidence 不得由桌面浏览器、Cloud 或模拟器替代。
 
-## 9. R003 特别要求
+## 10. R003 特别要求
 
-如果当前项是 R003，必须在目标 Ubuntu ARM64 环境记录可比较的：
+最终目标环境必须记录：
 
 - CPU；
 - RSS / memory；
-- temperature（设备可读取时）；
+- temperature（可读时）；
 - bandwidth；
 - startup latency；
 - sustained duration；
 - error/recovery。
 
-场景至少区分：
+区分：
 
 - idle；
 - direct proxy；
 - remux；
-- Chromium 基础成本（如果环境已有）。
+- Chromium baseline。
 
-长期链路不要只跑数秒；按研究文档要求执行短、中、长时间样本。软件转码仅用于边界测量，不得因此变成 MVP 默认路径。
+关键路径覆盖 5/30/60 分钟；更长 soak 可以用 Cloud orchestrate，但指标必须来自真实 ARM64 Target 才能证明 R003。
 
-## 10. R008 特别要求
+## 11. R008 特别要求
 
-R008 不是“最后补安全”。从 R001 开始所有实验已经必须遵守这些边界。
-
-最终至少验证：
+至少验证：
 
 - loopback/private/link-local/metadata 拒绝；
 - public redirect → private 拒绝；
@@ -234,13 +292,15 @@ R008 不是“最后补安全”。从 R001 开始所有实验已经必须遵守
 - Display 看不到 Cookie/Authorization；
 - plugin cross-site access 被拒绝。
 
-## 11. 文档更新
+portable security suite 优先 Actions；不能为了验证方便关闭安全边界。
 
-完成一个 Research Item 后，至少检查并按需要更新：
+## 12. 文档与提交
+
+完成一个 Research/Verification Task 后至少检查：
 
 - `docs/technical-feasibility-validation.md`
-- 对应 Research 状态 / Evidence / Metrics / Result / Architecture Decision
-- `docs/mvp-plan.md` 的 Gate 状态（如实际进度发生变化）
+- 对应 Research Evidence / Metrics / Result / Decision
+- `docs/mvp-plan.md` Gate 状态（如实际进度变化）
 
 只有证据确实改变架构时才修改：
 
@@ -250,35 +310,25 @@ R008 不是“最后补安全”。从 R001 开始所有实验已经必须遵守
 - `docs/security.md`
 - ADR
 
-不要为了“看起来有产出”无意义改动 canonical 文档。
+提交要求：
 
-## 12. 提交要求
-
-- 一个 Research Item 使用聚焦 commit。
-- 提交前检查 diff 不含 Secret、Cookie、Token、私有账号数据或不应进入仓库的大型实验文件。
-- 不 force push，不重写已有历史。
-- 如果测试失败，不提交把失败伪装成成功的结果；应修复或把真实失败写入 Evidence。
-
-建议 commit message：
-
-```text
-research: close playback concurrency contracts
-research: validate baseline media path
-research: validate tv browser remote playback
-research: record arm64 resource baseline
-research: validate egress and secret boundaries
-```
+- 一个 Task 一个聚焦 commit/PR；
+- 不提交 Secret/Cookie/Token/私有账号数据/不必要大文件；
+- 不 force push；
+- 测试失败就记录真实失败，不伪装成功。
 
 ## 13. 完成后报告
 
-最终回复保持简洁，只报告：
+最终只报告：
 
-1. 本轮执行的 Research Item。
-2. `PASS / CONDITIONAL PASS / FAIL / BLOCKED`。
-3. 最关键 Evidence / Metrics。
-4. 是否改变架构或 MVP 范围。
-5. 实际运行的测试及结果。
-6. commit SHA。
-7. 下一个最高优先级 Research Item。
+1. 执行的 Issue / Task / Research Item。
+2. 当前 Worker 为什么具备所需 capability。
+3. Candidate SHA。
+4. `PASS / CONDITIONAL PASS / FAIL / BLOCKED`。
+5. 真实 Orchestrator / Executor / Target。
+6. 最关键 Evidence / Metrics。
+7. 实际运行的测试及结果。
+8. commit / PR。
+9. 是否改变架构或 MVP 范围。
 
-不要提前执行下一项；等待下一轮继续。
+完成后停止；下一任务由 Web Coordinator 决定。
