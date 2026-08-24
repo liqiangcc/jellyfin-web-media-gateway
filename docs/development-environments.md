@@ -2,52 +2,104 @@
 
 ## 1. 目标
 
-项目可以从网页 GPT、Windows、WSL、Ubuntu ARM64 手机、云服务器和真实电视等多套环境开发与验证。
+本项目从网页 GPT、GitHub Actions、Cloud、WSL、Windows、Ubuntu ARM64 手机和真实电视等环境开发与验证。
 
-协同目标不是让所有环境平级做同一件事，而是：
-
-1. 让网页 GPT 保持项目全局控制面；
-2. 能由网页完成的任务优先由独立 Web Worker 执行；
-3. 只有网页缺少有效执行能力或 Evidence 能力时，才路由到外部环境；
-4. GitHub 始终作为跨会话、跨环境的唯一事实与交接中心；
-5. 不允许用错误环境的结果冒充目标环境 Evidence。
+协同模型不把任务永久绑定到某个环境，而是先定义工作与证据，再选择成本最低、能力足够的执行后端。
 
 默认原则：
 
-> **Web-first，Capability-driven fallback。**
->
-> 先判断 Web Worker 能否产生本任务要求的有效结果；能则网页优先执行，不能才路由到 WSL、Windows、Ubuntu ARM64、Cloud 或真实电视。
+> **Web-first，Automation-second，Cloud-for-duration，Local-for-debug，Target-for-proof，Manual-for-UX。**
 
-“网页优先”表示调度优先级最高，不表示网页分析可以替代真实设备证据。
+解释：
+
+1. **Web-first**：能由 Web Worker 完成的设计、实现、Review、GitHub 修改优先留在 Web。
+2. **Automation-second**：需要真实 build/test/lint 等自动化 Evidence 时，优先使用 GitHub Actions，而不是立即启动交互式 Codex。
+3. **Cloud-for-duration**：需要长时间、无人值守、重复执行或稳定实验环境时，Cloud 优先。
+4. **Local-for-debug**：需要快速交互式本地调试时，再使用 WSL / Windows。
+5. **Target-for-proof**：只有目标架构、资源、网络或设备行为本身是待证明对象时，才进入 Ubuntu ARM64 等目标环境。
+6. **Manual-for-UX**：真实电视、遥控器和最终 UX 只在确实需要物理设备结论时使用。
+
+“优先”代表调度成本和效率，不代表低成本环境可以冒充更高证据要求的目标环境。
 
 ---
 
-## 2. GitHub 是唯一跨环境事实源
+## 2. 先分离角色、工作、执行环境和 Target
 
-GitHub 仓库负责保存跨环境可共享、可审计的状态：
+多环境流程必须区分以下维度。
 
-- `main`：已经接受的当前仓库状态；
-- canonical docs：当前产品、架构和实现契约；
-- GitHub Issue：实时任务状态、owner、claim、branch、PR/commit、blocker 和结果摘要；
-- `docs/tasks/<issue>-<slug>/task.md`：版本化、尽量稳定的执行契约；
-- branch / PR：进行中的实现与 Review；
-- commit：可追踪交接点；
-- `docs/research/`：需要长期保存的实验结论和 Evidence 索引。
+### 2.1 Agent Role
+
+```text
+Web Coordinator
+= 长生命周期、项目级控制面
+
+Worker
+= 短生命周期、单一 Scope 执行者
+```
+
+Worker 又可以承担两种逻辑工作：
+
+```text
+Implementation Worker
+= 产生候选实现
+
+Verification Worker
+= 对确定的候选实现产生验证 Evidence
+```
+
+同一个实际环境可以承担两种角色，但两种结果必须区分。
+
+### 2.2 Orchestrator / Executor / Target
+
+不要把“谁发起任务”和“代码真正在哪里运行”混在一起。
+
+例如 Web Worker 读取 GitHub Actions 结果：
+
+```text
+Orchestrator = web-gpt
+Executor     = github-actions
+Execution host = github-hosted ubuntu x86_64 runner
+Target       = runner itself
+```
+
+Cloud Codex 通过 Tailscale 在手机执行命令：
+
+```text
+Orchestrator = cloud-codex
+Executor     = remote shell on phone
+Execution host = ubuntu-arm64-phone
+Target       = ubuntu-arm64-phone
+```
+
+Evidence 必须描述真实 Executor / Execution host / Target，不能只写发起者。
+
+---
+
+## 3. GitHub 是唯一跨环境事实源
+
+GitHub 负责跨会话、跨环境的可共享状态：
+
+- `main`：已经接受的仓库状态；
+- canonical docs：需求、架构、实现契约；
+- Issue：实时 task 状态、owner、claim、branch、PR/commit、blocker、result summary；
+- `docs/tasks/<issue>-<slug>/task.md`：版本化执行契约；
+- branch / PR：候选实现和 Review；
+- commit SHA：确定的实现/验证对象；
+- GitHub Actions run / job / artifact：自动化验证 Evidence；
+- `docs/research/`：需要长期保存的研究结论与 Evidence 索引。
 
 不要通过以下方式交接：
 
-- 复制包含未提交修改的整个工作目录；
-- 只依赖聊天记录描述未提交状态；
-- 让两个 Agent 同时修改同一文件后再机械拼接；
-- 把手机部署目录、WSL clone 或云端工作目录当作比 GitHub 更新的事实源。
+- 复制带未提交修改的工作目录；
+- 只依赖聊天记录描述状态；
+- 多环境同时修改相同文件后机械拼接；
+- 把手机、WSL 或 Cloud 工作目录当作比 GitHub 更新的事实源。
 
-canonical 产品与架构权威层级仍以 `docs/README.md` 为准；本文只定义执行和协同方式。
+canonical 产品与架构权威层级仍以 `docs/README.md` 为准。
 
 ---
 
-## 3. 网页 GPT 的两种会话
-
-网页 GPT 不是单一角色。项目明确区分两种网页会话：
+## 4. 网页 GPT 的两种会话
 
 ```text
 Web GPT
@@ -55,262 +107,481 @@ Web GPT
 │   └── 项目级、长生命周期、全局视角
 │
 └── Web Worker Session
-    └── 任务级、短生命周期、单一 Scope
+    └── Task 级、短生命周期、单一 Scope
 ```
 
-两者都可以调用 GitHub、修改仓库；区别不是“能不能执行”，而是状态范围、生命周期和决策权限。
+两者都能调用 GitHub、修改仓库。区别是生命周期和决策权限，不是“能不能执行”。
 
-### 3.1 Web Coordinator Session
+### 4.1 Web Coordinator
 
-Web Coordinator 是项目主 Agent 和控制面。
+负责：
 
-主要职责：
+1. 读取 canonical docs、Research Matrix、Issue、PR、CI/Evidence 全局状态；
+2. 决定当前最高优先级 Goal / Gate；
+3. 把 Goal 拆成 Implementation / Verification 工作；
+4. 定义 Scope、Success Criteria、Claims to Verify、Evidence Requirements；
+5. 判断 Web Worker 是否可以直接完成；
+6. 为缺失 capability 选择 Actions、Cloud、Local、Target 或 Manual 后端；
+7. Review 候选实现和 Evidence；
+8. 决定 `done / ready / blocked`、Research Gate 和下一任务。
 
-1. 读取 GitHub、Research Matrix、Issue、PR 和 canonical docs 的全局状态；
-2. 决定当前最高优先级工作；
-3. 判断任务能否由 Web Worker 直接产生有效结果；
-4. 拆分 Issue / Task，定义 Scope、Success Criteria、Evidence Requirements；
-5. 把缺少网页能力的任务路由到外部 Worker；
-6. Review Web Worker / Codex / 设备实验提交；
-7. 根据 Evidence 决定 accept / revise / blocked；
-8. 更新 Issue、Gate、canonical docs，并选择下一任务。
+Coordinator 可以执行协调性 GitHub 修改，但已经形成独立 Task 的实现工作默认交给新的 Worker Session，避免长期会话被局部上下文占满。
 
-Coordinator 可以执行协调本身需要的写操作，例如：
+### 4.2 Web Worker
 
-- 创建/修改 Issue；
-- 写 `task.md`；
-- 修改标签和状态；
-- Review PR；
-- 根据已经接受的 Evidence 更新 canonical 文档；
-- 用户明确要求的极小型协调性文档修正。
+Web Worker 是默认最高优先级的 Implementation Worker，同时可以作为 GitHub Actions / Cloud 的 Orchestrator。
 
-但一个已经被定义为独立执行 Task 的工作，默认应交给单独的 Worker Session，而不是让 Coordinator 长期陷入局部实现上下文。
+可以：
 
-Coordinator 不因为能修改代码就自动承担所有实现任务；它最重要的资产是持续保持项目全局视角。
+- 需求、架构与 contract 工作；
+- 修改 Rust/前端/测试代码；
+- 修改文档；
+- 创建 commit / PR；
+- Review repository / PR / Actions logs；
+- 基于 Actions 真实执行结果报告 build/test status；
+- 基于已有目标设备 Evidence 更新结果和 canonical docs。
 
-### 3.2 Web Worker Session
+不能：
 
-Web Worker 是 `env:web-gpt` 的实际执行者，也是**默认最高优先级 Worker**。
+- 把没有实际执行的命令写成 PASS；
+- 把 GitHub-hosted x86 runner 冒充 ARM64 手机；
+- 把桌面/云浏览器冒充真实电视；
+- 把静态分析冒充 runtime Evidence。
 
-典型生命周期：
+因此：
 
 ```text
-读取 AGENTS.md
-→ 读取 Issue / task.md
-→ claim Task
-→ 只执行当前 Scope
-→ 修改代码/文档
-→ 进行当前环境能够真实完成的检查
-→ commit / PR
-→ 提交 Evidence / 未验证范围
-→ Issue → status:review
-→ 停止
+Web Worker 自身无本地 runtime
+≠
+Web Worker 无法完成需要 runtime verification 的工作
 ```
 
-Web Worker：
-
-- 可以写代码；
-- 可以修改文档；
-- 可以分析仓库；
-- 可以创建提交；
-- 可以执行 GitHub 能力范围内的任务；
-- 不能把没有真实运行过的编译、测试、设备行为写成 PASS；
-- 不自行扩大 Scope；
-- 不自行决定并开始下一个任务；
-- 完成后返回 Coordinator Review。
-
-`env:web-gpt` 标签专指 **Web Worker 执行资格**，不是 Coordinator 的实时任务身份。
-
-### 3.3 为什么要分成两个网页会话
-
-如果一个网页会话长期同时承担：
-
-```text
-全局设计
-→ 实现 Task A
-→ 实现 Task B
-→ 设备分析
-→ Review
-→ 再决定路线
-```
-
-它会逐渐被局部实现上下文占满，降低 Gate、依赖和跨任务一致性的可见性。
-
-因此采用：
-
-```text
-Web Coordinator
-    ↓ dispatch
-Web Worker A / Web Worker B / External Worker
-    ↓ result
-GitHub
-    ↓ review
-Web Coordinator
-```
+Web Worker 可以通过受控执行后端获得真实 runtime Evidence。
 
 ---
 
-## 4. Web-first 调度原则
+## 5. 开发与验证逻辑分离
 
-每个新任务先回答：
+### 5.1 Implementation Task
 
-> **Web Worker 是否能产生这个任务要求的有效结果和 Evidence？**
+目标是产生确定的候选实现。
 
-如果答案是“能”，优先使用 Web Worker，不因为它是“执行任务”就自动交给 Codex。
-
-推荐决策树：
+典型输入/输出：
 
 ```text
-任务出现
-  ↓
-Web Worker 能否完整完成并产生有效 Evidence？
-  ├── Yes → env:web-gpt（优先）
-  │
-  └── No
-       ↓
-     缺少什么 capability？
-       ├── 编译/本地自动化测试 → WSL / Cloud
-       ├── ADB / Android host 操作 → Windows
-       ├── ARM64/温度/目标手机运行 → Ubuntu ARM64
-       ├── 长时间独立执行 → Cloud（前提是目标 Evidence 不依赖设备）
-       └── TV autoplay/遥控/Jellyfin Android TV → 真实电视
+Input:
+- Goal / Contract
+- Base commit
+- Scope
+
+Output:
+- Candidate commit / PR
+- Developer checks
+- Known limitations
 ```
 
-网页不适合的典型原因不是“这是代码任务”，而是：
+Implementation Task 不因为代码“看起来正确”就自动证明 runtime claim。
 
-- 必须真实运行 `cargo test` / 编译器 / FFmpeg / Chromium 等本地进程；
-- 必须访问本地文件、ADB 或局域网设备；
-- 必须测量 ARM64 CPU、RSS、温度、功耗、网络；
-- 必须在目标电视浏览器观察 autoplay / 遥控器行为；
-- 需要长时间持续运行，且网页环境无法提供对应执行保证。
+### 5.2 Verification Task
 
----
+目标是证明某个确定候选 commit 满足特定 claim。
 
-## 5. Capability 与环境
-
-环境名称说明“在哪里执行”；任务真正需要声明的是“必须具备什么能力”。
-
-任务可以在 `task.md` 中列出：
+典型输入：
 
 ```text
+Candidate commit: <sha>
+Claims to verify:
 Required capabilities:
-- github-read-write
-- rust-build
-- arm64-runtime
-- adb
-- device-metrics
-- lan-access
-- tv-browser
-- jellyfin-tv
-- long-running
+Verification environment:
+Success / failure criteria:
+Evidence requirements:
 ```
 
-环境标签仍用于 GitHub 队列调度：
+典型输出：
 
 ```text
-env:web-gpt
-env:windows
-env:wsl
-env:ubuntu-arm64
-env:cloud
-env:manual-tv
+Executor / Target
+Commands / steps
+Run / artifact / logs
+Metrics
+PASS | CONDITIONAL PASS | FAIL | BLOCKED
 ```
 
-Coordinator 根据 Required Capabilities 计算 Eligible Environments，而不是把“某类任务永远属于某个环境”写死。
+### 5.3 不强制每次拆两个 Issue
 
-### 5.1 Web Worker
+逻辑角色分离，不代表所有工作必须流程膨胀。
 
-优先用于：
+- 小文档、静态 contract、低风险修改：一个 Task 内 `implementation + review` 即可。
+- 普通代码：一个 Implementation Task + 自动 GitHub Actions verification 即可。
+- 并发、安全、媒体链路：建议明确列出 Verification Claims；必要时拆独立 Verification Task。
+- ARM64、真实电视、Jellyfin、资源/稳定性 Research：候选实现与 target verification 必须可独立追踪。
 
-- 需求与架构分析；
-- canonical 文档 / ADR；
-- GitHub Issue / PR；
-- 仓库 Review；
-- 轻量代码修改；
-- 契约设计；
-- 根据已有真实 Evidence 更新结论；
-- 任何不依赖缺失本地运行能力、且网页工具可以真实完成的任务。
+最重要的是保持：
 
-不能单独证明：
+```text
+Implementation Result
+!= Verification Result
+!= Coordinator Gate Decision
+```
 
-- 本地代码实际编译通过；
-- 本地自动化测试真实通过；
-- ARM64 兼容性和资源数据；
-- 真实电视 autoplay；
-- ADB / Tailscale / Jellyfin / FFmpeg / Chromium 的实际运行状态。
+---
 
-### 5.2 WSL Worker
+## 6. 默认调度算法
 
-常用能力：
+Coordinator 对每个 Task 使用以下顺序：
 
-- Rust workspace 开发；
-- `cargo build/test/fmt/clippy`；
-- contract / concurrency / security 自动化测试；
-- x86_64 本地 PoC。
+```text
+1. Web Worker 能否直接完成 Implementation？
+   ├── Yes → Web Worker
+   └── No  → 找缺失 capability
 
-WSL 结果不能冒充 ARM64 兼容性、手机资源或 TV Evidence。
+2. Verification 能否由 GitHub Actions 自动产生有效 Evidence？
+   ├── Yes → Actions
+   └── No
 
-### 5.3 Windows Worker
+3. 是否主要需要 long-running / repeatable / unattended？
+   ├── Yes → Cloud
+   └── No
 
-常用能力：
+4. 是否主要需要 interactive local debugging？
+   ├── Linux dev/debug → WSL
+   └── ADB/Android host → Windows
+
+5. Claim 是否依赖目标环境本身？
+   ├── ARM64 / thermal / target runtime → Ubuntu ARM64
+   └── TV/browser/remote/Jellyfin TV → Real TV
+```
+
+因此，不要先问：
+
+> “这个任务属于哪个环境？”
+
+优先问：
+
+> “为什么 Web + automated verification 不能完成？缺的到底是哪项 capability 或 Evidence authority？”
+
+---
+
+## 7. Capability Vocabulary
+
+`task.md` 使用 capability 描述要求，环境只是 capability provider。
+
+推荐 capability：
+
+```text
+github-read-write
+repository-static-analysis
+code-authoring
+pr-review
+
+automated-build
+automated-test
+rust-build
+rust-test
+rust-fmt
+rust-clippy
+failure-injection
+benchmark
+long-running
+artifact-capture
+
+interactive-linux-debug
+windows-host
+adb
+android-device-control
+lan-access
+
+arm64-runtime
+device-metrics
+thermal-metrics
+ffmpeg-runtime
+chromium-runtime
+jellyfin-server-runtime
+
+tv-browser
+remote-control
+jellyfin-tv
+manual-observation
+```
+
+Capability 表示完成某项工作所需能力，不自动等于最终 Evidence authority。
+
+例如：
+
+```text
+rust-test
+```
+
+可以由 GitHub Actions、Cloud 或 WSL 提供；如果 claim 是“ARM64 上测试通过”，还必须同时要求：
+
+```text
+arm64-runtime
+```
+
+---
+
+## 8. Environment Capability Profiles
+
+### 8.1 总览
+
+| Environment | 调度定位 | 最大优势 | 核心限制 | 主要权威 Evidence |
+|---|---|---|---|---|
+| Web Worker | P1 默认 Implementation | 上下文/GitHub/代码修改成本最低 | 自身无本地 runtime | repo/diff/contract/static analysis |
+| GitHub Actions | P2 默认 automated verification | 标准、可重复、与 commit 绑定 | runner 不等于目标设备；时长/交互有限 | runner 上真实 build/test |
+| Cloud Worker | P3 long-running | 长时间、稳定、无人值守、可保持状态 | 非家庭/手机/TV 默认环境 | cloud runtime 或明确 remote target |
+| WSL Worker | interactive local debug | 快速 Linux 交互调试 | 通常 x86_64，非目标手机 | WSL Linux runtime |
+| Windows Worker | device-management debug | ADB/Android host/恢复 | 非 Gateway 最终 runtime | Windows/ADB/Android host state |
+| Ubuntu ARM64 | target proof | 最终 ARM64/资源/兼容性 | 慢、资源有限、设备宝贵 | ARM64 target/runtime/resource |
+| Real TV / Manual | final UX proof | 真实 TV/autoplay/remote UX | 人工、低自动化、高成本 | 目标电视行为 |
+
+### 8.2 Web Worker
+
+**Strengths**
+
+- 默认上下文最完整；
+- GitHub 读写、代码、文档、Issue、PR、Review 连续完成；
+- 无 clone 同步和本地环境漂移成本；
+- 可以读取 Actions run/job/log/artifact，把自动化验证闭环留在 Web；
+- 与 Coordinator 交接成本最低。
+
+**Weaknesses**
+
+- 自身不能运行本地任意进程；
+- 不直接持有 ARM64/ADB/TV 等物理能力；
+- 不适合把长时间持续运行寄托在网页会话本身。
+
+**Best suited for**
+
+- 绝大多数 Implementation；
+- contract/architecture；
+- 测试代码编写；
+- CI 定义；
+- PR/Issue/Review；
+- Actions result triage；
+- Evidence synthesis。
+
+**Authoritative for**
+
+- GitHub repository state；
+- diff/contract/static consistency；
+- Web 工具真实执行过的 GitHub 操作。
+
+**Not authoritative for**
+
+- 未执行的 build/test；
+- 目标硬件/TV runtime。
+
+### 8.3 GitHub Actions
+
+GitHub Actions 是默认 **Automated Verification Plane**，不是 Web Worker 的“模拟能力”。
+
+**Strengths**
+
+- 每次运行绑定明确 commit；
+- build/test/fmt/clippy/security suite 可重复；
+- 日志、状态和 artifact 可审计；
+- Web Worker 可以直接读取结果并迭代修复；
+- 适合 PR gate 和 regression。
+
+**Weaknesses**
+
+- GitHub-hosted runner 的 CPU/架构/网络不等于目标环境；
+- 不适合强交互 debug；
+- 超长 soak/持续状态实验不一定经济或方便；
+- 不能替代真实电视、家庭 LAN、手机热环境。
+
+**Best suited for**
+
+```text
+build
+test
+fmt
+clippy
+contract/concurrency/security suites
+short/medium integration tests
+artifact generation
+PR regression
+```
+
+**Evidence rule**
+
+应记录：
+
+```text
+Orchestrator: web-gpt (if applicable)
+Executor: github-actions
+Runner OS / arch
+Workflow / run / job
+Commit SHA
+Commands / tests
+Result
+Artifacts
+```
+
+仓库当前尚未建立 `.github/workflows/`；第一个 Rust workspace/可运行测试落地时再建立真实 CI，不为了流程文档提前创建空 workflow。
+
+### 8.4 Cloud Worker
+
+Cloud 是 **Primary Long-running Execution Environment**。
+
+**Strengths**
+
+- 长时间无人值守；
+- 稳定网络与计算资源；
+- 可做持续 benchmark / soak / repeated race / failure injection；
+- 适合 6h/24h 级实验；
+- 可通过 Tailscale 作为 orchestrator 访问明确授权 target。
+
+**Weaknesses**
+
+- 默认不是家庭 LAN、手机热环境或 TV；
+- remote execution 容易混淆 Executor 与 Target；
+- 交互式快速改代码体验通常不如 WSL。
+
+**Best suited for**
+
+```text
+long-running regression
+1000x/10000x race tests
+soak test
+memory-leak observation
+large build/test matrix
+continuous failure injection
+repeatable benchmark
+```
+
+**Authoritative for**
+
+- Cloud host 上真实运行行为；
+- 或明确命令实际执行在 remote target 时的 target Evidence。
+
+### 8.5 WSL Worker
+
+WSL 是 **Primary Interactive Linux Debug Environment**，不是所有编译测试的默认入口。
+
+**Strengths**
+
+- 反馈快；
+- shell/debugger/local files/processes 交互方便；
+- Rust workspace、failure debugging、快速实验适合。
+
+**Weaknesses**
+
+- 通常 x86_64；
+- Windows/WSL 网络与目标环境可能不同；
+- 不代表 ARM64、手机热环境、TV。
+
+**Use when**
+
+- Actions failure 需要反复加日志和现场调试；
+- 本地进程、文件、交互式工具是核心需要；
+- Web + Actions 不足以高效定位问题。
+
+### 8.6 Windows Worker
+
+Windows 是 **Device Management / Android Host Environment**。
+
+主要能力：
 
 - ADB；
-- Android / Termux / Magisk 状态；
-- 手机重启和部署协调；
+- Android/Termux/Magisk 状态；
+- 手机重启、恢复、部署协调；
 - Windows 与真实手机共同参与的实验。
 
-Windows 不是默认主编码环境，也不能替代真实电视。
+不作为普通 Linux/Rust 主开发环境，也不替代 Ubuntu ARM64 或真实 TV Evidence。
 
-### 5.4 Ubuntu ARM64 Worker
+### 8.7 Ubuntu ARM64 Worker
 
-常用能力：
+Ubuntu ARM64 手机是 **Target Runtime Authority**。
 
-- 目标 ARM64 原生构建和运行；
-- Media Gateway / FFmpeg / Chromium / Jellyfin 兼容性；
-- CPU、RSS、温度、吞吐；
-- 5/30/60 分钟稳定性；
-- 手机 Ubuntu/chroot 特有约束。
+主要能力：
 
-### 5.5 Cloud Worker
+- ARM64 原生 build/run；
+- Gateway/FFmpeg/Chromium/Jellyfin 目标兼容性；
+- CPU/RSS/temperature/throughput；
+- 5/30/60 min 及更长目标稳定性；
+- chroot/设备特有问题。
 
-常用能力：
+原则：
 
-- 长时间构建；
-- 静态分析；
-- 自动化测试；
-- 不依赖家庭设备的独立复现；
-- 经授权通过 Tailscale 在目标机器执行任务。
+> 尽量把普通开发、测试工具编写和可移植验证留在 Web/Actions/Cloud/WSL，只把需要目标真实性的最后 Proof 放到手机。
 
-如果 Cloud Worker 通过 Tailscale 在手机执行命令：
+### 8.8 Real TV / Manual Worker
 
-```text
-Executor = cloud-codex
-Target = ubuntu-arm64-phone
-```
+这是 **Final Physical UX Authority**。
 
-Evidence 必须按实际 target 标注，不能写成“云服务器证明了 ARM64 手机行为”。
-
-### 5.6 真实电视 / Manual Worker
-
-以下最终结论只能由目标电视或明确接受的等价设备提供：
+必须用于最终证明：
 
 - R002 audible autoplay；
 - 遥控器焦点；
-- 首次初始化确认；
-- 等待、刷新、休眠、重启恢复；
-- Jellyfin Android TV 实际播放和 handoff。
+- 首次确认；
+- 长时间 idle、refresh、sleep、reboot 恢复；
+- Jellyfin Android TV 实际播放与 handoff。
 
-桌面浏览器、模拟器、云浏览器只能做预检，不能替代最终 Gate。
+桌面浏览器、模拟器、云浏览器只能预检，不能替代最终 TV Gate。
 
 ---
 
-## 6. Issue 与 task.md 的状态所有权
+## 9. 典型路由示例
 
-必须避免同一动态状态在多个地方重复保存。
+### R007 Contract + Concurrency
 
-### 6.1 GitHub Issue = 实时状态 authority
+```text
+Contract / test design
+→ Web Worker
 
-以下信息只以 Issue 为实时事实源：
+Candidate code / tests
+→ Web Worker
+
+cargo test / concurrency suite
+→ GitHub Actions first
+
+CI failure needs interactive debugging
+→ WSL
+
+large repeated race / soak
+→ Cloud
+
+Coordinator reviews accepted Evidence
+→ R007 gate decision
+```
+
+### R003 ARM64 Resource
+
+```text
+metrics design / scripts / code
+→ Web Worker
+
+portable test + lint
+→ GitHub Actions
+
+long-running harness dry-run
+→ Cloud (when useful)
+
+final CPU/RSS/temp/thermal claim
+→ Ubuntu ARM64
+```
+
+### R002 TV Autoplay
+
+```text
+Display code / test page
+→ Web Worker
+
+automated browser checks
+→ Actions/Cloud if useful
+
+final audible autoplay / remote UX
+→ Real TV / Manual
+```
+
+---
+
+## 10. Issue 与 task.md 状态所有权
+
+### GitHub Issue = 实时状态 authority
+
+只在 Issue 维护：
 
 ```text
 status
@@ -318,13 +589,14 @@ assignee / active owner
 claimed environment
 claimed at
 active branch
-PR / commit
-current blocker
+candidate commit / PR
+verification status
+blocker
 review state
 result summary
 ```
 
-状态标签：
+状态：
 
 ```text
 status:draft
@@ -335,98 +607,45 @@ status:review
 status:done
 ```
 
-### 6.2 task.md = 版本化执行契约
+### task.md = 稳定执行契约
 
-`task.md` 保存尽量稳定的信息：
+保存：
 
 ```text
-Task / Research ID
-Goal
-Why / Context
-Preferred executor
+Task kind
+Goal / Context
+Base commit
+Candidate commit (for verification task, if known)
+Claims to verify
+Preferred execution path
 Eligible environments
 Required capabilities
-Base commit
 Preconditions
-In Scope
-Out of Scope
+In Scope / Out of Scope
 Architecture Invariants
-Files Expected to Change
-Execution Steps
-Commands / Tests
+Implementation requirements
+Verification plan
 Success Criteria
 Evidence Requirements
 Failure / Blocked Rules
 Deliverables
 ```
 
-**不再在 `task.md` 中重复保存：**
-
-- status；
-- claimed environment；
-- claimed by；
-- claimed at；
-- active branch；
-- 最终实时结果状态。
-
-Worker 不需要为了 claim、block、review 或 done 去修改 `task.md`。
-
-如果任务完成后需要长期保存正式研究结论，写入 `docs/research/`；一般工程结果由 Issue + PR/commit 保存。
-
-如果执行契约本身发生实质变化，由 Coordinator 修改 `task.md` 并重新 Review；执行 Worker 不静默改变 Success Criteria。
+不重复维护实时 owner/status/claim/branch/result。
 
 ---
 
-## 7. Claim 与单任务所有权
+## 11. Claim、分支与并行
 
-一个具体 Issue / Task 任一时刻只能有一个 active owner。
+一个具体 Task 任一时刻只有一个 active owner；大型 Research Item 可以拆多个 Task 并行。
 
-多个 `env:*` 只表示多个环境都有资格执行，不表示允许重复执行。
+领取：
 
-领取协议：
-
-1. Worker 查询 `status:ready + env:<current-environment>`；
-2. 按 Gate / priority / dependency 选择最高优先级任务；
-3. 再确认 Issue 仍没有 active owner；
-4. 设置 assignee / claim 信息，并改成 `status:in-progress`；
-5. 再开始写入性工作。
-
-GitHub 无事务式 claim 时，以最先成功写入 owner + `status:in-progress` 的 Worker 为准；其他 Worker 看到状态变化立即退出。
-
-Worker 完成后：
-
-```text
-commit / PR
-→ Issue result summary
-→ status:review
-→ 停止
-```
-
-只有 Coordinator 负责：
-
-```text
-review
-→ done
-```
-
-或：
-
-```text
-review
-→ ready / blocked
-```
-
-Worker 不自动领取下一项。
-
-### 7.1 Research Item 与 Task
-
-大型 Research Item 可以拆成多个独立 Task 并行产生 Evidence，但每个 Task 仍只能有一个 active owner。
-
-Research Gate 的最终 PASS / CONDITIONAL PASS / FAIL 由 Coordinator 根据已接受的多个 Evidence 汇总判定，不由单个子任务擅自宣布整个 Gate 完成。
-
----
-
-## 8. Git 与分支规则
+1. 查询 `status:ready + env:<current-environment>`；
+2. 确认 Required Capabilities 匹配；
+3. 确认无 active owner；
+4. 设置 assignee / claim + `status:in-progress`；
+5. 再开始写入。
 
 推荐分支：
 
@@ -440,172 +659,82 @@ fix/<topic>
 
 规则：
 
-- 代码、Research、跨文件架构修改优先独立分支与 PR；
-- 用户明确要求的单 owner 小型文档修改可以直接提交 `main`；
-- 不在多个环境同时直接修改 `main`；
-- 不 force push，不重写其他环境已引用的提交；
-- 一个 Task 一个聚焦提交或一组高度相关提交；
-- 冲突必须理解后解决，不得强制覆盖另一环境修改；
-- 手机、WSL、Windows、Cloud 维护独立 clone，不同步 `.git` 或整个工作目录。
-
-开始写入前检查：
-
-1. GitHub `main` 是否有更新；
-2. 同一 Task 是否已有 owner；
-3. 是否已有 PR/branch；
-4. 当前环境是否满足 Required Capabilities 和 Evidence 要求。
+- 代码、Research、跨文件架构修改优先 branch/PR；
+- 小型单 owner 文档修改可在明确授权时直接 main；
+- 不 force push，不覆盖其他 Worker 历史；
+- 一个聚焦 Task 一个清晰 commit/PR；
+- Verification 必须标识所验证的 candidate SHA；
+- 发生冲突时以 GitHub 和 canonical docs 为准。
 
 ---
 
-## 9. Web Coordinator → Worker 任务包
+## 12. Evidence Contract
 
-需要跨会话或跨环境执行时，推荐：
-
-```text
-GitHub Issue
-└── docs/tasks/<issue>-<slug>/task.md
-```
-
-职责：
+所有 runtime / Research Evidence 至少记录：
 
 ```text
-Issue
-= 实时状态与协作入口
-
-task.md
-= 稳定执行契约
-
-Worker
-= Scope 内执行和 Evidence
-
-Web Coordinator
-= 调度、Review、验收和下一任务决策
-```
-
-Issue 进入 `status:ready` 前，`task.md` 应已提交并记录 base commit。
-
-新 Worker 会话不依赖旧聊天，只需：
-
-> 读取 `AGENTS.md` 和对应 Issue / `task.md`，claim 后只执行 Scope，提交结果并转为 `status:review` 后停止。
-
-Web Worker 同样遵守该规则；它不是因为运行在网页里就可以跳过 Task 边界。
-
----
-
-## 10. Evidence 环境标注
-
-任何 Research 或设备结果至少记录：
-
-```text
-Executor: web-gpt | windows-codex | wsl-codex | ubuntu-arm64-codex | cloud-codex | manual
+Role: implementation | verification
+Orchestrator:
+Executor:
 Execution host:
 Target host/device:
 OS / architecture:
 Relevant versions:
 Network path:
-Base commit:
+Candidate / base commit:
+Workflow / run / job (if Actions):
 Commands / steps:
-Raw evidence location:
+Metrics / artifact / raw evidence:
 Result: PASS | CONDITIONAL PASS | FAIL | BLOCKED
 ```
 
-关键原则：
+严格限制：
 
-- Web Worker 的源码/文档分析不是 runtime PASS Evidence；
-- WSL x86_64 不能证明 ARM64 资源或兼容性；
-- Cloud 不能证明手机温度、家庭 Wi-Fi 或 TV 行为；
-- 手机上的浏览器不能自动证明目标电视浏览器；
-- 模拟器不能替代 R002 最终真实设备 Gate；
-- 远程控制某设备时，Executor 与 Target 必须分别记录。
-
----
-
-## 11. Tailscale 与远程访问
-
-Tailscale 是管理路径，不是默认媒体数据路径。
-
-- Cloud / Windows / 其他 Worker 可经授权访问手机 Ubuntu；
-- 家庭媒体流优先 LAN，不无意义绕行 Tailscale；
-- 不直接暴露 ADB、Gateway 管理 API、Browser Worker 调试端口到公网；
-- 不提交 Tailscale auth key、SSH key、GitHub token、Cookie、站点 profile；
-- 临时端口转发、一次性 token 和远程会话任务结束后清理；
-- 远程可达不代表可以扩大当前 Task 的操作范围。
+- Web 静态分析不是 runtime PASS；
+- Actions x86 runner 不能证明 ARM64；
+- Cloud host 不能证明手机温度或家庭 LAN；
+- 模拟器不能证明目标 TV；
+- remote orchestration 不改变真实 Execution host / Target。
 
 ---
 
-## 12. 冲突与失败
+## 13. Tailscale 与远程执行
 
-### 远程出现新提交
+Tailscale 是管理/执行通道，不是默认媒体数据路径。
 
-停止覆盖式提交，获取最新状态并重新检查当前 Scope。
-
-### 两个 Worker 重复领取
-
-较晚或尚未形成提交的一方停止。比较 Evidence 与 diff 后只保留一个 active owner，不机械合并两份实现。
-
-### 当前环境能力不足
-
-不要降低 Success Criteria。记录缺失 capability / device / permission / network / version，设置 `status:blocked` 或释放回 `status:ready` 供合适环境领取。
-
-### 实验推翻设计
-
-保留真实 Evidence，交回 Coordinator，按 `AGENTS.md` 的设计变更流程更新 canonical 文档；不要为了 Demo 成功绕过架构和安全边界。
+- Cloud/其他 Worker 可以在当前 Task 授权范围内通过 Tailscale 访问目标设备；
+- Evidence 必须记录命令实际运行位置；
+- 家庭媒体流仍优先 LAN；
+- 不直接公网暴露 ADB、Gateway 管理 API、Browser Worker 画面或 debug port；
+- 不把 Tailscale auth key、SSH key、GitHub token、Cookie/profile 写入仓库或 Issue；
+- 临时端口、token、远程会话按任务结束清理。
 
 ---
 
-## 13. 推荐日常流程
+## 14. 推荐日常闭环
 
 ```text
-Web Coordinator Session
-  → 读取 GitHub 全局状态
-  → 选择最高优先级 Gate / Task
-  → 定义 Scope / Success Criteria / Evidence
-  → 判断 Web Worker 能否完成
+Web Coordinator
+→ 定义 Goal / Claims / Success Criteria
+→ 拆 Implementation / Verification（逻辑上）
 
-能：
-  → 新 Web Worker Session（优先）
-  → claim / execute / commit / review state
+Implementation
+→ Web Worker first
+→ Candidate commit / PR
 
-不能：
-  → 根据 Required Capabilities
-  → WSL / Windows / Ubuntu ARM64 / Cloud / TV Worker
-  → claim / execute / evidence / review state
+Verification
+→ GitHub Actions first
+→ Cloud if long-running
+→ WSL/Windows if interactive capability needed
+→ ARM64/TV only for target proof
 
-所有 Worker
-  → 完成当前 Task 后停止
-
-Web Coordinator Session
-  → Review diff + Evidence
-  → accept / revise / blocked
-  → 更新 Gate / canonical docs
-  → 决定下一项
+Evidence
+→ GitHub
+→ Web Coordinator Review
+→ accept / revise / blocked
+→ main / Research Gate update
 ```
 
-最终协作模型不是“多个环境平级竞争任务”，而是：
+最终目标不是让每个环境都有工作，而是：
 
-```text
-                    GitHub
-                 Single Source
-                      │
-                      ▼
-              Web Coordinator
-              Project Control Plane
-                      │
-          ┌───────────┴───────────┐
-          │                       │
-   Web Worker（优先）      External Workers
-                          WSL / Windows /
-                          ARM64 / Cloud / TV
-          │                       │
-          └───────────┬───────────┘
-                      ▼
-               Commit / PR / Evidence
-                      │
-                      ▼
-               Web Coordinator Review
-                      │
-                      ▼
-                    main / Gate
-```
-
-这使网页既保持最高执行优先级，又通过 Coordinator / Worker 会话分离避免全局上下文被单个实现任务吞噬。
+> **尽可能让工作留在 Web；尽可能让验证自动化；只有明确的 capability / Evidence 缺口才下沉到更昂贵、更具体的环境。**
