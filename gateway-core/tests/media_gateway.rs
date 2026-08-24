@@ -51,7 +51,10 @@ async fn spawn_fixture() -> (String, Arc<FixtureStats>) {
             get(|| async {
                 (
                     StatusCode::FOUND,
-                    [(LOCATION, "/hls/master.m3u8?redirect_token=fixture-secret-query")],
+                    [(
+                        LOCATION,
+                        "/hls/master.m3u8?redirect_token=fixture-secret-query",
+                    )],
                 )
             }),
         )
