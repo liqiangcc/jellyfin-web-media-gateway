@@ -43,12 +43,21 @@ async function diagnostics() {
   return response.json();
 }
 
+async function waitForState(predicate, description) {
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    const state = await diagnostics();
+    if (predicate(state)) return state;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error(`timed out waiting for ${description}`);
+}
+
 async function waitForPlayAttempt(commandId) {
-  await page.waitForFunction(async expectedCommandId => {
-    const response = await fetch('/api/v1/display-probe/state', { cache: 'no-store' });
-    const state = await response.json();
-    return state.telemetry.some(item => item.kind === 'play_attempt' && item.command_id === expectedCommandId);
-  }, commandId, { timeout: 15000 });
+  return waitForState(
+    state => state.telemetry.some(item => item.kind === 'play_attempt' && item.command_id === commandId),
+    `play attempt for ${commandId}`,
+  );
 }
 
 await page.goto(`${base}/display`, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -72,20 +81,20 @@ if (!duplicate.duplicate) throw new Error('duplicate request_id was not reported
 // A real Playwright click supplies normal user activation for the bootstrap
 // path. This is probe mechanics evidence, not physical-TV acceptance.
 await page.locator('#activate').click();
-await page.waitForFunction(async () => {
-  const state = await (await fetch('/api/v1/display-probe/state', { cache: 'no-store' })).json();
-  return state.telemetry.some(item => item.kind === 'play_attempt' && item.detail === 'source=activation');
-}, null, { timeout: 15000 });
+await waitForState(
+  state => state.telemetry.some(item => item.kind === 'play_attempt' && item.detail === 'source=activation'),
+  'activation play attempt',
+);
 await postCommand('r002-remote-after-activation');
 await waitForPlayAttempt('r002-remote-after-activation');
 
 await page.locator('#fullscreen').click();
 if (evidence.commands.length !== 3) throw new Error(`expected 3 command responses, got ${evidence.commands.length}`);
 if (evidence.commands.filter(command => command.duplicate).length !== 1) throw new Error('expected exactly one idempotent duplicate response');
-await page.waitForFunction(async () => {
-  const current = await (await fetch(`/api/v1/display-probe/state?nonce=${Date.now()}`, { cache: 'no-store' })).json();
-  return current.telemetry.filter(item => item.kind === 'play_attempt').length >= 3;
-}, null, { timeout: 15000 });
+await waitForState(
+  state => state.telemetry.filter(item => item.kind === 'play_attempt').length >= 3,
+  'three play attempts',
+);
 const finalState = await diagnostics();
 evidence.playAttempts = finalState.telemetry.filter(item => item.kind === 'play_attempt');
 evidence.fullscreen = finalState.telemetry.filter(item => item.kind === 'fullscreen');
