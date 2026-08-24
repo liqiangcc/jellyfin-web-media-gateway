@@ -80,7 +80,23 @@ ADR 是决策历史，不是当前系统完整规范。接受新的 ADR 后，�
 
 面向第一次进入仓库的人，只解释项目目标、顶层架构、核心原则和文档入口。
 
-## 2. 设计变更检查表
+## 2. Agent / Codex 工作入口
+
+Agent 的长期仓库规则由根 `AGENTS.md` 定义；阶段性可直接执行的任务提示词位于 `docs/codex/`。
+
+当前入口：
+
+- `../AGENTS.md`：长期架构、安全、测试、Git 和技术验证规则。
+- `codex/README.md`：Codex 任务入口说明。
+- `codex/technical-feasibility.md`：继续当前风险驱动技术预研的可执行任务提示词。
+
+推荐新会话只给一条短指令：
+
+> 读取 `AGENTS.md`，然后按照 `docs/codex/technical-feasibility.md` 继续执行下一项。
+
+`AGENTS.md` 与 `docs/codex/*` 是 Agent 工作指令，不高于本文件定义的 canonical 产品/架构文档；若任务 Prompt 与 canonical 文档冲突，应修复 Prompt 漂移而不是覆盖架构。
+
+## 3. 设计变更检查表
 
 任何会改变核心边界的设计修改，在提交前至少检查：
 
@@ -102,7 +118,7 @@ Security
 
 避免只新增 ADR，而没有让实施计划与主架构真正采用该决定；也避免实验已经证明某个假设失败，但 canonical 文档仍继续把它写成既定事实。
 
-## 3. 当前最重要的不变量
+## 4. 当前最重要的不变量
 
 - Gateway 是 `PlaybackSession` authority。
 - Jellyfin 只是一个 `DisplayAdapter`。
