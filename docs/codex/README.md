@@ -1,67 +1,66 @@
 # Codex 任务入口
 
-本目录保存可以直接交给**外部 Codex Worker** 执行的阶段性任务提示词。
+本目录保存可以直接交给**外部交互式/目标环境 Worker** 执行的阶段性任务提示词。
 
-长期、不随单次任务变化的仓库规则放在根 `AGENTS.md`；多环境与网页会话模型见 `../development-environments.md`。
+长期规则见根 `AGENTS.md`；完整调度模型见 `../development-environments.md`。
 
-## Web-first
+## 默认不是 Codex-first
 
-项目默认不是“网页负责设计、Codex 负责执行”，而是：
+项目默认执行顺序：
 
 ```text
-Web Coordinator
-→ 判断任务所需 capability
-→ Web Worker 能完成则优先 env:web-gpt
-→ Web Worker 缺能力时才路由外部 Codex / 真实设备
+Web Worker implementation
+→ GitHub Actions automated verification
+→ Cloud long-running verification
+→ WSL / Windows interactive debugging when needed
+→ Ubuntu ARM64 / Real TV target proof when required
 ```
 
-因此本目录属于 **capability fallback / external worker entry**，不是所有执行任务的默认入口。
+因此本目录不是“所有代码任务”的默认入口。
 
-需要以下能力时通常使用相应外部 Worker：
+只有出现以下 capability 缺口时通常进入外部 Codex：
 
-- 本地真实编译/自动化测试；
-- WSL / Windows 本地文件和进程；
-- ADB；
-- Ubuntu ARM64 原生运行和资源测量；
-- Cloud 长时间执行；
-- 真实浏览器/电视/Jellyfin Android TV；
-- 其他 Web Worker 无法产生有效 Evidence 的环境能力。
+- Actions failure 需要交互式 Linux debug；
+- 需要本地文件/进程/调试器；
+- 需要 ADB / Android host；
+- 需要 Ubuntu ARM64 目标运行和资源测量；
+- 需要通过 Cloud 之外的特定交互环境处理问题；
+- 其他 Web + Actions + Cloud 无法覆盖的执行需求。
 
-网页分析不能替代这些 runtime / device Evidence；反过来，单纯因为任务涉及代码，也不应自动绕过 Web Worker。
+真实电视/遥控器等物理 UX 仍属于 manual/target worker，不因为使用 Codex 就自动获得该 Evidence authority。
+
+## GitHub Actions 与 Cloud 不属于这里的“外部 Codex”前置条件
+
+- **GitHub Actions**：默认 automated verification backend；由 commit/PR 触发并提供真实 runner Evidence。
+- **Cloud**：默认 long-running backend；适合 soak、重复 race、benchmark matrix、failure injection。
+
+只有自动化/长跑后端不足以完成或定位任务时，才优先启动 WSL / Windows 等交互式 Codex。
 
 ## 推荐任务入口
 
-具体执行任务优先使用：
+优先使用：
 
 ```text
 GitHub Issue
 + docs/tasks/<issue>-<slug>/task.md
 ```
 
-外部 Codex Worker 读取任务契约、确认 Required Capabilities、claim Issue、执行 Scope、提交实现和 Evidence 后转 `status:review` 并停止；由 Web Coordinator 验收和决定下一项。
+Worker 读取任务契约，确认当前环境正好提供 Task 缺失的 Required Capabilities，claim Issue，只执行 Scope，提交实现/Evidence 后转 `status:review` 并停止。
 
-如果当前阶段尚未拆成更聚焦 Issue，可以使用本目录的阶段性入口。
+有明确 Issue / Task 时：
 
-## 使用方式
-
-有明确 Issue / Task 时优先：
-
-> 读取 `AGENTS.md`、对应 GitHub Issue 和 `docs/tasks/<issue>-<slug>/task.md`，确认当前环境满足 Required Capabilities 后 claim，只执行当前 Scope；提交结果并转为 `status:review` 后停止。
-
-只有本轮明确要求使用阶段性任务入口时：
-
-> 读取 `AGENTS.md`，然后按照 `docs/codex/technical-feasibility.md` 执行当前最高优先级、当前外部环境能够提供有效 Evidence 的 Research 工作；完成本轮后停止。
-
-Codex 必须自己读取仓库中的 canonical 文档和已有 Evidence，不要求用户重复粘贴全部背景。
+> 读取 `AGENTS.md`、对应 GitHub Issue 和 `docs/tasks/<issue>-<slug>/task.md`；确认当前环境提供 Web/Actions/Cloud 无法提供的 Required Capabilities 后 claim，只执行当前 Scope，记录真实 Executor/Target Evidence，提交后转为 `status:review` 并停止。
 
 ## 当前阶段入口
 
-- `technical-feasibility.md`：风险驱动技术预研与可行性验证的外部 Worker 入口。
+- `technical-feasibility.md`：风险驱动技术预研与可行性验证的外部 Worker 阶段入口。
+
+如果当前阶段尚未拆成更聚焦 Issue，可使用该入口；完成本轮后仍然停止，不自动开始下一项。
 
 ## 规则
 
-- 阶段任务 Prompt 不能重新定义 canonical architecture。
-- 如果 Prompt 与 `requirements.md` / `architecture.md` / `implementation-contracts.md` 冲突，以 canonical 文档为准，并修复 Prompt 漂移。
-- 已完成的 Research Item 不重复执行，除非已有 Evidence 失效、环境变化或任务明确要求重新验证。
-- 新增任务 Prompt 应保持聚焦，避免复制整个仓库设计文档。
+- Prompt 不能重新定义 canonical architecture。
+- Prompt 与 `requirements.md` / `architecture.md` / `implementation-contracts.md` 冲突时，以 canonical 文档为准并修复 Prompt 漂移。
+- 已完成 Research Item 不重复执行，除非 Evidence 失效、环境变化或任务明确要求重新验证。
 - 外部 Worker 不自行扩大 Scope、不自行关闭 Issue、不自动开始下一项。
+- WSL/Cloud/Actions 结果不得冒充 Ubuntu ARM64 或真实电视 Evidence。
