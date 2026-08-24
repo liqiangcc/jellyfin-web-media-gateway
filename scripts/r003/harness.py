@@ -85,6 +85,12 @@ def checkpoint_seconds(profile: str) -> int:
         raise ValueError("checkpoint_profile must be one of: 5, 30, 60") from exc
 
 
+def checkpoint_schedule(profile: str) -> list[int]:
+    """Return the canonical 5m/30m/60m checkpoints within one run."""
+    duration = checkpoint_seconds(profile)
+    return [value for value in (300, 1800, 3600) if value <= duration]
+
+
 def resolve_duration(profile: str | None, duration: float | None) -> float:
     if profile is not None:
         expected = checkpoint_seconds(profile)
@@ -94,6 +100,12 @@ def resolve_duration(profile: str | None, duration: float | None) -> float:
     if duration is None or duration <= 0 or duration > 3600:
         raise ValueError("duration_seconds must be greater than 0 and no more than 3600")
     return duration
+
+
+def measurement_duration(scenario: str, requested_duration: float) -> float:
+    """Keep the transcode boundary bounded while aligning collection to workload."""
+    validate_scenario(scenario)
+    return min(requested_duration, 30.0) if scenario == "transcode-boundary" else requested_duration
 
 
 def read_text(path: Path) -> str | None:
@@ -540,15 +552,97 @@ def proof_url(gateway_url: str, scenario: str) -> str:
     return gateway_url.rstrip("/") + path
 
 
-def traffic_loop(url: str, stop: threading.Event, hls: bool = False) -> None:
+def fetch_bytes(url: str, limit: int = 1024 * 1024) -> bytes:
+    with urllib.request.urlopen(url, timeout=10) as response:
+        return response.read(limit)
+
+
+def playlist_children(body: bytes, base_url: str) -> list[str]:
+    """Resolve variant, segment, and URI-attribute children from an HLS playlist."""
+    text = body.decode("utf-8", errors="replace")
+    children: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            match = re.search(r'URI="([^"]+)"', stripped)
+            if not match:
+                continue
+            candidate = match.group(1)
+        else:
+            candidate = stripped
+        resolved = urllib.parse.urljoin(base_url, candidate)
+        if resolved not in children:
+            children.append(resolved)
+    return children
+
+
+def hls_media_children(url: str, max_requests: int = 4) -> list[str]:
+    """Fetch a playlist and its first variant, returning actual child media URLs."""
+    first_body = fetch_bytes(url, 512 * 1024)
+    first_children = playlist_children(first_body, url)
+    if not first_children:
+        raise RuntimeError("HLS playlist has no child variant or media URI")
+    if b"#EXT-X-STREAM-INF" not in first_body:
+        return first_children[:max_requests]
+    variant_body = fetch_bytes(first_children[0], 512 * 1024)
+    second_children = playlist_children(variant_body, first_children[0])
+    if not second_children:
+        # A media playlist may itself be the first response.
+        second_children = first_children
+    return second_children[:max_requests]
+
+
+def traffic_loop(
+    url: str,
+    stop: threading.Event,
+    hls: bool = False,
+    stats: dict[str, Any] | None = None,
+    errors: list[str] | None = None,
+) -> None:
     while not stop.is_set():
         try:
-            with urllib.request.urlopen(url, timeout=10) as response:
-                body = response.read(256 * 1024 if hls else 1024 * 1024)
-                if not body:
-                    stop.wait(0.25)
-        except (OSError, urllib.error.URLError):
+            if hls:
+                children = hls_media_children(url)
+                if stats is not None:
+                    stats["playlist_cycles"] = stats.get("playlist_cycles", 0) + 1
+                    stats["child_requests"] = stats.get("child_requests", 0) + len(children)
+                for child in children:
+                    if stop.is_set():
+                        break
+                    fetch_bytes(child, 512 * 1024)
+            else:
+                fetch_bytes(url)
+                if stats is not None:
+                    stats["requests"] = stats.get("requests", 0) + 1
+            stop.wait(0.25)
+        except (OSError, RuntimeError, urllib.error.URLError) as exc:
+            if errors is not None and len(errors) < 16:
+                errors.append(f"{type(exc).__name__}: {exc}")
             stop.wait(0.5)
+
+
+def build_ffmpeg_command(executable: str, scenario: str, media_url: str, output_file: Path, duration: float) -> list[str]:
+    if scenario not in {"remux", "transcode-boundary"}:
+        raise ValueError("FFmpeg command requires remux or transcode-boundary scenario")
+    input_args = ["-stream_loop", "-1", "-re", "-i", media_url] if scenario == "remux" else ["-i", media_url]
+    codec_args = ["-c", "copy"] if scenario == "remux" else ["-c:v", "libx264", "-c:a", "aac", "-preset", "veryfast"]
+    return [executable, "-hide_banner", "-loglevel", "warning", "-y", *input_args, *codec_args, "-t", str(duration), str(output_file)]
+
+
+def build_chromium_command(executable: str, target: str, user_data_dir: Path) -> list[str]:
+    return [
+        executable,
+        "--headless=new",
+        "--disable-gpu",
+        "--disable-dev-shm-usage",
+        "--no-first-run",
+        "--remote-debugging-port=0",
+        "--user-data-dir",
+        str(user_data_dir),
+        target,
+    ]
 
 
 def build_candidate(candidate_dir: Path) -> None:
@@ -567,7 +661,10 @@ def run_scenario(args: argparse.Namespace) -> int:
     validate_sha(args.candidate_sha, "candidate_sha")
     validate_sha(args.harness_sha, "harness_sha")
     scenario = validate_scenario(args.scenario)
-    duration = resolve_duration(args.checkpoint_profile, args.duration_seconds)
+    requested_duration = resolve_duration(args.checkpoint_profile, args.duration_seconds)
+    # The transcode boundary is intentionally short. Its collector window is
+    # the same bounded window as the actual FFmpeg workload, not post-exit idle.
+    duration = measurement_duration(scenario, requested_duration)
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
     capabilities = preflight()
@@ -599,6 +696,8 @@ def run_scenario(args: argparse.Namespace) -> int:
     workload: subprocess.Popen[Any] | None = None
     traffic_stop = threading.Event()
     traffic: threading.Thread | None = None
+    traffic_stats: dict[str, Any] = {}
+    traffic_errors: list[str] = []
     log_handle = (output / "process.log").open("w", encoding="utf-8")
     startup_latency: float | None = None
     metadata = {
@@ -610,6 +709,10 @@ def run_scenario(args: argparse.Namespace) -> int:
         "startup_latency_ms": None,
         "host": {"hostname": socket.gethostname(), "architecture": platform.machine(), "system": platform.platform()},
         "preflight_status": capabilities["status"],
+        "checkpoint_profile": args.checkpoint_profile,
+        "requested_duration_seconds": requested_duration,
+        "effective_duration_seconds": duration,
+        "workload_duration_seconds": duration,
     }
     try:
         if args.gateway_command:
@@ -627,16 +730,20 @@ def run_scenario(args: argparse.Namespace) -> int:
         if scenario in {"direct-http", "direct-hls", "direct-4k"}:
             if not media_url:
                 raise ValueError("direct scenarios require gateway_url or media_url")
-            traffic = threading.Thread(target=traffic_loop, args=(media_url, traffic_stop, scenario == "direct-hls"), daemon=True)
+            traffic = threading.Thread(
+                target=traffic_loop,
+                args=(media_url, traffic_stop, scenario == "direct-hls", traffic_stats, traffic_errors),
+                daemon=True,
+            )
             traffic.start()
         elif scenario in {"remux", "transcode-boundary"}:
             if not media_url:
                 raise ValueError("FFmpeg scenarios require gateway_url or media_url")
             ffmpeg = capabilities["capabilities"]["ffmpeg"]["path"]
             output_file = output / ("remux.ts" if scenario == "remux" else "transcode.mp4")
-            codec_args = ["-c", "copy"] if scenario == "remux" else ["-c:v", "libx264", "-c:a", "aac", "-preset", "veryfast"]
+            command = build_ffmpeg_command(ffmpeg or "ffmpeg", scenario, media_url, output_file, duration)
             workload = subprocess.Popen(
-                [ffmpeg or "ffmpeg", "-hide_banner", "-loglevel", "warning", "-y", "-i", media_url, *codec_args, "-t", "30", str(output_file)],
+                command,
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
@@ -647,22 +754,45 @@ def run_scenario(args: argparse.Namespace) -> int:
             if not target:
                 raise ValueError("Chromium baseline requires chromium_url or gateway_url")
             chromium = capabilities["capabilities"]["chromium"]["path"]
+            user_data_dir = Path(tempfile.mkdtemp(prefix="chromium-", dir=output))
+            metadata["workload_mode"] = "live-chromium-page-load"
             workload = subprocess.Popen(
-                [chromium or "chromium", "--headless", "--disable-gpu", "--dump-dom", target],
+                build_chromium_command(chromium or "chromium", target, user_data_dir),
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
             pids.append(workload.pid)
+            time.sleep(1)
+            if workload.poll() is not None:
+                run = dict(metadata)
+                run.update(
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "status": "BLOCKED",
+                        "blocked_reason": "Chromium exited before the requested bounded live-process window",
+                        "started_at": now_utc(),
+                        "ended_at": now_utc(),
+                        "duration_seconds": duration,
+                        "checkpoint_seconds": [],
+                    }
+                )
+                write_json(output / "run.json", run)
+                return 2
         metadata["startup_latency_ms"] = startup_latency
+        checkpoint_values = checkpoint_schedule(args.checkpoint_profile) if args.checkpoint_profile else []
+        if scenario == "transcode-boundary":
+            checkpoint_values = [value for value in checkpoint_values if value <= duration]
         run = collect_metrics(
             output,
             pids,
             duration,
             args.interval_seconds,
-            [checkpoint_seconds(args.checkpoint_profile)] if args.checkpoint_profile else [],
+            checkpoint_values,
             metadata,
         )
+        workload_exited_before_window = workload is not None and workload.poll() is not None
+        workload_returncode = workload.returncode if workload else None
         traffic_stop.set()
         if traffic:
             traffic.join(timeout=2)
@@ -670,11 +800,28 @@ def run_scenario(args: argparse.Namespace) -> int:
         terminate_process(gateway)
         run["process_results"] = {
             "gateway": {"pid": gateway.pid, "returncode": gateway.returncode, "controlled_stop": True} if gateway else None,
-            "workload": {"pid": workload.pid, "returncode": workload.returncode, "controlled_stop": True} if workload else None,
+            "workload": {
+                "pid": workload.pid,
+                "returncode": workload_returncode,
+                "exited_before_window": workload_exited_before_window,
+                "controlled_stop": True,
+            }
+            if workload
+            else None,
         }
+        run["traffic"] = {"stats": traffic_stats, "errors": traffic_errors}
+        if scenario == "direct-hls" and not traffic_stats.get("child_requests"):
+            run["status"] = "FAILED"
+            run["error"] = "direct-hls produced no rewritten child/media requests"
+        if scenario == "chromium-baseline" and workload_exited_before_window:
+            run["status"] = "BLOCKED"
+            run["blocked_reason"] = "Chromium exited before the requested bounded live-process window"
+        elif scenario == "remux" and workload_exited_before_window:
+            run["status"] = "FAILED"
+            run["error"] = "remux workload exited before the requested continuous measurement window"
         write_json(output / "run.json", run)
         summarize(output)
-        return 0
+        return 1 if run.get("status") == "FAILED" else 2 if run.get("status") == "BLOCKED" else 0
     except Exception as exc:
         write_json(output / "error.json", {"schema_version": SCHEMA_VERSION, "error": f"{type(exc).__name__}: {exc}"})
         return 1
@@ -685,6 +832,9 @@ def run_scenario(args: argparse.Namespace) -> int:
         terminate_process(workload)
         terminate_process(gateway)
         log_handle.close()
+        chromium_dir = locals().get("user_data_dir")
+        if chromium_dir:
+            shutil.rmtree(chromium_dir, ignore_errors=True)
 
 
 def validate_target(args: argparse.Namespace) -> int:

@@ -1,9 +1,12 @@
 import json
+import http.server
 import os
 import signal
+import socketserver
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -13,10 +16,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from harness import (  # noqa: E402
     ProcReader,
+    build_chromium_command,
+    build_ffmpeg_command,
+    checkpoint_schedule,
     collect_metrics,
     enrich_sample,
+    hls_media_children,
+    measurement_duration,
+    playlist_children,
     resolve_duration,
     summarize,
+    traffic_loop,
     validate_scenario,
     validate_workflow,
 )
@@ -81,10 +91,82 @@ class HarnessTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_scenario("arbitrary-shell")
         self.assertEqual(resolve_duration("5", None), 300)
+        self.assertEqual(measurement_duration("transcode-boundary", 300), 30)
+        self.assertEqual(measurement_duration("remux", 3600), 3600)
+        self.assertEqual(checkpoint_schedule("5"), [300])
+        self.assertEqual(checkpoint_schedule("30"), [300, 1800])
+        self.assertEqual(checkpoint_schedule("60"), [300, 1800, 3600])
         with self.assertRaises(ValueError):
             resolve_duration("5", 1)
         failures = validate_workflow(ROOT / ".github/workflows/r003-target-resource.yml")
         self.assertEqual(failures, [])
+
+    def test_hls_child_resolution_and_workload_commands(self) -> None:
+        master = b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\nvariant.m3u8\n"
+        variant = b"#EXTM3U\n#EXTINF:1,\nseg-0.ts\n#EXTINF:1,\nseg-1.ts\n"
+        self.assertEqual(playlist_children(master, "http://gateway/master.m3u8"), ["http://gateway/variant.m3u8"])
+        self.assertEqual(
+            playlist_children(variant, "http://gateway/variant.m3u8"),
+            ["http://gateway/seg-0.ts", "http://gateway/seg-1.ts"],
+        )
+        remux = build_ffmpeg_command("ffmpeg", "remux", "http://gateway/media.m3u8", Path("out.ts"), 300)
+        self.assertIn("-stream_loop", remux)
+        self.assertIn("-re", remux)
+        self.assertEqual(remux[remux.index("-t") + 1], "300")
+        transcode = build_ffmpeg_command("ffmpeg", "transcode-boundary", "http://gateway/media.mp4", Path("out.mp4"), 30)
+        self.assertNotIn("-stream_loop", transcode)
+        self.assertEqual(transcode[transcode.index("-t") + 1], "30")
+        chromium = build_chromium_command("chromium", "http://gateway/", Path("profile"))
+        self.assertNotIn("--dump-dom", chromium)
+        self.assertIn("--remote-debugging-port=0", chromium)
+
+    def test_hls_child_requests_use_local_fixture(self) -> None:
+        requests: list[str] = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802
+                requests.append(self.path)
+                bodies = {
+                    "/master.m3u8": b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\nvariant.m3u8\n",
+                    "/variant.m3u8": b"#EXTM3U\n#EXTINF:1,\nseg-0.ts\n#EXTINF:1,\nseg-1.ts\n",
+                    "/seg-0.ts": b"segment-0",
+                    "/seg-1.ts": b"segment-1",
+                }
+                body = bodies.get(self.path, b"")
+                self.send_response(200 if body else 404)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, _format: str, *_args: object) -> None:
+                return
+
+        server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            base = f"http://127.0.0.1:{server.server_address[1]}"
+            children = hls_media_children(f"{base}/master.m3u8")
+            self.assertEqual(children, [f"{base}/seg-0.ts", f"{base}/seg-1.ts"])
+            stop = threading.Event()
+            stats: dict[str, object] = {}
+            errors: list[str] = []
+            worker = threading.Thread(
+                target=traffic_loop,
+                args=(f"{base}/master.m3u8", stop, True, stats, errors),
+                daemon=True,
+            )
+            worker.start()
+            time.sleep(0.25)
+            stop.set()
+            worker.join(timeout=2)
+            self.assertGreaterEqual(stats.get("child_requests", 0), 2)
+            self.assertEqual(errors, [])
+            self.assertIn("/seg-0.ts", requests)
+            self.assertIn("/seg-1.ts", requests)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def test_summary_preserves_slope_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
