@@ -440,8 +440,8 @@ async fn hls_manifest_query_segment_and_interruption_have_concrete_results() {
         .send()
         .await
         .unwrap();
-    let partial = interrupted.bytes().await.unwrap();
-    assert_eq!(partial.as_ref(), b"partial");
+    assert_eq!(interrupted.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(interrupted.text().await.unwrap(), "UPSTREAM_REQUEST_FAILED");
     wait_active_zero(&service).await;
 }
 
