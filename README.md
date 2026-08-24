@@ -184,16 +184,29 @@ ADR：
 - [ADR-0005：统一 Control 体验](docs/adr/0005-unified-control-experience.md)
 - [ADR-0006：Site Plugin Boundary](docs/adr/0006-site-plugin-boundary.md)
 
-## Codex / Agent
+## Agent / 多环境开发
 
-仓库长期 Agent 工作规则见 [AGENTS.md](AGENTS.md)。当前阶段可以直接交给 Codex 的任务入口见 [docs/codex/technical-feasibility.md](docs/codex/technical-feasibility.md)。
+仓库长期 Agent 规则见 [AGENTS.md](AGENTS.md)，完整多环境协同模型见 [docs/development-environments.md](docs/development-environments.md)。
 
-新开 Codex 会话时可以只给：
+默认工作方式是：
 
-> 读取 `AGENTS.md`，然后按照 `docs/codex/technical-feasibility.md` 继续执行下一项。
+```text
+Web Coordinator
+→ Web Worker（最高执行优先级）
+→ 只有缺少 capability 时才路由 WSL / Windows / ARM64 / Cloud / TV
+→ commit / PR / Evidence
+→ Web Coordinator Review
+```
 
-Codex 应自行读取仓库当前 Research Matrix、Evidence 和 canonical 文档，不需要重新粘贴整套项目背景。
+网页明确区分两种会话：
+
+- **Web Coordinator Session**：长生命周期、项目全局控制面；
+- **Web Worker Session**：短生命周期、单 Task 执行者，使用 `env:web-gpt`。
+
+具体跨会话/跨环境任务优先使用 GitHub Issue + `docs/tasks/<issue>-<slug>/task.md`。Issue 保存实时状态与 owner；`task.md` 只保存稳定执行契约。
+
+只有 Web Worker 无法产生任务所需真实 Evidence 时，才进入 [docs/codex/](docs/codex/) 的外部 Codex Worker 路径或真实设备实验。
 
 ## 当前状态
 
-设计收敛完成到可编码契约阶段；技术可行性验证框架和 Codex 工作入口已经建立，尚未把真实设备/真实媒体路径标记为已验证，也尚无可运行正式版本。
+设计收敛完成到可编码契约阶段；技术可行性验证框架和 Web-first 多环境工作流已经建立，尚未把真实设备/真实媒体路径标记为已验证，也尚无可运行正式版本。
