@@ -5,7 +5,7 @@ description: Publish or republish an independent Worker Task for jellyfin-web-me
 
 # Task Publisher
 
-Publish one independent Worker Task through the repository's Task Publication Gate.
+Publish one independent Worker Task through the repository's Task Publication Gate and produce environment-specific downstream handoff entries.
 
 ## Authority
 
@@ -18,13 +18,15 @@ Before writing anything, read:
 3. `docs/tasks/task.template.md`
 4. `docs/tasks/prompt.template.md`
 5. `docs/tasks/issue-lifecycle-protocol.md`
-6. the canonical docs relevant to the requested Goal / Research Item
+6. `docs/tasks/handoffs/README.md`
+7. the handoff profile(s) for the intended eligible environment(s)
+8. the canonical docs relevant to the requested Goal / Research Item
 
-Use those files as authority. Do not copy their full contents into this skill or silently redefine Scope, Claims, Success Criteria, architecture, security, or Evidence requirements.
+Do not copy those documents into this skill or silently redefine Scope, Claims, Success Criteria, architecture, security, or Evidence requirements.
 
 ## Inputs
 
-Resolve these from the explicit request and repository state:
+Resolve from the explicit request and repository state:
 
 - Goal / Parent Goal / Research Item;
 - Task kind: `implementation | verification | combined | research`;
@@ -35,26 +37,29 @@ Resolve these from the explicit request and repository state:
 - Success Criteria / Claims / Evidence Contract;
 - base commit from the actual target branch.
 
-If a required value cannot be resolved from the request or canonical repository state, stop before publication rather than inventing it.
+If a required value cannot be resolved, stop before publication rather than inventing it.
 
 ## GitHub capability
 
-Use an authenticated GitHub write path available in the current Codex environment, such as a connected GitHub tool or an authenticated `gh` CLI.
+Use an authenticated GitHub write path available in the current environment.
 
-If the environment cannot create/update Issues, labels, and repository files, report the missing capability and stop. Do not simulate publication in local files only.
+If Issues, labels, repository files, or required Issue comments/state cannot be read/written, report the missing capability and stop. Do not simulate publication locally.
 
 ## Procedure
 
 ### 1. Preflight and deduplicate
 
-- Read the current default branch / intended publication branch and current HEAD.
-- Search existing open and closed Issues for the same Task / Goal.
-- If the requested Task already exists, update or republish that Task when appropriate; do not create a duplicate merely because a previous Attempt failed.
-- Confirm that splitting this work into a new Task follows the repository's Task-vs-Job rules.
+- Read the current intended branch and HEAD.
+- Search open and closed Issues for the same Task / Goal.
+- Reuse/update an existing Task when appropriate; a failed Attempt is not a reason to create a duplicate Issue.
+- Confirm Task-vs-Job decomposition before materializing.
+- Confirm every eligible `env:*` has a dedicated profile under `docs/tasks/handoffs/`.
+
+If an environment has no stable handoff profile, keep the Task draft and add the profile first rather than inventing an ad-hoc launch command.
 
 ### 2. Materialize as draft
 
-Create the real GitHub Issue first and keep it non-claimable as `status:draft`.
+Create the real GitHub Issue first as non-claimable `status:draft`.
 
 Obtain the real Issue number, then create:
 
@@ -63,35 +68,35 @@ docs/tasks/<issue>-<slug>/task.md
 docs/tasks/<issue>-<slug>/prompt.md
 ```
 
-Generate them from the repository templates. Replace all placeholders with real values.
+Generate them from repository templates and replace all task-specific placeholders.
 
 The Issue must link:
 
-- the real `task.md` path;
-- the real `prompt.md` path;
-- the actual base commit;
+- real `task.md`;
+- real `prompt.md`;
+- actual base commit;
 - Parent Goal / Research Item when applicable;
-- eligible environment / Required Capabilities.
+- eligible environment(s) / Required Capabilities.
 
-Do not put secrets, registration tokens, Cookies, PATs, SSH private keys, or long-lived credentials in Issue/task/prompt content.
+Do not persist registration tokens, Cookies, PATs, SSH private keys, or other long-lived secrets.
 
 ### 3. Read-back verification
 
 A successful create/update call is not publication.
 
-Re-read from GitHub and verify independently:
+Re-read from GitHub and independently verify:
 
 ```text
-Issue exists and is open
-Issue number matches the Task Package path
+Issue exists/open and real number matches package path
 Issue is unclaimed
 Issue links task.md + prompt.md + base commit
 
-task.md exists on the intended branch
-prompt.md exists on the intended branch
-prompt.md points to the same Issue and task.md
+task.md exists on intended branch
+prompt.md exists on intended branch
+prompt.md points to same Issue/task.md
+prompt/task do not store stale live status
 
-no template placeholders remain in task-specific fields
+no task-specific placeholders remain
 eligible env / Required Capabilities are correct
 Success Criteria / Evidence Contract are present
 no secret/token was persisted
@@ -112,27 +117,52 @@ Do not announce publication.
 Only after read-back passes:
 
 - preserve unrelated labels;
-- set the intended `env:*` eligibility;
-- replace the task status with `status:ready`;
-- keep the Issue without an active execution owner.
+- set all intended eligible `env:*` labels;
+- replace Task status with `status:ready`;
+- keep no active execution owner.
 
-If required labels do not exist, create them when the available GitHub capability safely supports that operation. Otherwise keep the Task draft and report the publication blocker.
+If required labels cannot safely be created/applied, keep the Task draft and report the blocker.
 
-### 5. Queue verification
+### 5. Post-publish queue verification
 
-Use a query equivalent to the target Worker's real queue, for example:
+For every eligible environment, use a query equivalent to that Worker's real queue, for example:
 
 ```text
+status:ready + env:web-gpt
 status:ready + env:ubuntu-arm64
 ```
 
-Verify that the expected Issue appears as claimable, with the correct environment and no active owner. Resolve the linked `task.md` and `prompt.md` again.
+Verify the expected Issue is claimable, the intended environment is present, no active owner exists, and linked `task.md` / `prompt.md` still resolve.
 
-If the target queue cannot see the Task, publication failed. Fix it or return it to draft.
+If any required eligible environment cannot see the Task, publication is incomplete. Fix it or return the Task to draft.
 
-### 6. Downstream handoff
+### 6. Environment-specific downstream handoff
 
-Only after queue verification passes, return the real handoff:
+Task Contract is shared; launch syntax is not.
+
+Select handoff profile by real environment:
+
+```text
+env:web-gpt       → docs/tasks/handoffs/web-gpt.md
+env:ubuntu-arm64  → docs/tasks/handoffs/ubuntu-arm64.md
+env:wsl           → docs/tasks/handoffs/wsl.md
+env:windows       → docs/tasks/handoffs/windows.md
+env:cloud         → docs/tasks/handoffs/cloud.md
+env:manual-tv     → docs/tasks/handoffs/manual-tv.md
+```
+
+Rules:
+
+- one eligible environment → output exactly one standalone copy block;
+- multiple eligible environments → output one standalone copy block per environment;
+- do not combine different clients into one prompt;
+- replace all Issue/path/environment placeholders from **post-publish GitHub read-back**;
+- never paste the full `task.md` into handoff;
+- `env:web-gpt` must use the Web ChatGPT + GitHub connector profile and must **not** require `$task-worker`;
+- Codex environments use their own profile and normally invoke `$task-worker`;
+- manual TV uses the manual verification profile, not a fake Codex/Actions command.
+
+Always include real handoff metadata:
 
 ```text
 Task: <real title>
@@ -142,42 +172,34 @@ Environment: env:<real environment>
 Prompt: docs/tasks/<real-issue>-<real-slug>/prompt.md
 ```
 
-Then provide a directly copyable Codex entry that explicitly invokes the Worker skill:
+## Republish after bootstrap/Contract change
+
+If Scope, Claims, Success Criteria, decomposition, Evidence Authority, architecture/security premise, or the task-specific bootstrap changes materially:
 
 ```text
-$task-worker Execute Issue #<real-issue> using `docs/tasks/<real-issue>-<real-slug>/prompt.md`.
-```
-
-Do not paste the entire `task.md` into the handoff.
-
-## Republish after Contract revision
-
-If an existing Task's Scope, Claims, Success Criteria, decomposition, Evidence Authority, or architecture/security premise changes:
-
-```text
-status:draft
+status:draft when required to make the package non-claimable
 → update canonical docs when required
-→ update task.md
-→ update prompt.md only if bootstrap changed
+→ update task.md for Contract changes
+→ update prompt.md for bootstrap changes
 → read-back verify
-→ status:ready
-→ queue verify
-→ output a new downstream handoff
+→ status:ready + eligible env
+→ queue verify for every eligible env
+→ emit fresh environment-specific handoff(s)
 ```
 
-A normal implementation bug, failed test, or insufficient Evidence does not require Contract republication; that is an Issue iteration handled by `task-reviewer` + `task-worker`.
+A normal implementation bug, failed test, or insufficient Evidence does not require Contract republication; that is Issue iteration handled by `task-reviewer` + the matching Worker environment.
 
 ## Completion rule
 
-Do not say “published”, “ready”, or “Worker can execute” unless all of these are true:
+Do not say “published”, “ready”, or “Worker can execute” unless all are true:
 
 ```text
 Issue read-back PASS
 + task.md read-back PASS
 + prompt.md read-back PASS
 + ready/env state read-back PASS
-+ target worker queue search PASS
-+ downstream handoff emitted
++ every required target worker queue search PASS
++ environment-specific downstream handoff emitted for every eligible env
 ```
 
 Plan is not execution. Write success is not publication.
