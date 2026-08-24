@@ -10,9 +10,15 @@ media_url="http://host.docker.internal:8788/r004.mp4"
 fixture_pid=""
 
 cleanup() {
+  exit_code=$?
   set +e
   if [[ -n "$fixture_pid" ]]; then
     kill "$fixture_pid" 2>/dev/null || true
+  fi
+  if [[ "$exit_code" -ne 0 ]]; then
+    echo 'Jellyfin smoke failed; server diagnostics:' >&2
+    docker logs "$container_name" 2>&1 | tail -n 80 >&2 || true
+    cat "$work_dir/media-server.log" >&2 2>/dev/null || true
   fi
   docker rm -f "$container_name" >/dev/null 2>&1 || true
   if [[ -d "$work_dir" ]]; then
@@ -39,22 +45,22 @@ docker run --detach --name "$container_name" --add-host host.docker.internal:hos
   jellyfin/jellyfin:10.11.11 >/dev/null
 
 for _ in $(seq 1 90); do
-  if curl --silent --fail "$server_url/System/Info/Public" >/dev/null; then
+  if curl --silent --show-error --fail-with-body "$server_url/System/Info/Public" >/dev/null; then
     break
   fi
   sleep 1
 done
-curl --silent --fail "$server_url/System/Info/Public" >/dev/null
+curl --silent --show-error --fail-with-body "$server_url/System/Info/Public" >/dev/null
 
-curl --silent --fail --request POST "$server_url/Startup/Configuration" \
+curl --silent --show-error --fail-with-body --request POST "$server_url/Startup/Configuration" \
   --header 'Content-Type: application/json' \
   --data '{"UICulture":"en-US","MetadataCountryCode":"US","PreferredMetadataLanguage":"en"}' >/dev/null
-curl --silent --fail --request POST "$server_url/Startup/User" \
+curl --silent --show-error --fail-with-body --request POST "$server_url/Startup/User" \
   --data-urlencode "Name=$user_name" --data-urlencode "Password=$user_password" >/dev/null
-curl --silent --fail --request POST "$server_url/Startup/Complete" >/dev/null
+curl --silent --show-error --fail-with-body --request POST "$server_url/Startup/Complete" >/dev/null
 
 auth_json="$work_dir/auth.json"
-curl --silent --fail --request POST "$server_url/Users/AuthenticateByName" \
+curl --silent --show-error --fail-with-body --request POST "$server_url/Users/AuthenticateByName" \
   --header 'Content-Type: application/json' \
   --header 'X-Emby-Authorization: MediaBrowser Client="R004", Device="CI", DeviceId="r004-ci", Version="1.0"' \
   --data "{\"Username\":\"$user_name\",\"Pw\":\"$user_password\"}" >"$auth_json"
@@ -62,26 +68,26 @@ token="$(jq -r '.AccessToken' "$auth_json")"
 user_id="$(jq -r '.User.Id' "$auth_json")"
 auth_header="X-Emby-Token: $token"
 
-curl --silent --fail --request POST \
+curl --silent --show-error --fail-with-body --request POST \
   "$server_url/Library/VirtualFolders?collectionType=movies&refreshLibrary=true&name=R004Smoke&paths=%2Fmedia" \
   --header "$auth_header" >/dev/null
 
 item_id=""
 for _ in $(seq 1 90); do
-  items="$(curl --silent --fail "$server_url/Items?UserId=$user_id&Recursive=true&IncludeItemTypes=Movie&Fields=Path" \
+  items="$(curl --silent --show-error --fail-with-body "$server_url/Items?UserId=$user_id&Recursive=true&IncludeItemTypes=Movie&Fields=Path" \
     --header "$auth_header")"
   item_id="$(jq -r '.Items[] | select(.Path | endswith("R004-smoke.strm")) | .Id' <<<"$items" | head -n 1)"
   if [[ -n "$item_id" && "$item_id" != "null" ]]; then
     break
   fi
-  curl --silent --fail --request POST "$server_url/Library/Refresh" \
+  curl --silent --show-error --fail-with-body --request POST "$server_url/Library/Refresh" \
     --header "$auth_header" >/dev/null || true
   sleep 1
 done
 test -n "$item_id" && test "$item_id" != null
 
 playback_info="$work_dir/playback-info.json"
-curl --silent --fail \
+curl --silent --show-error --fail-with-body \
   "$server_url/Items/$item_id/PlaybackInfo?UserId=$user_id" \
   --header "$auth_header" >"$playback_info"
 source_path="$(jq -r '.MediaSources[0].Path' "$playback_info")"
