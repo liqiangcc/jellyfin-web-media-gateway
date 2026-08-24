@@ -99,6 +99,7 @@ GitHub 保存：
 - canonical docs：需求、架构、实现契约；
 - Issue：实时 task 状态、owner、claim、branch、PR/commit、blocker、verification status、result summary；
 - `docs/tasks/<issue>-<slug>/task.md`：版本化执行契约；
+- `docs/tasks/<issue>-<slug>/prompt.md`：新 Worker 会话启动入口；
 - branch / PR：候选实现；
 - commit SHA：确定验证对象；
 - GitHub Actions run / job / artifact：自动化 Evidence；
@@ -136,7 +137,8 @@ Web GPT
 6. 将 Verification Claims 映射为 Jobs；
 7. 为每个 Job 选择 GitHub-hosted x64 / ARM64、Target Runner 或 Manual；
 8. 只有自动化能力不足时才路由外部 Codex；
-9. Review candidate / Evidence 并决定 Parent Goal / Gate。
+9. 为独立 Worker Task 生成稳定 `task.md` 和短 `prompt.md`；
+10. Review candidate / Evidence 并决定 Parent Goal / Gate。
 
 ### 4.2 Web Worker
 
@@ -581,7 +583,106 @@ independent Verification Task
 
 ---
 
-## 12. Issue 与 task.md
+## 12. Task Package 与 Session Bootstrap
+
+进入独立 Worker 队列的 Task 使用标准 Task Package：
+
+```text
+GitHub Issue
++
+docs/tasks/<issue>-<slug>/
+├── task.md
+└── prompt.md
+```
+
+模板：
+
+```text
+docs/tasks/task.template.md
+docs/tasks/prompt.template.md
+```
+
+### 12.1 三个职责必须分开
+
+```text
+GitHub Issue
+= 实时状态 / owner / blocker / branch / result summary
+
+task.md
+= 当前 Task 唯一执行契约
+
+prompt.md
+= 新会话 bootstrap / navigation only
+```
+
+`prompt.md` 的存在是为了降低跨会话启动成本，不是为了增加第三份业务规范。
+
+### 12.2 prompt.md 的内容边界
+
+Prompt 只应包含：
+
+- Issue 编号；
+- `task.md` 路径；
+- 预期 Worker / environment；
+- 必须读取的入口；
+- claim / status 生命周期提醒；
+- 完成后停止；
+- 不改变 Scope 的最少启动检查。
+
+Prompt 不得重新定义或复制：
+
+- Goal；
+- In Scope / Out of Scope；
+- Claims；
+- Success Criteria；
+- Architecture Invariants；
+- Verification Job Matrix；
+- Evidence 判断标准；
+- 动态 claim/status/result。
+
+原则：
+
+> **Prompt tells the Worker where and how to start; task.md tells the Worker what must be done.**
+
+### 12.3 Authority
+
+发生冲突时：
+
+```text
+canonical docs
+→ AGENTS.md
+→ task.md
+→ prompt.md
+```
+
+Issue 不参与重定义架构/Scope，但它是实时 status/owner/blocker authority。
+
+### 12.4 Ready Gate
+
+对于一个需要独立 Worker 新会话领取的 Task，在进入 `status:ready` 前应满足：
+
+1. Issue 已创建；
+2. `task.md` 已提交；
+3. `prompt.md` 已提交；
+4. Issue 链接 `task.md` / `prompt.md` 和 base commit；
+5. eligible environment / Required Capabilities 已明确；
+6. Success Criteria / Evidence Contract 已冻结到可执行状态。
+
+这样用户启动对应 Worker 时通常只需要一条短指令：
+
+> 读取 `AGENTS.md` 和 `docs/tasks/<issue>-<slug>/prompt.md`，执行当前 Task。
+
+如果旧 Task 没有 `prompt.md`，仍可使用 `AGENTS.md` + Issue + `task.md` 执行；Prompt 是标准 bootstrap 入口，不是新的业务 authority。
+
+### 12.5 Prompt 更新
+
+claim、blocked、review、done 或 Evidence 更新不修改 `prompt.md`。
+
+只有 Task 路径、预期 Worker/bootstrap 前置条件改变，或 Prompt 本身错误/漂移时才更新。
+
+---
+
+## 13. Issue 与 task.md
 
 ### Issue = 动态状态 authority
 
@@ -607,6 +708,7 @@ Parent Goal / Research Item
 Goal / Context
 Task decomposition decision
 Base / candidate commit
+Session bootstrap prompt
 Claims to verify
 Required capabilities
 Verification Job Matrix
@@ -626,23 +728,24 @@ Deliverables
 
 ---
 
-## 13. Claim、分支与并行
+## 14. Claim、分支与并行
 
 一个 Task 任一时刻只有一个 active owner；Research Item 可拆多个 Task 并行。
 
 领取前：
 
 1. 查询 ready Task；
-2. 确认 Task kind / Scope / Required Capabilities；
-3. 确认无 active owner；
-4. claim + `status:in-progress`；
-5. 再开始写入。
+2. 读取 Task Package 的 `prompt.md`（如存在）、Issue、`task.md`；
+3. 确认 Task kind / Scope / Required Capabilities；
+4. 确认无 active owner；
+5. claim + `status:in-progress`；
+6. 再开始写入。
 
 Verification 必须标识 candidate SHA。GitHub Actions Job 不 claim Issue。
 
 ---
 
-## 14. Evidence Contract
+## 15. Evidence Contract
 
 runtime / Research Evidence 至少记录：
 
@@ -677,7 +780,7 @@ Result
 
 ---
 
-## 15. Tailscale 与远程执行
+## 16. Tailscale 与远程执行
 
 Tailscale 是管理/执行通道，不是默认媒体路径。
 
@@ -690,12 +793,13 @@ Cloud/Windows/其他 Worker 只有当前 Task 明确授权时才能经 Tailscale
 
 ---
 
-## 16. 推荐日常闭环
+## 17. 推荐日常闭环
 
 ```text
 Web Coordinator
 → Goal / Claims / Success Criteria
 → 决定 combined 还是 Implementation + Verification 分离
+→ 生成 Issue + task.md + prompt.md
 
 Implementation
 → Web Worker first
@@ -721,4 +825,4 @@ Evidence
 
 最终目标：
 
-> **先按工作和 Claim 拆 Task，再按 capability 拆 Job；尽可能让工作留在 Web，并让 GitHub 自带计算资源承担通用验证，自建 Runner 只为 GitHub 无法提供的目标设备真实性服务。**
+> **先按工作和 Claim 拆 Task，再按 capability 拆 Job；用 `prompt.md` 降低新会话启动成本，但永远只维护一份 `task.md` 执行契约；尽可能让工作留在 Web，并让 GitHub 自带计算资源承担通用验证，自建 Runner 只为 GitHub 无法提供的目标设备真实性服务。**
