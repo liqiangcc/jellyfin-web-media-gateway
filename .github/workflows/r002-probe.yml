@@ -72,4 +72,5 @@ jobs:
           name: r002-probe-browser
           path: |
             r002-probe.json
+            r002-probe-debug.json
             server.log
