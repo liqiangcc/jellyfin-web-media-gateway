@@ -26,7 +26,7 @@
 
 Contract Freeze 后不直接假设完整架构已经在真实环境成立。按 `technical-feasibility-validation.md` 执行风险驱动验证。
 
-P0 Core Feasibility：
+P0 Core Feasibility 的**证据聚合顺序**：
 
 ```text
 R007 Playback concurrency contract closure
@@ -42,12 +42,48 @@ R008 Egress / Secret baseline throughout P0
 Core Feasibility Review
 ```
 
+上面的箭头用于表达 Gate Review 时的认知/证据组织顺序，**不自动等于 Task publication dependency**。
+
+Task 是否允许并行，必须单独判断 hard dependency：
+
+```text
+Hard dependency
+= 下游没有上游结果就无法正确实现或验证
+
+Soft ordering
+= 推荐先后，但 Scope 可以独立实现/验证；只在集成或 Gate Review 时对齐
+```
+
+默认调度规则：
+
+> **没有 hard dependency 的 ready Task 应优先发布并行执行；不要因为 Research ID 或文档顺序机械串行化。**
+
+当前 P0 的主要执行依赖图：
+
+```text
+R007 concurrency contract ───────────────┐
+                                         │
+R001 Media Path ───────→ R002 TV proof   ├→ Core Feasibility Review
+       │                                 │
+       └───────────────→ R003 target proof
+
+R008 security boundary ─ throughout ─────┘
+```
+
+其中 R007 与 R001 可以并行执行，只要边界保持：
+
+- R007 独占 Playback command/revision/item refresh/handoff authority 语义；
+- R001 只证明 Source/ResolvedMedia/Media Gateway/Web Display 媒体路径，不重新定义 `PlaybackSession` 并发；
+- R001 的 media capability 可以使用稳定/测试用 `session_id`、`item_id/item_revision` 绑定，但不需要先实现 R007 的完整状态机；
+- 如果两个 Task 同时触及 root workspace/Cargo metadata，使用各自 candidate branch + rebase/merge 解决；共享文件冲突是 integration work，不自动升级为 hard dependency；
+- 如果真实 Evidence 显示 R007 改变了 R001 必须消费的稳定接口，再由 Coordinator 将该具体接口关系升级为 blocker/Contract revision，而不是提前假设依赖。
+
 说明：
 
 - R001 的主要实现载体就是 Phase 0A-1。
-- R002 的主要实现载体就是 Phase 0A-3，但最小浏览器 autoplay spike 可以更早独立执行。
-- R003 从 Phase 0A-1 开始采集，不等到 Phase 4 才第一次测资源。
-- R007 属于编码前必须闭合的 concurrency contract，不需要大型外部 PoC，但必须有竞态测试。
+- R002 的主要实现载体就是 Phase 0A-3，但最小浏览器 autoplay spike 可以更早独立执行；完整 R002 依赖最小 Web Display 可运行。
+- R003 从 Phase 0A-1 开始采集；正式 target proof 依赖可运行的媒体路径和可用目标执行能力，但不依赖 R002 结论。
+- R007 属于编码前必须闭合的 concurrency contract，不需要大型外部 PoC，但必须有竞态测试；它不得被 R001 重新定义。
 - R008 不是后置安全加固；所有 Phase 0 spike 从第一天就必须遵守 Egress/Secret boundary。
 - R004 Jellyfin 可以并行执行，但失败不阻塞 Web-only Core。
 - R005 真实站点用于验证 Site Plugin Contract，不阻塞最早的公开媒体链路。
@@ -60,6 +96,8 @@ Web-only Core 可以被标记为技术可行之前，至少要求：
 3. R003 PASS 或有明确限制的 CONDITIONAL PASS。
 4. R007 的 revision / re-resolve / handoff generation 竞态契约已闭合。
 5. R008 的基础安全验证通过；PoC 没有通过关闭 SSRF 或泄露 Secret 获得成功。
+
+这些 Gate 条件需要在 Core Feasibility Review 时同时满足，但不要求对应 Task 必须串行执行。
 
 所有结论必须附真实实验/测试证据，不能使用“理论上应该可行”替代。
 
