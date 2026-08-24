@@ -8,6 +8,7 @@
 - 手机内网访问能力及外接 SSD 数据。
 - 防止网关成为 SSRF 工具、开放代理或未授权媒体中继。
 - 防止显示端冒充、Token 重放和跨任务媒体 URL 复用。
+- 防止把 `/` 的页面角色选择错误地当成认证或授权边界。
 
 ## 2. 主要威胁
 
@@ -50,12 +51,25 @@
 
 控制：
 
-- Web Display 注册必须绑定已认证 Gateway 会话。
+- Web Display 注册必须绑定已认证 Gateway 会话、已完成的设备配对或未来定义的等价可信注册机制；不能因为访问 `/display` 就自动获得媒体权限。
 - Display Instance 使用服务器生成的不可预测 ID，不信任客户端自报设备身份。
 - 注册、状态上报、播放控制和 handoff 都校验用户、会话与 display 归属。
 - WebSocket 校验 Origin，并对敏感写操作使用 CSRF 防护或等价的 same-origin token 机制。
 - display 断线后进入短暂 grace period，超过后标记离线，不自动把其他显示端切换到它。
 - 浏览器仅获得当前任务所需的短期媒体能力，不能读取站点凭据。
+
+### 入口角色混淆与越权
+
+`/` 提供 Display / Control 选择并在超时后默认进入 TV Display。这是 UX 路由，不是安全策略。如果前端模式被当成授权依据，攻击者可以直接访问 `/control` 或伪造本地偏好绕过权限检查。
+
+控制：
+
+- `/`、`/display`、`/control` 的路由结果只决定加载哪个前端角色；所有敏感 API 仍由服务端独立鉴权。
+- `preferred_role`、`DisplayProfile`、viewport、User-Agent 和本地存储都视为不可信客户端输入。
+- 直接访问 `/control` 不自动获得控制权限；未授权用户只能看到登录/拒绝状态。
+- 直接访问 `/display` 不自动获得任意播放任务；display 注册或配对完成后才可领取任务绑定媒体能力。
+- 根入口倒计时不得携带外部任意 redirect URL，目标只能是 Gateway 自身固定角色入口。
+- 角色切换不能复用或提升已有 Token 的权限范围。
 
 ### Display Handoff 竞态
 
@@ -122,10 +136,11 @@ yt-dlp 和 FFmpeg 必须使用参数数组调用，禁止拼接 Shell 命令。�
 - 远程管理使用 Tailscale；本地媒体流使用 LAN。
 - Host、Origin、Content-Type 和请求大小全部校验。
 - Adapter 对外连接采用明确 allowlist/capability；不得让 adapter 绕过核心 SSRF 策略。
+- `/` 的自动角色跳转只能指向 same-origin 固定路径，不接受任意外部回跳地址。
 
 ## 5. 日志与隐私
 
-允许记录 URL 的规范化 host、不可逆任务 ID、adapter 类型、display 匿名 ID、handoff revision 和稳定错误码；默认不记录完整 path/query。
+允许记录 URL 的规范化 host、不可逆任务 ID、adapter 类型、display 匿名 ID、handoff revision、入口角色选择结果和稳定错误码；默认不记录完整 path/query。
 
 日志自动清除或禁止记录：
 
@@ -155,3 +170,4 @@ yt-dlp 和 FFmpeg 必须使用参数数组调用，禁止拼接 Shell 命令。�
 3. 不绕过 Gateway 的媒体 Token、SSRF 和授权策略。
 4. 不把 adapter 私有凭据写入统一事件流或客户端响应。
 5. 失败时返回结构化错误，不通过“临时放宽安全校验”实现兼容。
+6. 不把 `DisplayProfile`、分辨率或访问路径当成可信身份信号。

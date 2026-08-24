@@ -11,15 +11,20 @@
 
 Jellyfin 继续负责其自身用户、设备、客户端兼容、媒体库和内部播放会话，但不再充当整个 Gateway 系统的全局播放状态源。
 
+Web UI 使用统一根入口：`/` 负责角色选择，短超时无操作时默认进入 Display + TV profile；`/display` 与 `/control` 作为确定性入口保留。页面角色与显示布局 profile 分开建模，屏幕分辨率只能影响布局，不能决定控制权限或页面角色。
+
 ```mermaid
 flowchart LR
-    C[Control PWA] -->|HTTPS / WebSocket| G[Web Media Gateway]
+    E[Unified Entry /] -->|选择或超时| C[Control PWA]
+    E -->|Display + TV profile| B[Browser HTML5 Player]
+    C -->|HTTPS / WebSocket| G[Web Media Gateway]
+    B -->|WebSocket / media| G
     G --> PC[Playback Coordinator]
     G --> R[Resolver / yt-dlp / site adapters]
     R --> O[来源站点]
     G --> MG[Media Gateway / Remux]
     PC --> WD[Web Display Adapter]
-    WD --> B[Browser HTML5 Player]
+    WD --> B
     PC --> JD[Jellyfin Display Adapter]
     JD --> J[Jellyfin Server]
     J --> T[Jellyfin Clients / Android TV]
@@ -76,6 +81,7 @@ DisplayInstance
 ├── label
 ├── online
 ├── capabilities
+├── display_profile
 └── adapter_metadata
 ```
 
@@ -83,7 +89,10 @@ DisplayInstance
 
 ```text
 adapter_type = web
-  → 当前 Chromium 页面
+  → 当前 Chromium Display 页面
+
+display_profile = tv
+  → 沉浸式大屏布局
 
 adapter_type = jellyfin
   → 小米电视 Jellyfin Android TV
@@ -91,15 +100,67 @@ adapter_type = jellyfin
 
 核心代码只依赖标准能力，不使用“如果是电视 / 如果是浏览器”的分支表达业务规则。
 
+### 2.4 PageRole 与 DisplayProfile
+
+Web 页面角色和显示布局必须分开建模：
+
+```text
+PageRole
+├── control
+└── display
+
+DisplayProfile
+├── tv
+├── desktop
+├── mobile
+└── auto
+```
+
+规则：
+
+- URL、用户选择或已保存的 `preferred_role` 决定 `PageRole`。
+- viewport、输入能力、媒体能力以及用户显式选择可以影响 `DisplayProfile`。
+- 分辨率不得被用来推导控制权限。
+- `/` 超时默认得到 `PageRole=display` 与 `DisplayProfile=tv`。
+- `/display` 是专用显示入口；首版默认 TV-oriented profile，并允许显式覆盖。
+- `/control` 始终进入控制角色；只有用户执行“在本机播放”时才额外注册当前浏览器为 `DisplayInstance`。
+
 ## 3. 组件
+
+### 3.0 Unified Entry Router
+
+Gateway 托管一个极轻量入口层，用于把“一个容易记忆的 URL”映射为 Control 或 Display 角色。
+
+默认路由：
+
+```text
+GET /
+  → 显示模式 / 控制模式选择
+  → MVP 默认倒计时 5 秒
+  → 无操作：navigate /display?profile=tv
+
+GET /display
+  → 直接进入 Display，不等待倒计时
+
+GET /control
+  → 直接进入 Control，不等待倒计时
+```
+
+实现要求：
+
+- 倒计时仅属于入口 UI，不进入 Playback Coordinator 核心状态机。
+- 超时时间可配置；自动化测试不能依赖真实等待，应直接访问确定性入口。
+- 可以使用 localStorage 或等价机制保存 `preferred_role`，但必须允许显式切换/清除。
+- 角色路由不是安全授权。Control 的鉴权、Display 注册/配对和媒体权限仍由 Gateway API 独立校验。
+- 如果自动跳转失败，入口页必须继续保留可点击按钮。
 
 ### 3.1 Control Console
 
-- 单页 PWA，由 Gateway 托管。
+- 单页 PWA，由 Gateway 托管于 `/control`。
 - 负责 URL 输入、站点登录、解析进度、当前播放内容、显示端选择、handoff、播放状态和错误展示。
 - 不直接接触上游媒体 Cookie；控制台只持有 Gateway 会话。
 - 通过 Gateway WebSocket 恢复并同步 `PlaybackSession`。
-- 当前浏览器可以注册为 Web Display，并使用 HTML5 播放器直接呈现 Gateway 媒体与字幕。
+- 仅打开控制台不会自动注册 Web Display；用户选择“在本机播放”后才注册当前浏览器为显示实例。
 - 可提供“打开 Jellyfin Web”入口，但不依赖 Jellyfin Web 完成自身核心流程。
 
 ### 3.2 Gateway API
@@ -122,7 +183,7 @@ Playback Coordinator 管理 `PlaybackSession` 与 `DisplayAdapter` 之间的状�
 - 执行跨显示端 handoff；
 - 处理显示端断线、URL 过期和 adapter 失败。
 
-它不得把 Jellyfin Session API 直接作为全局状态模型。
+它不得把 Jellyfin Session API 直接作为全局状态模型，也不得关心根入口的倒计时逻辑。
 
 ### 3.4 Display Adapter Interface
 
@@ -145,13 +206,26 @@ DisplayAdapter
 
 ### 3.5 WebDisplayAdapter
 
-- 浏览器通过 Control PWA 注册为一个显示实例。
-- adapter 根据 User-Agent / MediaCapabilities / 运行时探测记录浏览器能力。
+- `/display` 是专用显示页面，加载后注册或恢复一个 Web `DisplayInstance`。
+- Control 页面只有显式执行本机播放时才注册 Web Display。
+- adapter 根据 User-Agent / MediaCapabilities / viewport / pointer / touch 等运行时探测记录浏览器能力与 `DisplayProfile`。
 - Gateway 向浏览器签发任务绑定、短期媒体 URL。
 - 浏览器直接使用 HTML5 media element 或必要的轻量 HLS 播放层。
 - 上游 Cookie、Authorization、真实源 URL 中的敏感参数不下发。
 - 播放进度、暂停、结束和错误通过 WebSocket/HTTP 回报 Playback Coordinator。
 - Web Display 不要求 Jellyfin 在线。
+
+TV profile 默认行为：
+
+- 页面占满 `100vw × 100vh`，黑色背景；
+- 视频使用 `object-fit: contain`，优先完整保留画面；
+- 字幕按 viewport 自适应放大；
+- 控件支持遥控器/方向键焦点，并在播放后自动隐藏；
+- 空闲页显示 display label、在线状态以及 `/control` 地址或二维码；
+- 支持时申请 Screen Wake Lock，失效后可重试但不把它视为播放失败；
+- 页面首先保证 viewport 级沉浸显示，再尝试浏览器 Fullscreen。
+
+浏览器 Fullscreen 通常受用户手势策略限制，因此不能把“自动 requestFullscreen 成功”设计为 Display 注册或开始播放的前置条件。首次点击、触摸或遥控器按键可以用于申请真正 Fullscreen；失败时继续 viewport 级播放。
 
 ### 3.6 JellyfinDisplayAdapter
 
@@ -228,7 +302,27 @@ Session Vault
 
 ## 5. 主要数据流
 
-### 5.1 Web Display Direct Path
+### 5.1 根入口到电视 Display
+
+```mermaid
+sequenceDiagram
+    participant U as Browser
+    participant E as Entry Router
+    participant D as /display
+    participant G as Gateway
+    U->>E: GET /
+    E-->>U: Control / Display + 5s countdown
+    Note over U,E: 无操作
+    E-->>U: navigate /display?profile=tv
+    U->>D: GET /display
+    D->>G: register/restore Web Display
+    G-->>D: display id + state
+    D-->>U: immersive idle screen / waiting
+```
+
+如果用户在倒计时内选择 Control，则直接进入 `/control`。自动化测试应直接请求 `/display` 或 `/control`；只有入口路由本身的 E2E 用例需要验证倒计时。
+
+### 5.2 Web Display Direct Path
 
 ```mermaid
 sequenceDiagram
@@ -242,7 +336,7 @@ sequenceDiagram
     G->>R: 解析（携带服务器端站点会话）
     R-->>G: ResolvedMedia
     G->>G: 创建 PlaybackSession
-    U->>G: 选择当前浏览器显示
+    U->>G: 选择 Web Display
     G->>W: probe + prepare
     W-->>G: 可播放
     G->>P: 生成签名媒体/字幕 URL
@@ -253,7 +347,7 @@ sequenceDiagram
 
 该路径完全不要求 Jellyfin 运行。
 
-### 5.2 Jellyfin Display Path
+### 5.3 Jellyfin Display Path
 
 ```mermaid
 sequenceDiagram
@@ -277,7 +371,7 @@ sequenceDiagram
     G->>G: commit active_display
 ```
 
-### 5.3 从 Web Handoff 到 Jellyfin
+### 5.4 从 Web Handoff 到 Jellyfin
 
 ```text
 Web 当前 00:18:24
@@ -291,13 +385,23 @@ Web 当前 00:18:24
 
 进度精度受 adapter 与媒体协议能力影响，Gateway 记录确认值并对偏差可观测。
 
-### 5.4 浏览器捕获（非 MVP）
+### 5.5 浏览器捕获（非 MVP）
 
 浏览器捕获需要 Chromium 渲染、音画捕获和 H.264 实时编码。在当前 ARM64 Ubuntu chroot 环境中缺少已验证的稳定硬件编码路径，因此只保留技术实验，不作为 Web Display 的默认实现。
 
 Web Display 指“浏览器直接播放已解析媒体”，不是“服务器把任意网页录屏再推给浏览器”。浏览器捕获不能绕过 DRM。
 
-## 6. API 草案
+## 6. HTTP 与 API 草案
+
+页面入口：
+
+```text
+GET    /                                      智能入口：选择角色，超时 Display + TV profile
+GET    /display                               确定性 Web Display 页面
+GET    /control                               确定性 Control PWA
+```
+
+核心 API：
 
 ```text
 POST   /api/v1/sessions                      创建播放任务
@@ -338,6 +442,7 @@ GET    /api/v1/now-playing                   当前播放任务与活动显示�
 - 站点会话和必要数据库必须持久化。
 - 首个 MVP 不要求恢复正在播放的 `PlaybackSession`。
 - 大型媒体默认不落盘；如需缓存必须设置容量和过期策略。
+- `preferred_role` 可以保存在浏览器本地；它不是服务端安全凭据，也不得替代认证状态。
 
 ## 8. 部署
 
@@ -345,10 +450,14 @@ GET    /api/v1/now-playing                   当前播放任务与活动显示�
 受信任 LAN / Tailscale 管理网络
 ├── Ubuntu ARM64 手机
 │   ├── Web Media Gateway
+│   │   ├── /        统一入口
+│   │   ├── /display 专用 Web Display
+│   │   └── /control Control PWA
 │   └── Jellyfin Server（可选 Display Adapter 依赖）
 ├── Windows / 手机浏览器
-│   └── Control PWA + Web Display
+│   └── Control PWA / 可选 Web Display
 └── 小米电视
+    ├── Gateway /display（直接网页显示）
     └── Jellyfin Android TV（启用 Jellyfin Adapter 时）
 ```
 
@@ -356,6 +465,7 @@ GET    /api/v1/now-playing                   当前播放任务与活动显示�
 - 媒体流优先走局域网地址，不绕 Tailscale。
 - Jellyfin 与 Gateway 独立启动、独立日志和独立故障域。
 - Jellyfin 未启动时，Gateway 的 Web Display 路径仍可用。
+- 电视只需要记住 Gateway 根地址；首次或未保存角色时可等待默认倒计时进入 Display。
 
 ## 9. 可观察性
 
@@ -365,6 +475,7 @@ GET    /api/v1/now-playing                   当前播放任务与活动显示�
 - 站点适配器；
 - 媒体格式；
 - Display Adapter 类型与能力选择；
+- Display profile 与 Fullscreen/Wake Lock capability 结果；
 - handoff 阶段、耗时与失败点；
 - Direct / Remux / Transcode；
 - 资源使用与稳定错误码。
