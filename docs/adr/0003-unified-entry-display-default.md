@@ -7,18 +7,12 @@
 
 Gateway 同时承担两种 Web 使用方式：
 
-1. Control：在手机或 Windows 上选择内容、登录网站、控制播放和执行 handoff；
+1. Control：在手机或 Windows 上选择内容、完成来源站点登录、控制播放和执行 handoff；
 2. Display：在电视、显示器或其他浏览器上长期等待并播放 Gateway 分配的媒体。
 
-如果根 URL 永远固定为 Control，电视端需要记忆额外路径；如果根 URL 永远固定为 Display，手机和 Windows 首次访问又不够直观。仅依赖屏幕分辨率自动判断角色也不可靠：4K 屏幕可能是桌面显示器，电视浏览器也可能报告缩放后的较小 viewport，而且分辨率绝不能成为控制权限依据。
+如果根 URL 永远固定为 Control，电视端需要记忆额外路径；如果根 URL 永远固定为 Display，手机和 Windows 首次访问又不够直观。仅依赖屏幕分辨率自动判断角色也不可靠：4K 屏幕可能是桌面显示器，电视浏览器也可能报告缩放后的较小 viewport。
 
-项目需要同时满足：
-
-- 电视只记住一个简单地址；
-- 手机/Windows 可以快速进入控制模式；
-- 无遥控器操作时电视能自动进入待投屏状态；
-- 自动化测试可以绕过倒计时，获得确定性页面角色；
-- 页面角色、显示布局和安全授权互不混淆。
+MVP 当前采用可信 LAN / 单用户模型，Gateway 用户认证暂不实现。因此 PageRole 首先是产品/运行角色，而不是身份体系；未来若引入 Gateway Identity，也必须与 PageRole 分离。
 
 ## 决策
 
@@ -69,7 +63,7 @@ DisplayProfile = tv | desktop | mobile | auto
 
 路径、用户选择或已保存偏好决定 PageRole；viewport、输入方式、媒体能力和用户显式选择可以影响 DisplayProfile。
 
-屏幕尺寸、User-Agent 或 profile 不得被用来推断认证身份、控制权限或设备所有权。
+屏幕尺寸、User-Agent 或 profile 不得被当成 Gateway 身份或来源站点账号身份。
 
 ### 4. 专用 Display 默认面向电视/大屏
 
@@ -88,7 +82,7 @@ DisplayProfile = tv | desktop | mobile | auto
 
 ### 5. Control 不自动成为 Display
 
-访问 `/control` 只创建控制上下文，不自动注册新的 `DisplayInstance`。
+访问 `/control` 只创建控制页面上下文，不自动注册新的 `DisplayInstance`。
 
 如果用户希望当前手机/电脑本机播放，必须执行“在本机播放”或等价显式操作，此时才通过 `WebDisplayAdapter` 注册当前浏览器显示端。
 
@@ -96,27 +90,27 @@ DisplayProfile = tv | desktop | mobile | auto
 
 ### 6. 可以记住 preferred_role，但它只是 UX 偏好
 
-浏览器可以通过 localStorage 或等价机制保存：
+浏览器可以保存：
 
 ```text
 preferred_role = control | display
 ```
 
-实现可以利用该偏好减少重复选择，但必须提供切换/清除方式。该值属于不可信客户端状态，不能替代服务端认证、Display 配对或媒体授权。
+实现可以利用该偏好减少重复选择，但必须提供切换/清除方式。该值属于不可信客户端 UI 状态，不能替代未来可能引入的 Gateway Identity，也不能代表任何来源网站账号。
 
-### 7. 路由角色不是安全边界
+### 7. 路由角色不是站点认证边界
 
-直接访问 `/control` 不获得控制权限；直接访问 `/display` 也不自动获得任意媒体任务。
+MVP 允许可信 LAN 用户直接进入 `/control`，因为当前阶段没有 Gateway 用户账号体系；但这不意味着 Control 可以读取原始站点凭据。
 
-所有敏感操作仍由 Gateway API 独立校验：
+必须保持：
 
-- 用户/管理会话；
-- Display 注册或配对；
-- PlaybackSession 归属；
-- handoff 权限；
-- 临时媒体 Token。
+- `/control` 通过 Gateway API 操作，不直接读取 Session Vault 文件；
+- `/display` 只获得当前任务所需的短期媒体能力；
+- SiteAccount / SiteSession 只代表来源网站认证；
+- `preferred_role`、DisplayProfile、分辨率和 URL 路径不能替代来源网站登录状态；
+- 根入口自动跳转只能指向 Gateway 自身固定路径，不接受任意外部 redirect。
 
-根入口自动跳转只能指向 Gateway 自身固定路径，不接受任意外部 redirect。
+未来如果 Gateway 开放到不可信网络或引入多用户，应新增独立 Gateway Identity / authorization 设计，而不是修改 PageRole 语义。
 
 ### 8. 测试使用确定性入口
 
@@ -135,8 +129,6 @@ Browser C → /display?profile=desktop
 - 无操作 5 秒后进入 TV Display；
 - 自动跳转失败时仍可手动选择。
 
-这使 Web Display 既是正式产品能力，也是 Display Adapter 的参考实现和自动化测试基准。
-
 ## 结果
 
 优点：
@@ -145,7 +137,7 @@ Browser C → /display?profile=desktop
 - 无操作即可进入待投屏状态，降低遥控器操作成本。
 - 手机/Windows 仍能从同一地址明确进入 Control。
 - `/display` 与 `/control` 给自动化和书签提供稳定入口。
-- PageRole、DisplayProfile、DisplayInstance 与安全身份边界清晰。
+- PageRole、DisplayProfile、DisplayInstance 与 SiteAccount 边界清晰。
 - Control 页面不会制造大量无意义 Web Display。
 - TV Web Display 可以成为无需 Jellyfin 的一等投屏路径。
 
@@ -154,7 +146,7 @@ Browser C → /display?profile=desktop
 - 根入口增加一个小型路由状态和倒计时行为。
 - 需要处理 preferred_role、显式切换和自动跳转失败等 UX 状态。
 - Fullscreen、Wake Lock 和电视浏览器能力存在平台差异，需要 capability 检测和真实设备补充测试。
-- `/`、`/display`、`/control` 三条路径都需要纳入兼容性测试。
+- 如果未来信任模型变化，必须新增 Gateway Identity，而不能依赖当前 URL 角色模型。
 
 ## 被拒绝方案
 
@@ -168,7 +160,7 @@ Browser C → /display?profile=desktop
 
 ### 仅通过分辨率自动判断角色
 
-设备类型推断不可靠，并且会把 UI 自适应和权限/角色混在一起。
+设备类型推断不可靠，并且会把 UI 自适应和页面职责混在一起。
 
 ### Control 页面总是自动注册为 Display
 
