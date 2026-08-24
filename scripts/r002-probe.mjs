@@ -29,6 +29,10 @@ page.on('requestfailed', request => evidence.failures.push({
 
 async function postCommand(requestId) {
   const response = await page.request.post(`${base}/api/v1/display-probe/commands`, {
+    headers: {
+      origin: base,
+      'content-type': 'application/json',
+    },
     data: { request_id: requestId },
   });
   const body = await response.json();
