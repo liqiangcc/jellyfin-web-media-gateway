@@ -167,6 +167,7 @@ Jellyfin Display、真实站点和 Native Site Panel 分别继续通过 R004/R00
 - [技术预研与可行性验证](docs/technical-feasibility-validation.md)
 - [MVP 实施计划](docs/mvp-plan.md)
 - [开发环境与多 Agent 协同](docs/development-environments.md)
+- [GitHub Actions Runner 执行架构](docs/runner-execution-architecture.md)
 
 专题：
 
@@ -186,17 +187,19 @@ ADR：
 
 ## Agent / 多环境开发
 
-仓库长期规则见 [AGENTS.md](AGENTS.md)，完整调度模型见 [docs/development-environments.md](docs/development-environments.md)，Task 协议见 [docs/tasks/README.md](docs/tasks/README.md)。
+仓库长期规则见 [AGENTS.md](AGENTS.md)，完整调度模型见 [docs/development-environments.md](docs/development-environments.md)，Runner 执行架构见 [docs/runner-execution-architecture.md](docs/runner-execution-architecture.md)，Task 协议见 [docs/tasks/README.md](docs/tasks/README.md)。
 
 默认执行方式：
 
 ```text
 Web Coordinator
 → Web Worker implementation（默认最高优先级）
-→ GitHub Actions automated verification
-→ Cloud long-running verification
-→ WSL / Windows interactive debugging（按需）
-→ Ubuntu ARM64 / Real TV target proof（按需）
+→ GitHub Actions execution plane
+     ├── GitHub-hosted runner: portable / fast verification
+     ├── Cloud self-hosted runner: long-running / repeated verification
+     └── Ubuntu ARM64 self-hosted runner: target runtime / metrics proof
+→ WSL / Windows external worker（只做交互式调试/设备控制）
+→ Real TV / Manual（最终物理 UX proof）
 → Web Coordinator Review
 ```
 
@@ -207,14 +210,16 @@ Web Coordinator
 
 重要边界：
 
-- GitHub Actions 是 execution/verification backend，不是会 claim Issue 的 Worker；
-- Cloud 主要承担长时间、无人值守、重复执行；
-- WSL/Windows 主要承担交互式调试和 host-specific 能力；
-- ARM64/TV 只在 claim 必须依赖目标环境真实性时使用；
+- GitHub Actions 是统一 execution/verification bus，不是会 claim Issue 的 Worker；
+- GitHub-hosted Runner 优先承担普通 build/test/lint；
+- Cloud 资源有限，Cloud Runner 只承担 long-running / repeated / persistent experiment；
+- Ubuntu ARM64 Runner 是受限 Target Proof 后端，不承载普通 CI；
+- self-hosted Runner 不得因为与 Gateway 同机而继承 Vault、生产 Secret、Root/ADB 权限；
+- WSL/Windows/Codex 主要用于自动化无法替代的交互式诊断和设备操作；
 - Implementation Result、Verification Result、Coordinator Gate Decision 必须区分。
 
-具体跨会话任务优先使用 GitHub Issue + `docs/tasks/<issue>-<slug>/task.md`。只有 Web + Actions/Cloud 缺少所需 capability 时，才进入 [docs/codex/](docs/codex/) 的外部 Codex Worker 路径。
+具体跨会话任务优先使用 GitHub Issue + `docs/tasks/<issue>-<slug>/task.md`。Web Worker 应优先通过 GitHub Actions 和匹配 Runner 完成真实验证；只有 Runner 化不适合或缺少交互式能力时，才进入 [docs/codex/](docs/codex/) 的外部 Codex Worker 路径。
 
 ## 当前状态
 
-设计收敛完成到可编码契约阶段；技术可行性验证框架和 Web-first / automated-verification 多环境工作流已经建立。尚未把真实设备/真实媒体路径标记为已验证，也尚无可运行正式版本；仓库当前也尚未建立实际 `.github/workflows/`，应在第一个可运行 Rust workspace/测试落地时再建立真实 CI。
+设计收敛完成到可编码契约阶段；技术可行性验证框架和 Web-first / runner-driven 多环境工作流已经建立。尚未把真实设备/真实媒体路径标记为已验证，也尚无可运行正式版本；仓库当前尚未建立实际 `.github/workflows/` 或 self-hosted Runner，应在第一个可运行 Rust workspace/测试落地后按 Runner 架构逐层启用 GitHub-hosted CI、Cloud Runner 和 Ubuntu ARM64 Target Runner。
