@@ -2,6 +2,7 @@ use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use gateway_core::GatewayService;
 use tower::ServiceExt;
+use url::Url;
 
 const HOST: &str = "127.0.0.1:8787";
 const ORIGIN: &str = "http://127.0.0.1:8787";
@@ -25,9 +26,17 @@ fn json_post(path: &str, body: &str) -> Request<Body> {
         .unwrap()
 }
 
+fn service() -> GatewayService {
+    let service = GatewayService::new(8);
+    service
+        .configure_http_authority(Url::parse(ORIGIN).unwrap())
+        .unwrap();
+    service
+}
+
 #[tokio::test]
 async fn http_surface_requires_valid_host_and_same_origin_for_cross_origin_reads() {
-    let service = GatewayService::new(8);
+    let service = service();
     for path in [
         "/control",
         "/display",
@@ -87,11 +96,27 @@ async fn http_surface_requires_valid_host_and_same_origin_for_cross_origin_reads
             .status(),
         StatusCode::FORBIDDEN
     );
+
+    let attacker_host = Request::builder()
+        .uri("/api/v1/display-probe/state")
+        .header(header::HOST, "attacker.example")
+        .header(header::ORIGIN, "http://attacker.example")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        service
+            .router()
+            .oneshot(attacker_host)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::MISDIRECTED_REQUEST
+    );
 }
 
 #[tokio::test]
 async fn probe_mutations_require_json_origin_and_bounded_body() {
-    let service = GatewayService::new(8);
+    let service = service();
 
     let missing_origin = Request::builder()
         .method("POST")
@@ -157,8 +182,45 @@ async fn probe_mutations_require_json_origin_and_bounded_body() {
 }
 
 #[tokio::test]
-async fn probe_telemetry_does_not_echo_header_secret_sentinels() {
+async fn authority_policy_binds_origin_scheme_and_default_port() {
     let service = GatewayService::new(8);
+    service
+        .configure_http_authority(Url::parse("http://gateway.example").unwrap())
+        .unwrap();
+
+    let valid = Request::builder()
+        .uri("/control")
+        .header(header::HOST, "gateway.example")
+        .header(header::ORIGIN, "http://gateway.example:80")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        service.router().oneshot(valid).await.unwrap().status(),
+        StatusCode::OK
+    );
+
+    for origin in [
+        "https://gateway.example",
+        "http://gateway.example:443",
+        "http://gateway.example:81",
+    ] {
+        let request = Request::builder()
+            .uri("/control")
+            .header(header::HOST, "gateway.example")
+            .header(header::ORIGIN, origin)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            service.router().oneshot(request).await.unwrap().status(),
+            StatusCode::FORBIDDEN,
+            "origin authority must be bound to configured HTTP scheme/port: {origin}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn probe_telemetry_does_not_echo_header_secret_sentinels() {
+    let service = service();
     let response = service
         .router()
         .oneshot(json_post(

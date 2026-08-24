@@ -22,7 +22,9 @@ use url::Url;
 use uuid::Uuid;
 
 pub mod security;
-pub use security::{EgressPolicy, EgressPolicyError, EgressScope};
+pub use security::{
+    EgressPolicy, EgressPolicyError, EgressScope, HttpAuthorityError, HttpAuthorityPolicy,
+};
 
 const MAX_MANIFEST_BYTES: usize = 512 * 1024;
 const MAX_REDIRECTS: usize = 5;
@@ -166,8 +168,8 @@ pub struct ProofPaths {
 #[derive(Clone)]
 struct GatewayState {
     store: Arc<CapabilityStore>,
-    client: reqwest::Client,
     egress_policy: Arc<RwLock<EgressPolicy>>,
+    http_authorities: Arc<RwLock<HttpAuthorityPolicy>>,
     active_streams: Arc<AtomicUsize>,
     proof_paths: Arc<RwLock<ProofPaths>>,
     fixture_mp4: Arc<RwLock<Option<PathBuf>>>,
@@ -387,15 +389,11 @@ fn sanitize_text(value: &str, max: usize) -> String {
 
 impl GatewayService {
     pub fn new(max_capabilities: usize) -> Self {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("reqwest client");
         Self {
             state: Arc::new(GatewayState {
                 store: Arc::new(CapabilityStore::new(max_capabilities)),
-                client,
                 egress_policy: Arc::new(RwLock::new(EgressPolicy::default())),
+                http_authorities: Arc::new(RwLock::new(HttpAuthorityPolicy::default())),
                 active_streams: Arc::new(AtomicUsize::new(0)),
                 proof_paths: Arc::new(RwLock::new(ProofPaths {
                     chain: "SiteAdapterRegistry -> generic-direct -> ResolvedMedia -> MediaGateway -> WebDisplay".into(),
@@ -420,6 +418,17 @@ impl GatewayService {
             .write()
             .expect("egress policy poisoned")
             .configure_local_service(name, &origin)
+    }
+
+    /// Configure the exact deployment authority accepted by the HTTP/control
+    /// surface. This is deployment-owned; request Host/Origin values cannot
+    /// create or widen the authority set.
+    pub fn configure_http_authority(&self, origin: Url) -> Result<(), HttpAuthorityError> {
+        self.state
+            .http_authorities
+            .write()
+            .expect("http authority policy poisoned")
+            .configure(&origin)
     }
 
     pub fn resource_from_resolved(
@@ -511,22 +520,37 @@ impl GatewayService {
             )
             .route("/healthz", get(|| async { "ok" }))
             .layer(DefaultBodyLimit::max(MAX_HTTP_BODY_BYTES))
-            .layer(middleware::from_fn(http_surface_guard))
+            .layer(middleware::from_fn_with_state(
+                self.state.clone(),
+                http_surface_guard,
+            ))
             .with_state(self.state.clone())
     }
 }
 
-async fn http_surface_guard(request: Request, next: Next) -> Response {
+async fn http_surface_guard(
+    State(state): State<Arc<GatewayState>>,
+    request: Request,
+    next: Next,
+) -> Response {
     let headers = request.headers();
     let Some(host) = headers.get(HOST).and_then(|value| value.to_str().ok()) else {
         return (StatusCode::BAD_REQUEST, "invalid_host").into_response();
     };
-    if parse_host_authority(host).is_none() {
+    let http_authorities = state
+        .http_authorities
+        .read()
+        .expect("http authority policy poisoned")
+        .clone();
+    if !security::is_valid_http_host(host) {
         return (StatusCode::BAD_REQUEST, "invalid_host").into_response();
+    }
+    if !http_authorities.allows_host(host) {
+        return (StatusCode::MISDIRECTED_REQUEST, "host_not_allowed").into_response();
     }
 
     if let Some(origin) = headers.get(ORIGIN).and_then(|value| value.to_str().ok())
-        && !origin_matches_host(origin, host)
+        && !http_authorities.allows_origin_for_host(origin, host)
     {
         return (StatusCode::FORBIDDEN, "origin_mismatch").into_response();
     }
@@ -549,53 +573,12 @@ async fn http_surface_guard(request: Request, next: Next) -> Response {
         let Some(origin) = headers.get(ORIGIN).and_then(|value| value.to_str().ok()) else {
             return (StatusCode::FORBIDDEN, "origin_required").into_response();
         };
-        if !origin_matches_host(origin, host) {
+        if !http_authorities.allows_origin_for_host(origin, host) {
             return (StatusCode::FORBIDDEN, "origin_mismatch").into_response();
         }
     }
 
     next.run(request).await
-}
-
-fn parse_host_authority(value: &str) -> Option<(String, Option<u16>)> {
-    if value.trim() != value || value.is_empty() || value.contains(['/', '?', '#', '@']) {
-        return None;
-    }
-    let parsed = Url::parse(&format!("http://{value}")).ok()?;
-    if parsed.path() != "/" || parsed.query().is_some() || parsed.fragment().is_some() {
-        return None;
-    }
-    Some((parsed.host_str()?.to_ascii_lowercase(), parsed.port()))
-}
-
-fn origin_matches_host(origin: &str, host: &str) -> bool {
-    let Ok(parsed) = Url::parse(origin) else {
-        return false;
-    };
-    if !matches!(parsed.scheme(), "http" | "https")
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.path() != "/"
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-    {
-        return false;
-    }
-    let Some((host_name, host_port)) = parse_host_authority(host) else {
-        return false;
-    };
-    let Some(origin_name) = parsed.host_str() else {
-        return false;
-    };
-    if !host_name.eq_ignore_ascii_case(origin_name) {
-        return false;
-    }
-    match (host_port, parsed.port()) {
-        (Some(host_port), Some(origin_port)) => host_port == origin_port,
-        (Some(host_port), None) => parsed.port_or_known_default() == Some(host_port),
-        (None, Some(origin_port)) => origin_port == 80 || origin_port == 443,
-        (None, None) => true,
-    }
 }
 
 fn stream_path(token: &str, binding: &Binding) -> String {
@@ -1088,11 +1071,14 @@ async fn fetch_upstream(
             .read()
             .expect("egress policy poisoned")
             .clone();
-        egress_policy
-            .validate(&url, &record.resource.egress_scope)
+        let validated_target = egress_policy
+            .validate_and_resolve(&url, &record.resource.egress_scope)
             .await
             .map_err(egress_error_code)?;
-        let mut request = state.client.request(method.clone(), url.clone());
+        let client = validated_target
+            .pinned_client()
+            .map_err(|_| "UPSTREAM_CLIENT_FAILED")?;
+        let mut request = client.request(method.clone(), url.clone());
         request = request.headers(record.resource.public_headers.clone());
         request = request.headers(record.resource.secret_headers.clone());
         if let Some(value) = request_headers.get(RANGE) {

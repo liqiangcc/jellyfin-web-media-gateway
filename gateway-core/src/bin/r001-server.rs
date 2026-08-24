@@ -48,6 +48,9 @@ async fn main() {
         .expect("register generic-direct");
 
     let service = GatewayService::new(1024);
+    service
+        .configure_http_authority(Url::parse(&format!("http://{addr}")).unwrap())
+        .expect("configure R001 HTTP authority");
     let ttl = Duration::from_secs(30 * 60);
 
     let mp4_input = env::var("R001_PUBLIC_MP4").unwrap_or_else(|_| DEFAULT_MP4.into());

@@ -78,6 +78,23 @@ async fn local_service_requires_named_configuration_and_rechecks_redirect_origin
     );
 }
 
+#[tokio::test]
+async fn validated_egress_target_exposes_only_the_checked_connection_addresses() {
+    let mut policy = EgressPolicy::default();
+    policy
+        .configure_local_service("fixture", &Url::parse("http://127.0.0.1:8787/").unwrap())
+        .unwrap();
+    let target = policy
+        .validate_and_resolve(
+            &Url::parse("http://127.0.0.1:8787/media").unwrap(),
+            &EgressScope::ConfiguredLocalService("fixture".into()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(target.host(), "127.0.0.1");
+    assert_eq!(target.addresses(), &["127.0.0.1:8787".parse().unwrap()]);
+}
+
 #[test]
 fn site_capability_isolated_by_site_host_and_expiry() {
     let capability = SiteAccessCapability::issue(

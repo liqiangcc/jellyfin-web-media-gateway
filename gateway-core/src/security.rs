@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -24,6 +24,32 @@ pub enum EgressPolicyError {
     TargetRejected,
     LocalServiceNotConfigured,
     LocalServiceOriginMismatch,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ValidatedTarget {
+    host: String,
+    addresses: Vec<SocketAddr>,
+}
+
+impl ValidatedTarget {
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+
+    pub fn addresses(&self) -> &[SocketAddr] {
+        &self.addresses
+    }
+
+    /// Keep the hostname in the URL for HTTP Host/TLS verification while
+    /// forcing the connector to use exactly the addresses checked by policy.
+    pub fn pinned_client(&self) -> Result<reqwest::Client, reqwest::Error> {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .resolve_to_addrs(&self.host, &self.addresses)
+            .build()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -70,52 +96,205 @@ impl EgressPolicy {
     }
 
     pub async fn validate(&self, url: &Url, scope: &EgressScope) -> Result<(), EgressPolicyError> {
+        self.validate_and_resolve(url, scope).await.map(|_| ())
+    }
+
+    pub async fn validate_and_resolve(
+        &self,
+        url: &Url,
+        scope: &EgressScope,
+    ) -> Result<ValidatedTarget, EgressPolicyError> {
         if !matches!(url.scheme(), "http" | "https") {
             return Err(EgressPolicyError::InvalidScheme);
         }
         let host = url.host_str().ok_or(EgressPolicyError::MissingHost)?;
+        let port = url
+            .port_or_known_default()
+            .ok_or(EgressPolicyError::InvalidPort)?;
         match scope {
-            EgressScope::PublicWeb => self.validate_public(url, host).await,
+            EgressScope::PublicWeb => self.validate_public(host, port).await,
             EgressScope::ConfiguredLocalService(name) => {
                 let Some(service) = self.local_services.get(name) else {
                     return Err(EgressPolicyError::LocalServiceNotConfigured);
                 };
-                let port = url
-                    .port_or_known_default()
-                    .ok_or(EgressPolicyError::InvalidPort)?;
                 if !url.scheme().eq_ignore_ascii_case(&service.scheme)
                     || !host.eq_ignore_ascii_case(&service.host)
                     || Some(port) != service.port
                 {
                     return Err(EgressPolicyError::LocalServiceOriginMismatch);
                 }
-                Ok(())
+                resolve_target(host, port, false).await
             }
         }
     }
 
-    async fn validate_public(&self, url: &Url, host: &str) -> Result<(), EgressPolicyError> {
+    async fn validate_public(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> Result<ValidatedTarget, EgressPolicyError> {
         if is_forbidden_hostname(host) {
             return Err(EgressPolicyError::TargetRejected);
         }
-        let port = url
-            .port_or_known_default()
-            .ok_or(EgressPolicyError::InvalidPort)?;
-        if let Ok(ip) = host.parse::<IpAddr>() {
-            if !is_public_web_ip(ip) {
-                return Err(EgressPolicyError::TargetRejected);
-            }
-            return Ok(());
-        }
-        let addresses: Vec<_> = lookup_host((host, port))
+        resolve_target(host, port, true).await
+    }
+}
+
+async fn resolve_target(
+    host: &str,
+    port: u16,
+    require_public: bool,
+) -> Result<ValidatedTarget, EgressPolicyError> {
+    let addresses: Vec<SocketAddr> = if let Ok(ip) = host.parse::<IpAddr>() {
+        vec![SocketAddr::new(ip, port)]
+    } else {
+        lookup_host((host, port))
             .await
             .map_err(|_| EgressPolicyError::DnsLookupFailed)?
-            .map(|address| address.ip())
-            .collect();
-        if addresses.is_empty() || addresses.iter().any(|ip| !is_public_web_ip(*ip)) {
-            return Err(EgressPolicyError::TargetRejected);
+            .collect()
+    };
+    if addresses.is_empty()
+        || (require_public
+            && addresses
+                .iter()
+                .any(|address| !is_public_web_ip(address.ip())))
+    {
+        return Err(EgressPolicyError::TargetRejected);
+    }
+    Ok(ValidatedTarget {
+        host: host.to_string(),
+        addresses,
+    })
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HttpAuthorityError {
+    InvalidScheme,
+    MissingHost,
+    InvalidPort,
+    InvalidOrigin,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HttpAuthority {
+    scheme: String,
+    host: String,
+    port: u16,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct HttpAuthorityPolicy {
+    authorities: Vec<HttpAuthority>,
+}
+
+impl HttpAuthorityPolicy {
+    pub fn configure(&mut self, origin: &Url) -> Result<(), HttpAuthorityError> {
+        if !matches!(origin.scheme(), "http" | "https") {
+            return Err(HttpAuthorityError::InvalidScheme);
         }
+        if !origin.username().is_empty()
+            || origin.password().is_some()
+            || !matches!(origin.path(), "" | "/")
+            || origin.query().is_some()
+            || origin.fragment().is_some()
+        {
+            return Err(HttpAuthorityError::InvalidOrigin);
+        }
+        let host = origin
+            .host_str()
+            .ok_or(HttpAuthorityError::MissingHost)
+            .map(canonical_host)?;
+        let port = origin
+            .port_or_known_default()
+            .ok_or(HttpAuthorityError::InvalidPort)?;
+        self.authorities = vec![HttpAuthority {
+            scheme: origin.scheme().to_ascii_lowercase(),
+            host,
+            port,
+        }];
         Ok(())
+    }
+
+    pub fn allows_host(&self, host: &str) -> bool {
+        let Some(parsed) = parse_host_authority(host) else {
+            return false;
+        };
+        self.authorities.iter().any(|authority| {
+            parsed.host == authority.host
+                && parsed.port.map_or(
+                    default_port(&authority.scheme) == Some(authority.port),
+                    |port| port == authority.port,
+                )
+        })
+    }
+
+    pub fn allows_origin_for_host(&self, origin: &str, host: &str) -> bool {
+        let Some(host) = parse_host_authority(host) else {
+            return false;
+        };
+        let Ok(parsed) = Url::parse(origin) else {
+            return false;
+        };
+        if !matches!(parsed.scheme(), "http" | "https")
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || !matches!(parsed.path(), "" | "/")
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+        {
+            return false;
+        }
+        let Some(origin_host) = parsed.host_str().map(canonical_host) else {
+            return false;
+        };
+        let Some(origin_port) = parsed.port_or_known_default() else {
+            return false;
+        };
+        self.authorities.iter().any(|authority| {
+            authority.scheme == parsed.scheme()
+                && authority.host == host.host
+                && authority.host == origin_host
+                && authority.port == origin_port
+                && self.allows_host(host.raw)
+        })
+    }
+}
+
+pub fn is_valid_http_host(value: &str) -> bool {
+    parse_host_authority(value).is_some()
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ParsedHostAuthority<'a> {
+    raw: &'a str,
+    host: String,
+    port: Option<u16>,
+}
+
+fn parse_host_authority(value: &str) -> Option<ParsedHostAuthority<'_>> {
+    if value.trim() != value || value.is_empty() || value.contains(['/', '?', '#', '@']) {
+        return None;
+    }
+    let parsed = Url::parse(&format!("http://{value}")).ok()?;
+    if parsed.path() != "/" || parsed.query().is_some() || parsed.fragment().is_some() {
+        return None;
+    }
+    Some(ParsedHostAuthority {
+        raw: value,
+        host: canonical_host(parsed.host_str()?),
+        port: parsed.port(),
+    })
+}
+
+fn canonical_host(host: &str) -> String {
+    host.trim_end_matches('.').to_ascii_lowercase()
+}
+
+fn default_port(scheme: &str) -> Option<u16> {
+    match scheme {
+        "http" => Some(80),
+        "https" => Some(443),
+        _ => None,
     }
 }
 
@@ -308,6 +487,8 @@ impl StructuredCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::routing::get;
+    use tokio::net::TcpListener;
 
     #[test]
     fn forbidden_ip_matrix_is_rejected() {
@@ -368,6 +549,29 @@ mod tests {
                 .await,
             Err(EgressPolicyError::LocalServiceNotConfigured)
         );
+    }
+
+    #[tokio::test]
+    async fn pinned_client_uses_validated_address_without_a_second_dns_lookup() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().route("/", get(|| async { "pinned" }));
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let target = ValidatedTarget {
+            host: "dns-race.invalid".into(),
+            addresses: vec![address],
+        };
+        let response = target
+            .pinned_client()
+            .unwrap()
+            .get(format!("http://dns-race.invalid:{}/", address.port()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.text().await.unwrap(), "pinned");
     }
 
     #[test]

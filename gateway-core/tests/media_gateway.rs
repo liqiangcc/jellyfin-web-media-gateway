@@ -78,6 +78,9 @@ async fn spawn_fixture() -> (String, Arc<FixtureStats>) {
 async fn spawn_gateway(service: GatewayService) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    service
+        .configure_http_authority(Url::parse(&format!("http://{addr}")).unwrap())
+        .unwrap();
     tokio::spawn(async move {
         axum::serve(listener, service.router()).await.unwrap();
     });
