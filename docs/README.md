@@ -30,6 +30,24 @@
 
 代码实现与测试首先对齐本文件。
 
+### `docs/technical-feasibility-validation.md` — EVIDENCE / FEASIBILITY GATES
+
+风险驱动技术预研、最小 PoC、真实设备验证和 Go / No-Go Gate。
+
+它回答：
+
+> 当前架构假设是否已经在真实浏览器、电视、Ubuntu ARM64、媒体协议、Jellyfin 和真实来源站点上得到证据支持？
+
+该文档不重新定义 canonical architecture。若实验推翻当前假设，必须把结论反馈到 requirements / architecture / implementation contracts / MVP plan / security，必要时新增 ADR。
+
+P0 Core Feasibility 至少关注：
+
+- Media Path；
+- TV Browser remote audible playback / autoplay；
+- ARM64 resource baseline；
+- Playback concurrency contract；
+- Egress / Secret security boundary。
+
 ### 专题架构文档 — DETAIL
 
 - `control-ux.md`：Control 的用户场景与状态体验。
@@ -48,12 +66,15 @@ ADR 是决策历史，不是当前系统完整规范。接受新的 ADR 后，�
 1. `requirements.md`
 2. `architecture.md`
 3. `implementation-contracts.md`
-4. `mvp-plan.md`
-5. `security.md`
+4. `technical-feasibility-validation.md`（如果影响待验证假设或 Gate）
+5. `mvp-plan.md`
+6. `security.md`
 
 ### `docs/mvp-plan.md` — WHEN
 
 只描述实施顺序、退出条件和测试里程碑，不重新设计架构。
+
+技术风险验证的实验定义和判断标准由 `technical-feasibility-validation.md` 提供；`mvp-plan.md` 负责把这些 Gate 放进实施顺序。
 
 ### 根 `README.md` — ENTRY
 
@@ -70,6 +91,8 @@ Architecture
     ↓
 Implementation Contracts
     ↓
+Technical Feasibility / Evidence（如涉及外部假设）
+    ↓
 MVP Plan
     ↓
 Security
@@ -77,7 +100,7 @@ Security
 相关专题文档 / ADR
 ```
 
-避免只新增 ADR，而没有让实施计划与主架构真正采用该决定。
+避免只新增 ADR，而没有让实施计划与主架构真正采用该决定；也避免实验已经证明某个假设失败，但 canonical 文档仍继续把它写成既定事实。
 
 ## 3. 当前最重要的不变量
 
@@ -91,3 +114,4 @@ Security
 - MVP 是可信 LAN / 单用户，不实现 Gateway Identity/RBAC。
 - SiteAccount 只代表来源网站会话，不代表 Gateway 用户身份。
 - Native Site Panel 失败不得破坏已经开始的 Gateway 播放。
+- 尚未完成 P0 技术验证前，不把 Web-only Core 的真实设备可行性写成已验证事实。
