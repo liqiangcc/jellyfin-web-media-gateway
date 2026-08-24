@@ -18,6 +18,8 @@ Required capabilities: <capability list>
 > GitHub Actions / Runner 是 execution backend，不是会 claim Issue 的 Worker，因此不使用 `env:actions` / `env:runner`。
 >
 > 实时 `status`、assignee、claim、active branch、PR/commit、verification status 和 result summary 只保存在 GitHub Issue，不在本文件重复维护。
+>
+> Attempt / Blocker / Coordinator Review / Final Acceptance 使用 Issue comments，格式见 `docs/tasks/issue-lifecycle-protocol.md`。
 
 ## Session Bootstrap
 
@@ -39,7 +41,7 @@ prompt.md
 - 指向本 `task.md`；
 - 声明预期 Worker / environment；
 - 提醒读取 `AGENTS.md` 和相关 canonical docs；
-- 提醒 claim / `status:in-progress` / `status:review` / stop 协议；
+- 提醒 claim / `status:in-progress` / feedback / `status:review` / stop 协议；
 - 提供不会改变 Scope 的最少启动提醒。
 
 `prompt.md` **不得复制或重新定义**本文件中的 Goal、Scope、Claims、Success Criteria、Architecture Invariants、Verification Job Matrix 或 Evidence 判断标准。
@@ -330,6 +332,7 @@ C2 PASS when:
 ```text
 Role: implementation | verification
 Task / Claim:
+Attempt:
 Job ID:
 Orchestrator:
 Execution plane:
@@ -385,14 +388,51 @@ Reason: <why repository/static evidence is sufficient>
 - Target Evidence：
 - Research evidence doc（如适用）：
 
+## Issue Feedback / Iteration Protocol
+
+完整协议见：
+
+```text
+docs/tasks/issue-lifecycle-protocol.md
+```
+
+本 Task 可以经历多个 Attempt：
+
+```text
+ready
+→ claim / Attempt N
+→ in-progress
+→ Execution Report / Blocker Report
+→ review / blocked
+→ Coordinator ACCEPT / REVISE / BLOCK / SPLIT
+→ next Attempt or Final Acceptance
+```
+
+如果只是实现 bug、测试失败、漏实现、Evidence 不足或同一 Claim 重测，不修改本 `task.md`；Coordinator 在 Issue 评论 `REVISE`，重新 `status:ready` 即可。
+
+如果 Scope、Claims、Success Criteria、Task decomposition、Evidence Authority 或 architecture/security 前提本身改变，则必须正式更新本 Contract（以及必要 canonical docs），不得只在 Issue comment 里改要求。
+
 ## Completion Protocol
 
-Worker 完成后：
+Worker 每次 Attempt 结束：
 
 1. 提交当前 Scope 的候选实现或 Verification Evidence；
-2. 在 Issue 中记录 candidate SHA、linked task、实际 Jobs / Orchestrator / Execution Plane / Runner / Target、实际测试、未验证范围和 artifact/log；
-3. 将当前 Issue 转为 `status:review`；
-4. 停止，不自动开始下一项；
-5. 由 Web Coordinator 区分 Implementation Result、Verification Result 和 Parent Goal / Gate Decision，再决定 `done / ready / blocked`。
+2. 正常结束时在 Issue 评论标准 `[EXECUTION REPORT]`，至少记录 Attempt、candidate SHA、linked task、实际 Jobs / Orchestrator / Execution Plane / Runner / Target、实际测试、Claim results、未验证范围和 artifact/log；
+3. 阻塞时评论标准 `[BLOCKER REPORT]`，写清 blocker、已完成部分、Evidence、恢复条件和 cleanup；
+4. 正常结束将 Issue 转为 `status:review`；阻塞转为 `status:blocked`；
+5. 释放 active execution ownership；
+6. 停止，不自动开始下一项。
 
-需要长期保存正式 Research Result 时写入 `docs/research/`，不要把动态结果重新写回本执行契约。
+Web Coordinator Review：
+
+1. 读取 Issue history、本 `task.md`、candidate/PR 和所有 required Evidence；
+2. 评论 `[COORDINATOR REVIEW]`；
+3. 明确 `ACCEPT | REVISE | BLOCK | SPLIT | NOT_PLANNED`；
+4. `REVISE` 且 Contract 不变时 → `status:ready` → 输出下一轮 downstream entry；
+5. Contract 改变时 → `status:draft` → 更新 Contract / canonical docs → Publication read-back Gate → `status:ready`；
+6. 只有所有 Task Success Criteria、required Claims/Evidence、candidate/PR、blocker 和 required child Tasks 满足后，评论 `[FINAL ACCEPTANCE]`；
+7. Final Acceptance 后才设置 `status:done` 并关闭 Issue as completed。
+
+Worker 不得自行 `done` 或关闭 Issue。
+
+需要长期保存正式 Research Result 时写入 `docs/research/`，不要把动态 Attempt 结果重新写回本执行契约。
