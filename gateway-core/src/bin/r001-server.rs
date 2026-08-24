@@ -10,7 +10,7 @@ use tokio::net::TcpListener;
 use url::Url;
 
 const DEFAULT_MP4: &str =
-    "https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4";
+    "https://raw.githubusercontent.com/mediaelement/mediaelement-files/master/big_buck_bunny.mp4";
 const DEFAULT_HLS: &str = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8";
 
 #[tokio::main]
