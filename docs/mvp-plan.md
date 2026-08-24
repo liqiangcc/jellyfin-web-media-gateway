@@ -138,7 +138,7 @@ Test Source
 
 ### R001 当前实测状态（2026-08-24）
 
-R001 在 Issue #3 / Attempt 1 的媒体路径范围内已经取得 **PASS** 证据；详细记录见 `docs/research/r001-media-path.md`。
+R001 在 Issue #3 / Attempt 2 的媒体路径范围内已经取得 **PASS** 证据；详细记录见 `docs/research/r001-media-path.md`。
 
 当前已被真实执行验证的最小链路是：
 

@@ -4,7 +4,7 @@ Date: 2026-08-24
 
 Issue: #3
 
-Attempt: 1
+Attempt: 2
 
 Result: **PASS for the R001 media-path scope**
 
@@ -45,9 +45,9 @@ The first proposed Google sample MP4 returned HTTP 403 from the GitHub-hosted ru
 
 ## Browser proof
 
-Verified executable candidate: `217859a9f620be8f8874cab8a21b10ccd2b2bc6c`
+Verified executable candidate: `56f6380bc8d2d18f1e4bd6228ebd0e035ebe5fe3`
 
-GitHub Actions run: `32730313377`
+GitHub Actions run: `32734416922`
 
 Execution plane:
 
@@ -63,7 +63,7 @@ Observed MP4 browser result:
 - duration: `60.095011s`
 - readyState: `4`
 - play advanced currentTime beyond `0.5s`
-- pause held at `0.512104s`
+- pause held at `0.507510s`
 - seek target: `33.05225605s`
 - observed seek position: `33.052256s`
 - browser `/stream/` request used `Range: bytes=0-`
@@ -72,8 +72,8 @@ The browser proof also played a deterministic protected MP4 fixture through the 
 
 Accepted browser evidence artifact for the executable candidate:
 
-- artifact id: `9521162868`
-- digest: `sha256:db91c9d766fa439b54e088233d47b87d072ec236e1ef83251dd3d716758419db`
+- artifact id: `9522666213`
+- digest: `sha256:a07593e64d63f76f3f4c32ca8395d452587ba08068c898c7085bfad7b57b094b`
 
 ## HTTP/Range and capability behavior
 
@@ -133,17 +133,17 @@ This is the R001 bounded abort/reconnect proof. It is not a substitute for R003 
 
 ## Jobs
 
-Required R001 jobs on run `32730313377`:
+Required R001 jobs on run `32734416922`:
 
-- J1 deterministic x64 / job `97440836359`: fmt, clippy with warnings denied, workspace unit/contract tests — PASS
-- J2 Chromium MP4 play/pause/seek + protected secret boundary / job `97440836345` — PASS
-- J3 public MP4 Range + public HLS master/variant/segment smoke / job `97440836280` — PASS
-- J4 bounded abort/reconnect cleanup 100x / job `97440836004` — PASS
+- J1 deterministic x64 / job `97453756490`: fmt, clippy with warnings denied, workspace unit/contract tests including accepted R007 tests — PASS
+- J2 Chromium MP4 play/pause/seek + protected secret boundary / job `97453756384` — PASS
+- J3 public MP4 Range + public HLS master/variant/segment smoke / job `97453756074` — PASS
+- J4 bounded abort/reconnect cleanup 100x / job `97453756467` — PASS
 
 Accepted public-smoke evidence artifact for the executable candidate:
 
-- artifact id: `9521139065`
-- digest: `sha256:1664866deb1cd10b06a54aeacfefeae1b141a05c0af69dd5506f436354f50574`
+- artifact id: `9522642988`
+- digest: `sha256:2364d7c7996279d04b2d3fad45de8065af548cbdd2bcf208fa500ba038e3e857`
 
 The workflow uses read-only repository contents permission for accepted verification runs.
 
