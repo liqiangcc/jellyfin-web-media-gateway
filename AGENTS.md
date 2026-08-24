@@ -231,7 +231,57 @@ Cloud Codex 只用于：
 - target job 只验证明确 Candidate SHA；
 - 高 CPU/FFmpeg/Chromium/长跑 job 有 timeout、cleanup、资源限制。
 
-### 9.8 Task 使用 Capability，不静态绑定环境
+### 9.8 Task 拆分先于环境路由
+
+Coordinator 拆工作时必须按下面顺序思考：
+
+```text
+Goal / Research Item
+↓
+Task
+↓
+Claims
+↓
+Verification Jobs
+↓
+Runner / Target
+```
+
+禁止反过来：
+
+```text
+“有 x64 / ARM64 / phone 三个环境”
+→ 所以创建三个业务 Task
+```
+
+Task 表示“做什么/证明什么”，有独立 Scope、Owner、Success Criteria 和 Review 生命周期。
+
+Job 表示“在哪里、用什么命令验证某个 Claim 切片”，不 claim Issue，不拥有独立业务状态。
+
+一个 Verification Task 可以包含多个 Jobs。
+
+### 9.9 combined 与独立 Verification Task
+
+默认普通工程任务使用 `combined`：
+
+```text
+Web implementation
+→ Candidate SHA
+→ standard GitHub Actions Jobs
+→ Coordinator Review
+```
+
+以下情况优先拆独立 Verification Task：
+
+- Evidence Authority 独立，例如目标手机、真实 TV；
+- Verification 生命周期/Owner/调度时点与 Implementation 不同；
+- 关键 Research Gate 要独立追踪实现完成与 claim 证明；
+- Target 暂不可用但实现可以先完成；
+- Verification 需要独立重试、多轮 target proof 或独立 PASS/FAIL/BLOCKED。
+
+Implementation Task 完成只代表候选实现已接受，不自动表示 Parent Goal / Research Gate 已通过。
+
+### 9.10 Task 使用 Capability，不静态绑定环境
 
 Task kind：
 
@@ -264,7 +314,7 @@ jellyfin-tv
 manual-observation
 ```
 
-### 9.9 Evidence 必须分开记录执行层次
+### 9.11 Evidence 必须分开记录执行层次
 
 例如：
 
@@ -295,6 +345,7 @@ status
 active owner / claim
 branch
 candidate commit / PR
+linked implementation / verification task
 verification status
 blocker
 review state
@@ -305,10 +356,13 @@ result summary
 
 ```text
 Task kind
+Parent Goal / Research Item
 Goal / Context
+Task decomposition decision
 Base / Candidate commit
 Claims to verify
 Required capabilities
+Verification Job Matrix
 Execution Plane
 Runner class / image / labels
 Target / Trust gate
@@ -324,16 +378,16 @@ Deliverables
 ## 11. Worker 协议
 
 1. 读取 `AGENTS.md`、Issue、`task.md`；
-2. 确认执行路径满足 Required Capabilities；
+2. 确认 Task kind、Scope 和执行路径满足 Required Capabilities；
 3. 确认 Issue `status:ready` 且无 active owner；
 4. claim + `status:in-progress`；
 5. 只执行 Scope；
 6. 提交 candidate / Evidence；
-7. 记录真实 Orchestrator/Execution Plane/Runner/Target；
+7. 记录真实 Task/Claim/Job、Orchestrator/Execution Plane/Runner/Target；
 8. Issue → `status:review`；
 9. 停止，不自动开始下一项。
 
-大型 Research Item 可以拆多个 Task；最终 Gate 由 Web Coordinator 汇总已接受 Evidence 决定。
+GitHub Actions Job 不参与 claim。大型 Research Item 可以拆多个 Task；最终 Gate 由 Web Coordinator 汇总已接受 Evidence 决定。
 
 ## 12. 外部 Codex 入口
 
