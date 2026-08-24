@@ -52,15 +52,7 @@ PlaybackSession
 └── display_generation
 ```
 
-这样可以明确处理：
-
-- 下一集；
-- URL 过期重新 resolve；
-- 多 Control 并发；
-- 旧 item callback；
-- 跨 Display handoff。
-
-Jellyfin Session、浏览器 `<video>` 状态和站点 Chromium 播放器都不能覆盖 Gateway 的全局状态。
+Jellyfin Session、浏览器 `<video>` 状态和站点 Chromium 播放器都不能覆盖 Gateway 全局状态。
 
 ## Web 入口
 
@@ -71,19 +63,11 @@ Jellyfin Session、浏览器 `<video>` 状态和站点 Chromium 播放器都不�
 /control/sites  来源站点账号管理
 ```
 
-`/display` 默认使用 TV-oriented viewport 沉浸布局。
-
-MVP 的基本播放必须能在可信 LAN HTTP 环境工作，例如：
-
-```text
-http://10.0.0.116/
-```
-
-Service Worker、installable PWA、Screen Wake Lock 等 secure-context 能力只作为 HTTPS 部署下的渐进增强，不是基本播放成功条件。
+MVP 基本播放必须能在可信 LAN HTTP 下工作；Service Worker、Wake Lock 等 secure-context 能力只做渐进增强。
 
 ## Control
 
-Control 对用户是统一体验：
+统一体验：
 
 ```text
 Now Playing
@@ -93,25 +77,13 @@ Native Site Panel（按需）
 
 内部仍保持 Playback、Site、SiteSession、Display 四个领域分离。
 
-Native Site Panel 使用服务器端 Site Browser Worker，而不是依赖普通 iframe。Site Browser Worker 只是通用 Chromium runtime；具体站点页面语义仍由对应 Site Plugin 解释。
-
 ## Site Auth
 
-来源网站认证与 Gateway 用户身份分离。
-
-MVP：
-
-- 可信 LAN / 单用户；
-- 暂不实现 Gateway 用户/RBAC；
-- 每站点最多一个活动账号；
-- Gateway 不保存网站密码；
-- 解析确实需要登录时才触发 `SITE_AUTH_REQUIRED`；
-- 登录成功自动恢复原 `SourceLocator`、目标显示端和播放意图；
-- `/control/sites` 支持登录、重新登录和退出。
+来源网站认证与 Gateway 用户身份分离。MVP 每站点最多一个活动账号，不保存网站密码；确实需要认证时返回 `SITE_AUTH_REQUIRED`，登录成功后恢复原播放意图。
 
 ## 插件化路线
 
-### 第一阶段：架构插件化
+第一阶段使用 Rust trait + workspace：
 
 ```text
 gateway-core/
@@ -122,17 +94,11 @@ plugins/
 └── ...
 ```
 
-Rust trait + workspace，一起编译发布。重点是先证明 SiteAdapter Contract 和变化隔离边界成立。
-
-### 第二阶段：进程插件
-
-只有出现独立更新、依赖隔离、崩溃隔离或资源沙箱的真实需求后，再演进为版本化 IPC 插件。
-
-优先进程插件，不优先 Rust `.so`。
+运行时 IPC 插件留到出现真实隔离/独立更新需求后再做。
 
 ## 当前实施顺序
 
-当前不再继续扩展功能设计，先完成 Contract Freeze：
+先完成 Contract Freeze：
 
 1. `SourceLocator`
 2. `SiteAdapter`
@@ -141,7 +107,7 @@ Rust trait + workspace，一起编译发布。重点是先证明 SiteAdapter Con
 5. `DisplayAdapter`
 6. scoped SiteAccess + EgressPolicy
 
-随后进入风险驱动技术可行性验证：
+随后：
 
 ```text
 R007 Playback concurrency contract
@@ -151,10 +117,6 @@ R007 Playback concurrency contract
 → R008 Security boundary
 → Core Feasibility Review
 ```
-
-Jellyfin Display、真实站点和 Native Site Panel 分别继续通过 R004/R005/R006 验证；Jellyfin 或 Native Site Panel 失败不能阻塞 Web-only Core。
-
-详细实验、指标、成功标准和 Go / No-Go Gate 见 `technical-feasibility-validation.md`，具体实施顺序见 `mvp-plan.md`。
 
 ## 文档
 
@@ -187,39 +149,33 @@ ADR：
 
 ## Agent / 多环境开发
 
-仓库长期规则见 [AGENTS.md](AGENTS.md)，完整调度模型见 [docs/development-environments.md](docs/development-environments.md)，Runner 执行架构见 [docs/runner-execution-architecture.md](docs/runner-execution-architecture.md)，Task 协议见 [docs/tasks/README.md](docs/tasks/README.md)。
+仓库长期规则见 [AGENTS.md](AGENTS.md)，调度模型见 [docs/development-environments.md](docs/development-environments.md)，Runner 执行架构见 [docs/runner-execution-architecture.md](docs/runner-execution-architecture.md)，Task 协议见 [docs/tasks/README.md](docs/tasks/README.md)。
 
 默认执行方式：
 
 ```text
 Web Coordinator
-→ Web Worker implementation（默认最高优先级）
-→ GitHub Actions execution plane
-     ├── GitHub-hosted runner: portable / fast verification
-     ├── Cloud self-hosted runner: long-running / repeated verification
-     └── Ubuntu ARM64 self-hosted runner: target runtime / metrics proof
-→ WSL / Windows external worker（只做交互式调试/设备控制）
-→ Real TV / Manual（最终物理 UX proof）
+→ Web Worker implementation
+→ GitHub Actions
+     ├── GitHub-hosted x64: portable verification
+     ├── GitHub-hosted ARM64: generic ARM64 verification
+     └── Ubuntu ARM64 self-hosted: phone-specific target proof
+→ WSL / Windows / Cloud / Ubuntu Codex only for interactive capability
+→ Real TV / Manual for physical UX proof
 → Web Coordinator Review
 ```
 
-网页明确区分：
+关键边界：
 
-- **Web Coordinator Session**：长生命周期、项目全局控制面；
-- **Web Worker Session**：短生命周期、单 Task 执行者。
-
-重要边界：
-
-- GitHub Actions 是统一 execution/verification bus，不是会 claim Issue 的 Worker；
-- GitHub-hosted Runner 优先承担普通 build/test/lint；
-- Cloud 资源有限，Cloud Runner 只承担 long-running / repeated / persistent experiment；
-- Ubuntu ARM64 Runner 是受限 Target Proof 后端，不承载普通 CI；
-- self-hosted Runner 不得因为与 Gateway 同机而继承 Vault、生产 Secret、Root/ADB 权限；
-- WSL/Windows/Codex 主要用于自动化无法替代的交互式诊断和设备操作；
-- Implementation Result、Verification Result、Coordinator Gate Decision 必须区分。
-
-具体跨会话任务优先使用 GitHub Issue + `docs/tasks/<issue>-<slug>/task.md`。Web Worker 应优先通过 GitHub Actions 和匹配 Runner 完成真实验证；只有 Runner 化不适合或缺少交互式能力时，才进入 [docs/codex/](docs/codex/) 的外部 Codex Worker 路径。
+- GitHub Actions 是统一 execution bus，不 claim Issue；
+- Cloud **不部署 Runner**，普通验证使用 GitHub-hosted Runner；
+- 大量 repeated tests 优先 GitHub-hosted matrix/sharding；
+- GitHub-hosted ARM64 只证明 generic ARM64，不证明目标手机；
+- Ubuntu ARM64 self-hosted Runner 只做 target-specific runtime/resource/compatibility proof；
+- Target Runner 不得继承 Vault、生产 Secret、Root/ADB 权限；
+- 外部 Codex 主要用于自动化难以表达的交互式诊断/设备控制；
+- Implementation Result、Verification Result、Gate Decision 必须分离。
 
 ## 当前状态
 
-设计收敛完成到可编码契约阶段；技术可行性验证框架和 Web-first / runner-driven 多环境工作流已经建立。尚未把真实设备/真实媒体路径标记为已验证，也尚无可运行正式版本；仓库当前尚未建立实际 `.github/workflows/` 或 self-hosted Runner，应在第一个可运行 Rust workspace/测试落地后按 Runner 架构逐层启用 GitHub-hosted CI、Cloud Runner 和 Ubuntu ARM64 Target Runner。
+设计已收敛到可编码契约阶段；技术可行性验证框架和 Web-first / runner-driven 工作流已经建立。仓库尚无正式可运行版本，也尚未建立实际 `.github/workflows/` 或 Ubuntu ARM64 Target Runner；第一个可运行 Rust workspace/测试落地后，优先启用 GitHub-hosted x64/ARM64 CI，再按需要部署目标手机 Runner。
