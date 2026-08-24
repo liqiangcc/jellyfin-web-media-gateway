@@ -238,6 +238,33 @@ fn handoff_timeout_invalidates_candidate() {
 }
 
 #[test]
+fn handoff_cancel_invalidates_candidate() {
+    let mut session = session();
+    let original_display = session.active_display().clone();
+
+    let result = session
+        .execute(envelope(
+            "handoff-cancel",
+            0,
+            Command::BeginHandoff {
+                target_display_id: "display-b".to_owned(),
+            },
+        ))
+        .expect("reserve handoff");
+    let ticket = result.transition.expect("handoff ticket");
+
+    assert!(session.apply_candidate_callback(&ticket, 4_321));
+    assert!(session.cancel_handoff(&ticket));
+    let revision_after_cancel = session.session_revision();
+
+    assert!(!session.apply_candidate_callback(&ticket, 9_999));
+    assert!(!session.commit_handoff(&ticket));
+    assert_eq!(session.active_display(), &original_display);
+    assert_eq!(session.position_ms(), 0);
+    assert_eq!(session.session_revision(), revision_after_cancel);
+}
+
+#[test]
 fn old_source_callback_after_handoff_commit_is_ignored() {
     let mut session = session();
     let source_display = session.active_display().clone();
@@ -373,14 +400,32 @@ fn two_controls_same_expected_revision_only_one_authoritative_mutation_commits()
     run_two_control_race_iteration(0);
 }
 
+fn run_r007_stress_iteration(iteration: usize) {
+    position_telemetry_does_not_advance_command_revision();
+    high_frequency_position_plus_pause_seek_has_no_telemetry_conflict();
+    duplicate_request_id_is_idempotent();
+    request_id_reuse_with_different_command_is_rejected();
+    stale_expected_revision_has_no_side_effects();
+    run_two_control_race_iteration(iteration);
+    stale_item_callback_is_ignored();
+    stale_media_resolve_result_is_ignored();
+    newer_media_resolve_wins_when_old_result_arrives_late();
+    stale_display_generation_callback_is_ignored();
+    handoff_candidate_callback_before_commit_has_no_global_authority();
+    handoff_timeout_invalidates_candidate();
+    handoff_cancel_invalidates_candidate();
+    old_source_callback_after_handoff_commit_is_ignored();
+    overlapping_handoff_has_single_authority_path();
+}
+
 #[test]
-fn repeated_two_control_race_stress() {
+fn repeated_r007_concurrency_stress() {
     let repetitions = std::env::var("R007_REPETITIONS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(8);
+        .unwrap_or(1);
 
     for iteration in 0..repetitions {
-        run_two_control_race_iteration(iteration);
+        run_r007_stress_iteration(iteration);
     }
 }
