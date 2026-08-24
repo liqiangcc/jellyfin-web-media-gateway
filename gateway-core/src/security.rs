@@ -44,11 +44,21 @@ impl ValidatedTarget {
     /// Keep the hostname in the URL for HTTP Host/TLS verification while
     /// forcing the connector to use exactly the addresses checked by policy.
     pub fn pinned_client(&self) -> Result<reqwest::Client, reqwest::Error> {
-        reqwest::Client::builder()
+        self.pinned_client_with_timeout(None)
+    }
+
+    pub fn pinned_client_with_timeout(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<reqwest::Client, reqwest::Error> {
+        let mut builder = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
-            .resolve_to_addrs(&self.host, &self.addresses)
-            .build()
+            .resolve_to_addrs(&self.host, &self.addresses);
+        if let Some(timeout) = timeout {
+            builder = builder.timeout(timeout);
+        }
+        builder.build()
     }
 }
 

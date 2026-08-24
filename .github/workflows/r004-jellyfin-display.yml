@@ -1,0 +1,91 @@
+name: r004-jellyfin-display
+
+on:
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'display-adapter-api/**'
+      - 'plugins/jellyfin-display-adapter/**'
+      - 'gateway-core/**'
+      - 'site-adapter-api/**'
+      - 'plugins/generic-direct/**'
+      - '.github/workflows/r004-jellyfin-display.yml'
+      - 'docs/research/r004-jellyfin-display.md'
+      - 'scripts/r004/**'
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic:
+    name: J1 deterministic x64 adapter + R001/R007 regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Exact candidate
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Workspace and adapter contract tests
+        run: cargo test --workspace --all-targets
+
+  fixture:
+    name: J2 Jellyfin protocol fixture + failure and redaction tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Exact candidate
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Run deterministic Jellyfin fixture
+        run: |
+          cargo test -p jellyfin-display-adapter -- --nocapture | tee r004-jellyfin-fixture.log
+          ! grep -F 'fake-jellyfin-secret-sentinel' r004-jellyfin-fixture.log
+          cat > r004-jellyfin-fixture-evidence.txt <<'EOF'
+          discovery/probe=PASS
+          start-position-and-confirmation=PASS
+          pause-resume-seek-stop-status=PASS
+          failure-injection=PASS
+          credential-public-log-redaction=PASS
+          target=deterministic-jellyfin-api-fixture
+          physical-android-tv-verdict=NOT_CLAIMED
+          EOF
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r004-jellyfin-fixture
+          path: |
+            r004-jellyfin-fixture.log
+            r004-jellyfin-fixture-evidence.txt
+
+  server-smoke:
+    name: J3 real Jellyfin .strm PlaybackInfo smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Exact candidate
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Install smoke dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg jq
+      - name: Run real Jellyfin server .strm smoke
+        run: bash scripts/r004/jellyfin-server-smoke.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r004-jellyfin-server-smoke
+          path: r004-jellyfin-server-smoke.txt

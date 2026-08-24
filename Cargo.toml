@@ -1,8 +1,10 @@
 [workspace]
 members = [
+  "display-adapter-api",
   "site-adapter-api",
   "plugins/generic-direct",
   "gateway-core",
+  "plugins/jellyfin-display-adapter",
 ]
 resolver = "2"
 
@@ -15,7 +17,7 @@ rust-version = "1.85"
 axum = "0.8.4"
 bytes = "1.10.1"
 futures-util = "0.3.31"
-reqwest = { version = "0.12.23", default-features = false, features = ["rustls-tls", "stream"] }
+reqwest = { version = "0.12.23", default-features = false, features = ["json", "rustls-tls", "stream"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.145"
 tokio = { version = "1.47.1", features = ["fs", "macros", "net", "rt-multi-thread", "sync", "time"] }
