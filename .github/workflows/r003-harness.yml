@@ -1,0 +1,64 @@
+name: r003-harness
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/r003/**'
+      - '.github/workflows/r003-harness.yml'
+      - '.github/workflows/r003-target-resource.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/r003/**'
+      - '.github/workflows/r003-harness.yml'
+      - '.github/workflows/r003-target-resource.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  j1-metrics:
+    name: J1 metrics and summary harness
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Runtime versions and exact SHA
+        run: |
+          python3 --version
+          echo "harness_sha=$(git rev-parse HEAD)"
+      - name: Synthetic fixtures, raw samples, trend summary
+        run: python3 -m unittest scripts/r003/test_harness.py
+      - name: Preflight schema
+        run: python3 scripts/r003/harness.py preflight > preflight.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r003-j1-harness
+          path: preflight.json
+
+  j2-security:
+    name: J2 workflow and cleanup security validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Validate trusted target workflow
+        run: python3 scripts/r003/harness.py validate-workflow --path .github/workflows/r003-target-resource.yml
+      - name: Validate failure cleanup and schema controls
+        run: python3 -m unittest scripts/r003/test_harness.py HarnessTests.test_failure_cleanup_terminates_process_group HarnessTests.test_scenario_and_workflow_contract
+      - name: Confirm target workflow is manual-only
+        run: |
+          ! grep -q '^  pull_request:' .github/workflows/r003-target-resource.yml
+          ! grep -q '^  push:' .github/workflows/r003-target-resource.yml
+          grep -q '^  workflow_dispatch:' .github/workflows/r003-target-resource.yml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r003-j2-security
+          path: scripts/r003/harness.py
