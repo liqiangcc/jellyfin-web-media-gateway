@@ -66,6 +66,15 @@ for _ in $(seq 1 90); do
 done
 curl --silent --show-error --fail-with-body "$server_url/System/Info/Public" >/dev/null
 
+for _ in $(seq 1 90); do
+  if curl --silent --show-error --fail-with-body "$server_url/Startup/User" \
+    >/dev/null 2>"$work_dir/startup-user-get-error.log"; then
+    break
+  fi
+  sleep 1
+done
+curl --silent --show-error --fail-with-body "$server_url/Startup/User" >/dev/null
+
 post_until_ready 'Startup/Configuration' \
   --header 'Content-Type: application/json' \
   --data '{"UICulture":"en-US","MetadataCountryCode":"US","PreferredMetadataLanguage":"en"}'
