@@ -502,6 +502,7 @@ dependencies = [
  "bytes",
  "display-adapter-api",
  "futures-util",
+ "gateway-core",
  "reqwest",
  "serde",
  "serde_json",

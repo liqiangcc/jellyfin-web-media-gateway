@@ -4,6 +4,7 @@ use display_adapter_api::{
     PrepareResult, ProbeRequest, StartRequest, StartResult,
 };
 use futures_util::future::BoxFuture;
+use gateway_core::{EgressPolicy, EgressScope};
 use reqwest::{Client, Method, StatusCode};
 use serde::Deserialize;
 use serde_json::Value;
@@ -106,7 +107,7 @@ pub struct JellyfinDisplayAdapter {
     service: ConfiguredJellyfinService,
     credential: JellyfinCredential,
     media_entry: JellyfinStrmEntry,
-    client: Client,
+    egress_policy: EgressPolicy,
     timeouts: AdapterTimeouts,
 }
 
@@ -126,6 +127,7 @@ impl JellyfinDisplayAdapter {
         service: ConfiguredJellyfinService,
         credential: JellyfinCredential,
         media_entry: JellyfinStrmEntry,
+        egress_policy: EgressPolicy,
         timeouts: AdapterTimeouts,
     ) -> Result<Self, DisplayAdapterError> {
         if timeouts.request.is_zero()
@@ -134,18 +136,25 @@ impl JellyfinDisplayAdapter {
         {
             return Err(DisplayAdapterError::InvalidConfiguration);
         }
-        let client = Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(timeouts.request)
-            .build()
-            .map_err(|_| DisplayAdapterError::InvalidConfiguration)?;
         Ok(Self {
             service,
             credential,
             media_entry,
-            client,
+            egress_policy,
             timeouts,
         })
+    }
+
+    async fn client_for(&self, url: &Url) -> Result<Client, DisplayAdapterError> {
+        let scope = EgressScope::ConfiguredLocalService(self.service.service_id.clone());
+        let target = self
+            .egress_policy
+            .validate_and_resolve(url, &scope)
+            .await
+            .map_err(|_| DisplayAdapterError::InvalidConfiguration)?;
+        target
+            .pinned_client_with_timeout(Some(self.timeouts.request))
+            .map_err(|_| DisplayAdapterError::InvalidConfiguration)
     }
 
     async fn request_json<T: for<'de> Deserialize<'de>>(
@@ -155,8 +164,8 @@ impl JellyfinDisplayAdapter {
         body: Option<Value>,
     ) -> Result<T, DisplayAdapterError> {
         let url = self.service.url(path)?;
-        let mut request = self
-            .client
+        let client = self.client_for(&url).await?;
+        let mut request = client
             .request(method, url)
             .header("X-Emby-Token", &self.credential.0);
         if let Some(body) = body {
@@ -178,8 +187,8 @@ impl JellyfinDisplayAdapter {
         body: Option<Value>,
     ) -> Result<(), DisplayAdapterError> {
         let url = self.service.url(path)?;
-        let mut request = self
-            .client
+        let client = self.client_for(&url).await?;
+        let mut request = client
             .request(method, url)
             .header("X-Emby-Token", &self.credential.0);
         if let Some(body) = body {
@@ -719,10 +728,16 @@ mod tests {
 
     async fn adapter(fixture: Fixture) -> JellyfinDisplayAdapter {
         let endpoint = spawn_fixture(fixture).await;
+        let endpoint_url = Url::parse(&endpoint).unwrap();
+        let mut egress_policy = EgressPolicy::default();
+        egress_policy
+            .configure_local_service("fixture", &endpoint_url)
+            .unwrap();
         JellyfinDisplayAdapter::new(
-            ConfiguredJellyfinService::new("fixture", Url::parse(&endpoint).unwrap()).unwrap(),
+            ConfiguredJellyfinService::new("fixture", endpoint_url).unwrap(),
             JellyfinCredential::server_side(SENTINEL).unwrap(),
             JellyfinStrmEntry::new(ITEM_ID).unwrap(),
+            egress_policy,
             AdapterTimeouts {
                 request: Duration::from_millis(300),
                 playback_confirmation: Duration::from_millis(80),
@@ -906,10 +921,16 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         drop(listener);
+        let endpoint_url = Url::parse(&endpoint).unwrap();
+        let mut egress_policy = EgressPolicy::default();
+        egress_policy
+            .configure_local_service("offline", &endpoint_url)
+            .unwrap();
         let adapter = JellyfinDisplayAdapter::new(
-            ConfiguredJellyfinService::new("offline", Url::parse(&endpoint).unwrap()).unwrap(),
+            ConfiguredJellyfinService::new("offline", endpoint_url).unwrap(),
             JellyfinCredential::server_side(SENTINEL).unwrap(),
             JellyfinStrmEntry::new(ITEM_ID).unwrap(),
+            egress_policy,
             AdapterTimeouts {
                 request: Duration::from_millis(100),
                 playback_confirmation: Duration::from_millis(50),
@@ -921,5 +942,26 @@ mod tests {
             adapter.status(context()).await.unwrap_err(),
             DisplayAdapterError::ServerUnavailable
         );
+    }
+
+    #[tokio::test]
+    async fn unconfigured_local_service_is_rejected_before_credentials_are_sent() {
+        let fixture = fixture();
+        let seen_auth = fixture.seen_auth.clone();
+        let endpoint = spawn_fixture(fixture).await;
+        let adapter = JellyfinDisplayAdapter::new(
+            ConfiguredJellyfinService::new("fixture", Url::parse(&endpoint).unwrap()).unwrap(),
+            JellyfinCredential::server_side(SENTINEL).unwrap(),
+            JellyfinStrmEntry::new(ITEM_ID).unwrap(),
+            EgressPolicy::default(),
+            AdapterTimeouts::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            adapter.status(context()).await.unwrap_err(),
+            DisplayAdapterError::InvalidConfiguration
+        );
+        assert!(seen_auth.lock().unwrap().is_empty());
     }
 }
