@@ -15,6 +15,9 @@ $task-worker
 
 $task-reviewer
 → Coordinator: review Evidence + REVISE/BLOCK/SPLIT/ACCEPT + close when valid
+
+$task-dispatcher
+→ Coordinator utility: sync main, create an isolated Issue worktree, launch/track an Issue-linked child Codex tmux Worker session in the current Dispatcher execution context
 ```
 
 Lifecycle:
@@ -35,6 +38,10 @@ $task-reviewer
       ├── SPLIT → $task-publisher for child Task(s)
       └── ACCEPT → [FINAL ACCEPTANCE] → status:done → close
 ```
+
+`$task-dispatcher` sits outside this authority chain: it may bootstrap/inspect child Worker processes in its current execution context, but it does not claim/review/accept/close Tasks itself.
+
+`local` in `$task-dispatcher` is relative to the Dispatcher execution context, not an `env:*` classification. A child session launched from the current context must still match the Issue's real Worker environment/capability contract; the fact that it is a local child neither qualifies nor disqualifies `env:cloud`, `env:wsl`, `env:windows`, `env:ubuntu-arm64`, or other routes.
 
 ## Authority
 
@@ -68,7 +75,7 @@ Do not duplicate those documents into Skills.
 
 ## Invocation policy
 
-All three lifecycle skills set `allow_implicit_invocation: false` because they can mutate GitHub Task state. Invoke them explicitly with `$task-publisher`, `$task-worker`, or `$task-reviewer`.
+All Task lifecycle/dispatch skills set `allow_implicit_invocation: false` because they can mutate GitHub Task state or launch child processes. Invoke them explicitly with `$task-publisher`, `$task-worker`, `$task-reviewer`, or `$task-dispatcher`.
 
 Examples:
 
@@ -78,6 +85,10 @@ $task-publisher Publish the Ubuntu ARM64 Target Runner bootstrap Task.
 $task-worker Execute Issue #123 using `docs/tasks/123-runner-bootstrap/prompt.md`.
 
 $task-reviewer Review Issue #123 and continue the Task lifecycle.
+
+$task-dispatcher Dispatch the complete Worker handoff for Issue #123 through an isolated tmux worktree.
+
+$task-dispatcher Track Issue #123 Worker progress.
 ```
 
 ## Scripts
