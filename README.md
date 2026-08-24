@@ -106,6 +106,43 @@ Native Site Panel 不依赖普通跨站 iframe，而由 Ubuntu 服务端 `Site B
 
 站点能力采取逐步提升策略：先由 Native Site Panel 兜底，只有清晰度、音轨、字幕等能力被证明有稳定跨站语义后，才提升为 Gateway 的 Universal Control / `PlaybackPreference`。
 
+## 站点插件边界
+
+具体网站是系统变化最快的部分，因此 Gateway 采用：
+
+> **识别站点，但不理解站点。**
+
+Core 可以知道：
+
+```text
+site_id = bilibili
+```
+
+用于选择插件、隔离 SiteSession、展示来源和记录健康状态；但 BV/EP/Season、Cookie 名称、DOM selector、站点私有 API、清晰度枚举和下一集规则都只能存在于对应 Site Plugin。
+
+```text
+Gateway Stable Core
+        ↓
+SiteAdapter Contract / Registry
+        ↓
+plugins/
+├── generic-ytdlp
+├── bilibili
+├── youtube
+└── ...
+```
+
+Core 中不允许通过 `if site == "bilibili"` 之类的业务分支实现站点特例。新增站点的理想变更范围应主要位于 `plugins/<site>/`。
+
+插件化分两阶段：
+
+1. **架构插件化**：MVP 先使用 Rust workspace + trait，一起编译发布，重点验证边界和契约；
+2. **进程插件化**：当站点数量、更新频率和故障隔离需求足够高时，再把 SiteAdapter 稳定为版本化 IPC 协议，让插件独立进程运行。
+
+未来优先进程插件而不是 Rust 动态 `.so`，以获得崩溃隔离、独立升级、资源限制、网络沙箱、多语言实现以及 Playwright/Chromium 依赖隔离。
+
+Generic yt-dlp 也作为 fallback Site Plugin，而不是 Core 中绕过插件边界的特殊路径。
+
 ## 播放会话与单显示端模型
 
 Gateway 是播放任务的权威状态源。每个 `PlaybackSession` 任一时刻只有一个 `active_display`，显示端由统一的 `DisplayAdapter` 抽象表示。
@@ -141,6 +178,9 @@ Jellyfin 保留其擅长的用户、设备、客户端兼容、媒体库和 Jell
 - Control 围绕“播放这个、继续看、下一集、在电视看、登录后继续”等用户意图设计，不暴露内部组件名。
 - Control 是统一体验层，不是统一业务实现层；Playback、Source、Site Session、Display 四个控制域保持独立。
 - Native Site Panel 作为站点原生能力兜底；站点功能只有经过明确语义映射后才提升为 Universal Control。
+- Gateway Core 只识别 `site_id`，所有 concrete site knowledge 必须留在 Site Plugin Boundary 外侧。
+- Generic yt-dlp 与具体网站一样通过 SiteAdapter Registry 接入，不作为 Core 特例。
+- MVP 先实现编译期 Site Plugin；契约稳定且出现真实隔离需求后再演进为版本化进程插件。
 - 站点登录按需触发，同时提供 `/control/sites` 主动账号管理。
 - MVP 暂不实现 Gateway 用户认证；部署边界保持可信 LAN / 单用户。
 - 网站账号、Cookie 和解析逻辑只存在于服务器。
@@ -156,6 +196,7 @@ Jellyfin 保留其擅长的用户、设备、客户端兼容、媒体库和 Jell
 - [系统设计](docs/architecture.md)
 - [Control UX 与站点账号管理](docs/control-ux.md)
 - [Control 统一体验架构](docs/control-experience-architecture.md)
+- [Site Plugin Architecture](docs/site-plugin-architecture.md)
 - [安全设计](docs/security.md)
 - [MVP 实施计划](docs/mvp-plan.md)
 - [ADR-0001：使用旁路网关而非修改 Jellyfin 核心](docs/adr/0001-sidecar-gateway.md)
@@ -163,6 +204,7 @@ Jellyfin 保留其擅长的用户、设备、客户端兼容、媒体库和 Jell
 - [ADR-0003：统一入口、角色选择与默认电视显示模式](docs/adr/0003-unified-entry-display-default.md)
 - [ADR-0004：站点认证按需触发，并提供独立账号管理](docs/adr/0004-site-auth-account-management.md)
 - [ADR-0005：Control 统一体验，内部控制域保持分离](docs/adr/0005-unified-control-experience.md)
+- [ADR-0006：具体站点知识必须停留在 Site Plugin Boundary 之外](docs/adr/0006-site-plugin-boundary.md)
 
 ## 当前状态
 
