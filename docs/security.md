@@ -31,6 +31,7 @@
 - Jellyfin API Key。
 - Ubuntu 手机、内网和外接 SSD。
 - Site Plugin 与 Site Browser Worker 不得越过各自 scope。
+- Cloud / Ubuntu ARM64 self-hosted Runner 不得成为读取生产 Secret 或任意控制宿主的后门。
 
 ## 3. Session Vault
 
@@ -272,7 +273,80 @@ upstream_access_ref
 - 远程登录画面；
 - 完整敏感 URL query。
 
-## 16. 安全测试最低集
+## 16. GitHub Actions / Self-hosted Runner Security
+
+GitHub Actions 是自动执行平面；self-hosted Runner 能执行仓库定义的 job，因此必须视为宿主代码执行边界。
+
+详细执行架构见 `runner-execution-architecture.md`。
+
+### 16.1 Runner 最小权限
+
+Cloud / Ubuntu ARM64 self-hosted Runner 必须：
+
+- 使用专用低权限用户；
+- 默认无 root / sudo；
+- 不使用 Gateway 正式服务账号；
+- Runner work directory 与 `/var/lib/web-media-gateway/` 分离；
+- 不持有 Tailscale auth key、SSH 私钥、长期 GitHub PAT、站点 Cookie/profile 等长期 Secret；
+- job 完成后清理临时 workspace / runtime data；
+- 高 CPU/FFmpeg/Chromium/长跑 job 必须有 timeout 和资源约束。
+
+### 16.2 Target Runner 禁止默认读取生产 Secret
+
+Ubuntu ARM64 Target Runner 默认不得读取：
+
+```text
+/var/lib/web-media-gateway/vault/
+真实 browser profile
+来源站点 Cookie/token
+Jellyfin API Key
+宿主 root credential
+ADB privileged socket
+```
+
+如果某项 Verification 确实需要受控 Secret，必须在 Task Contract 中显式定义 scope、注入方式、生命周期和清理方式；不得因为 Runner 与 Gateway 在同一台机器上就继承生产权限。
+
+### 16.3 不可信变更不能自动获得 Target Shell
+
+高价值 self-hosted Runner，特别是 Ubuntu ARM64 Target Runner，不允许任意 PR/分支自动执行不可信代码。
+
+至少遵守：
+
+- target job 只验证明确 candidate SHA；
+- target workflow 与普通 PR CI 分离；
+- 未受信 PR/fork 不直接命中 target runner；
+- 必要时使用 manual dispatch / approval gate；
+- issue title、branch、PR body、URL 等不可信输入不得直接拼接 shell；
+- workflow/script 需要最小 GitHub token 权限。
+
+原则：
+
+> PR 可以请求 target verification，但不能自动继承目标设备 shell authority。
+
+### 16.4 Runner 与生产实例隔离
+
+Runner control plane 与 Gateway runtime plane 分离：
+
+```text
+Runner workspace
+!=
+Gateway vault/runtime
+```
+
+验证优先启动独立 test instance / test ports，不直接覆盖用户正在使用的正式实例。
+
+只有明确的 deployment verification Task 才允许 stop/start 正式服务，并必须在 Scope、Evidence 和恢复步骤中写清。
+
+### 16.5 Cloud / Tailscale
+
+Cloud Runner 经 Tailscale 访问目标设备时：
+
+- 只允许当前 Verification Scope 所需的目标和端口；
+- 不因为接入 Tailnet 就获得家庭 LAN 任意扫描/访问权限；
+- Evidence 记录真实 Execution host / Target；
+- Cloud host 本身的结果不能冒充手机温度、目标 LAN 或真实电视。
+
+## 17. 安全测试最低集
 
 1. private/loopback/metadata URL 拒绝。
 2. public URL redirect 到 private 被拒绝。
@@ -284,3 +358,5 @@ upstream_access_ref
 8. 旧 display generation callback 不生效。
 9. 重新登录失败保留旧会话。
 10. Browser Worker 不能下载 profile/访问本地文件。
+11. Target Runner 默认不能读取 Vault/profile/长期 Secret。
+12. 未受信 PR/分支不能直接调度高价值 Target Runner。
