@@ -46,6 +46,15 @@ async fn spawn_fixture() -> (String, Arc<FixtureStats>) {
             }),
         )
         .route("/slow.mp4", get(slow_file))
+        .route(
+            "/hls/redirect.m3u8",
+            get(|| async {
+                (
+                    StatusCode::FOUND,
+                    [(LOCATION, "/hls/master.m3u8?redirect_token=fixture-secret-query")],
+                )
+            }),
+        )
         .route("/hls/master.m3u8", get(hls_master))
         .route("/hls/variant.m3u8", get(hls_variant))
         .route(
@@ -382,10 +391,7 @@ async fn hls_manifest_query_segment_and_interruption_have_concrete_results() {
     let client = reqwest::Client::new();
     let path = service.issue_path(
         Binding::new("s", "hls", 1, "master"),
-        resource(
-            &format!("{fixture}/hls/master.m3u8?token=upstream-secret-query"),
-            StreamProtocol::Hls,
-        ),
+        resource(&format!("{fixture}/hls/redirect.m3u8"), StreamProtocol::Hls),
         Duration::from_secs(30),
     );
     let master = client
@@ -398,7 +404,7 @@ async fn hls_manifest_query_segment_and_interruption_have_concrete_results() {
         .unwrap();
     assert!(master.contains("/stream/"));
     assert!(!master.contains(&fixture));
-    assert!(!master.contains("upstream-secret-query"));
+    assert!(!master.contains("fixture-secret-query"));
     assert!(!master.contains("quality=1"));
     assert!(!master.contains("audio=1"));
 
