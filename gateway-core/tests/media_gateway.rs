@@ -165,6 +165,7 @@ async fn interrupted_segment(State(stats): State<Arc<FixtureStats>>) -> Response
     Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, "video/mp2t")
+        .header(CONTENT_LENGTH, "128")
         .body(Body::from_stream(body))
         .unwrap()
 }
