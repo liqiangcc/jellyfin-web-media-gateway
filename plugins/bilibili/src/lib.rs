@@ -231,10 +231,11 @@ impl SiteAdapter for BilibiliAdapter {
 fn resolve_document(locator: &SourceLocator, html: &str) -> Result<ResolvedMedia, AdapterError> {
     let payload = decode_locator(locator)?;
     let state = parse_initial_state(html)?;
-    if state.bvid.as_deref() != Some(payload.bvid.as_str()) {
+    let bvid = state.bvid.as_deref().ok_or(AdapterError::SchemaError)?;
+    if bvid != payload.bvid {
         return Err(AdapterError::ContentNotFound);
     }
-    let video = state.video_data.ok_or(AdapterError::ContentNotFound)?;
+    let video = state.video_data.ok_or(AdapterError::SchemaError)?;
     let title = video
         .title
         .filter(|title| !title.trim().is_empty())
@@ -539,6 +540,109 @@ mod tests {
             navigation.next.unwrap().opaque_payload,
             locator.opaque_payload
         );
+    }
+
+    #[test]
+    fn fixture_html_navigation_is_four_part_and_round_trips_parts() {
+        let adapter = BilibiliAdapter;
+        let locator = adapter
+            .recognize("https://www.bilibili.com/video/BV14V411W7r5/?p=2")
+            .unwrap()
+            .locator
+            .unwrap();
+        let navigation = adapter
+            .navigation_from_html(&locator, FIXTURE_DOCUMENT)
+            .unwrap();
+        assert_eq!(navigation.current_index, Some(1));
+        let previous = navigation.previous.unwrap();
+        let next = navigation.next.unwrap();
+        assert_eq!(decode_locator(&previous).unwrap().page, 1);
+        assert_eq!(decode_locator(&next).unwrap().page, 3);
+        assert_eq!(navigation.collection_id.as_deref(), Some(FROZEN_BVID));
+    }
+
+    #[test]
+    fn dash_and_drm_outputs_keep_protection_and_protocol_explicit() {
+        let adapter = BilibiliAdapter;
+        let locator = adapter
+            .recognize("https://www.bilibili.com/video/BV14V411W7r5/")
+            .unwrap()
+            .locator
+            .unwrap();
+        let dash = FIXTURE_DOCUMENT.replace(
+            r#""durl":[{"url":"https://media.example.invalid/bilibili/BV14V411W7r5/part-1.mp4?deadline=4102444800"}]"#,
+            r#""dash":{"video":[{"baseUrl":"https://media.example.invalid/bilibili/part-1.mpd?expires=4102444800"}]}"#,
+        );
+        let media = adapter.resolve_public_html(&locator, &dash).unwrap();
+        assert_eq!(media.streams[0].protocol, StreamProtocol::Dash);
+        assert_eq!(media.expires_at_unix, Some(4_102_444_800));
+
+        let drm = FIXTURE_DOCUMENT.replace(
+            r#""durl":[{"url":"https://media.example.invalid/bilibili/BV14V411W7r5/part-1.mp4?deadline=4102444800"}]"#,
+            r#""drm":true"#,
+        );
+        let media = adapter.resolve_public_html(&locator, &drm).unwrap();
+        assert_eq!(media.protection, MediaProtection::DrmUnsupported);
+        assert!(media.streams.is_empty());
+    }
+
+    #[test]
+    fn status_and_parse_failures_are_stable_and_non_echoing() {
+        let adapter = BilibiliAdapter;
+        let locator = adapter
+            .recognize("https://www.bilibili.com/video/BV14V411W7r5/")
+            .unwrap()
+            .locator
+            .unwrap();
+        for status in [401, 403] {
+            assert_eq!(
+                adapter.resolve_with_context(
+                    &locator,
+                    ResolveContext {
+                        public_document: None,
+                        upstream_status: Some(status),
+                    },
+                ),
+                Err(AdapterError::UpstreamDenied)
+            );
+        }
+        assert_eq!(
+            adapter.resolve_with_context(
+                &locator,
+                ResolveContext {
+                    public_document: None,
+                    upstream_status: Some(404),
+                },
+            ),
+            Err(AdapterError::ContentNotFound)
+        );
+        assert_eq!(
+            adapter.resolve_public_html(&locator, "<html>\"code\":-404</html>"),
+            Err(AdapterError::ContentNotFound)
+        );
+        assert_eq!(
+            adapter.resolve_public_html(&locator, "<script>__INITIAL_STATE__ = {bad}</script>"),
+            Err(AdapterError::ParseError)
+        );
+        assert_eq!(
+            adapter.resolve_public_html(&locator, "<script>__INITIAL_STATE__ = {}</script>"),
+            Err(AdapterError::SchemaError)
+        );
+    }
+
+    #[test]
+    fn non_matching_site_and_invalid_page_are_not_claimed() {
+        let adapter = BilibiliAdapter;
+        assert!(
+            !adapter
+                .recognize("https://example.com/video/BV14V411W7r5/")
+                .unwrap()
+                .matched
+        );
+        assert!(matches!(
+            adapter.recognize("https://www.bilibili.com/video/BV14V411W7r5/?p=0"),
+            Err(AdapterError::InvalidInput)
+        ));
     }
 
     #[test]
