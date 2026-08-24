@@ -15,9 +15,9 @@ Eligible worker environments: env:web-gpt
 Required capabilities: github-read-write, repository-static-analysis, code-authoring, automated-build, automated-test, rust-build, rust-test
 ```
 
-> This Task is currently a planning draft. `status:draft` means it is not claimable until a later Publication Gate.
+> Live status, owner, candidate, runs and results belong in Issue #2. A Worker may claim only when the Issue is `status:ready`, the current environment is eligible, and no active owner exists. This file does not store live Task state.
 >
-> GitHub Actions / Runner are execution backends, not Workers. Runtime status, owner, candidate, runs and results belong in Issue #2; Attempt / Review / Acceptance follows `docs/tasks/issue-lifecycle-protocol.md`.
+> GitHub Actions / Runner are execution backends, not Workers. Attempt / Review / Acceptance follows `docs/tasks/issue-lifecycle-protocol.md`.
 
 ## Goal
 
@@ -177,7 +177,7 @@ Ubuntu ARM64 Target Runner is explicitly not required for R007 acceptance.
 
 ## Preconditions
 
-- Issue #2 remains `status:draft` until Publication Gate.
+- Worker must re-read Issue #2 immediately before claim and proceed only if live state is `status:ready + env:web-gpt` with no active owner.
 - Canonical inputs are `AGENTS.md`, `architecture.md`, `implementation-contracts.md`, `technical-feasibility-validation.md`, `mvp-plan.md`.
 - No existing Rust workspace is assumed.
 - Rust stable should be used unless the repository later freezes a toolchain for a separate reason.
