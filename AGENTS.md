@@ -390,7 +390,8 @@ status:draft
 → read-back verify from GitHub
 → set status:ready + eligible env
 → read-back/search target worker queue
-→ only then announce published
+→ output downstream handoff entry
+→ only then declare handoff complete
 ```
 
 硬性规则：
@@ -400,7 +401,8 @@ status:draft
 - 在切 `status:ready` 前，必须重新读取 Issue、`task.md`、`prompt.md`，确认真实存在且互相引用正确；
 - 切 `status:ready` 后，必须使用与目标 Worker 等价的队列查询（例如 `status:ready + env:ubuntu-arm64`）确认目标 Task 实际可见、无 active owner；
 - 如果读回或队列查询失败，任务发布失败，保持/退回 `status:draft`，修复后重新验证；
-- 在完整 read-back PASS 前，不得告诉用户“任务已创建 / 已发布 / 可以领取”。
+- 在完整 read-back PASS 前，不得告诉用户“任务已创建 / 已发布 / 可以领取”；
+- 发布验证 PASS 后，必须向用户给出真实的下游 Worker 执行入口提示词，不能只说“任务已发布”。
 
 最小发布证明：
 
@@ -412,11 +414,29 @@ Issue read-back PASS
 + target worker queue search PASS
 ```
 
+发布后的最小 handoff 输出：
+
+```text
+Task: <real title>
+Issue: #<real issue>
+Worker: <real worker>
+Environment: env:<real environment>
+Prompt: docs/tasks/<real-issue>-<real-slug>/prompt.md
+```
+
+并提供可直接复制的新会话入口：
+
+```text
+读取 `AGENTS.md` 和 `docs/tasks/<real-issue>-<real-slug>/prompt.md`，执行当前 Task。
+```
+
+所有值必须来自发布后的 GitHub read-back，不得保留 placeholder。如果 queue verification 失败，不得输出该入口。
+
 详细检查见 `docs/tasks/README.md` 的 `Task Publication Gate`。
 
 原则：
 
-> **Plan is not execution. Write success is not publication. Publication requires independent read-back from GitHub.**
+> **Plan is not execution. Write success is not publication. Publication requires independent read-back from GitHub, and handoff is incomplete until the downstream entry prompt is delivered.**
 
 ## 11. Worker 协议
 
