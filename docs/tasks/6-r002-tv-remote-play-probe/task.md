@@ -7,14 +7,14 @@ GitHub Issue: #6
 Parent Goal / Research Item: R002 / P0 TV Browser Remote Playback / Autoplay
 Task / Research ID: R002-PREP
 Task kind: implementation
-Planning base commit: cacdb6b543b40612be8ba1014e3a0ed5331bd42b
+Planning / integration base commit: 2b0a1a0ea95753ff416e41759b7c33823be1b9e0
 Session bootstrap prompt: docs/tasks/6-r002-tv-remote-play-probe/prompt.md
-Downstream handoff profile: docs/tasks/handoffs/web-gpt.md
-Preferred worker: web
-Eligible worker environments after publication: env:web-gpt
+Downstream handoff profile: docs/tasks/handoffs/cloud.md
+Preferred worker: cloud
+Eligible worker environments after publication: env:cloud
 Required capabilities: github-read-write, repository-static-analysis, code-authoring, automated-build, automated-test, browser-automation
 Linked verification task: Issue #7 / R002-TV
-Hard publication dependency: stable reusable R001 Web Display/media-path candidate from Issue #3, accepted or explicitly approved by Coordinator for downstream use
+Hard publication dependency: satisfied — Issue #3 / R001 Final Acceptance; accepted Candidate 42c92db2a380895ec3909cdc9afa847478150eb0, merged to main as 2b0a1a0ea95753ff416e41759b7c33823be1b9e0
 ```
 
 > Live status, owner, candidate and results belong in Issue #6. This Task is not R002 device acceptance; physical-TV Evidence belongs to Issue #7.
@@ -31,7 +31,7 @@ This Task must not claim R002 `PASS` or `CONDITIONAL PASS`; it only delivers a r
 
 R002 is Core-blocking because the product assumes a TV can remain on the Gateway Display while later playback is primarily driven from the phone. Browser autoplay/user-activation behavior is target-browser dependent and cannot be established by design reasoning or desktop Chromium alone.
 
-R001 is currently building the minimal Web media path. R002-PREP must reuse that path rather than create a competing media/display stack.
+R001 now has an accepted, merged minimal Web media path. R002-PREP must reuse that path rather than create a competing media/display stack.
 
 ## Task Decomposition Decision
 
@@ -44,11 +44,32 @@ Decision reason: physical TV audible-playback behavior is an independent Manual 
 
 ## Hard Dependency
 
-R002-PREP may be planned now but must not be published until Issue #3 exposes a stable reusable candidate that contains the minimal Web Display/media path needed by this probe.
+The R001 publication dependency is satisfied by Issue #3 Final Acceptance:
 
-The dependency can be satisfied before R001 Final Acceptance only if the Coordinator explicitly records that a specific R001 candidate SHA is stable enough for downstream probe work.
+```text
+Accepted R001 Candidate: 42c92db2a380895ec3909cdc9afa847478150eb0
+Merged main commit:        2b0a1a0ea95753ff416e41759b7c33823be1b9e0
+```
 
-An open/in-progress PR alone is not sufficient authority.
+R002-PREP must consume that accepted media/Web Display path. Normal integration with newer `main` is allowed, but the Worker must not replace the R001 path or redefine R007 Playback authority. If newer repository changes invalidate the approved interface, report the concrete conflict rather than silently inventing a second stack.
+
+## Worker Routing Decision
+
+```text
+Repository implementation / browser-probe authoring / CI orchestration
+→ cloud-codex
+→ env:cloud
+
+Hosted probe verification
+→ GitHub Actions
+→ GitHub-hosted x64 / Chromium
+
+Physical audible-autoplay verdict
+→ Issue #7
+→ env:manual-tv
+```
+
+Codex Cloud is the Worker, not the browser/TV Evidence Authority. Hosted browser results prove probe mechanics only; they cannot classify R002.
 
 ## Work Role
 
@@ -119,7 +140,7 @@ C6: the probe reuses R001 media/display boundaries and does not create a second 
 
 ## Files Expected to Change
 
-Exact paths depend on the accepted R001 candidate. Expected categories:
+Exact paths depend on the accepted R001 code now on `main`. Expected categories:
 
 - minimal Web Display/probe code;
 - minimal remote-trigger/test controller code;
@@ -140,7 +161,7 @@ Desktop/hosted browser results prove only that the probe works. They cannot clas
 
 ## Success Criteria
 
-1. A specific reusable R001 candidate is integrated without creating a duplicate media/display stack.
+1. The accepted R001 candidate/interface is integrated without creating a duplicate media/display stack.
 2. Remote trigger → one audible `play()` attempt is reproducible and correlated in diagnostics.
 3. Promise rejection and browser-equivalent autoplay errors are visible to the verifier/Gateway-side diagnostics.
 4. A clear one-time activation/retry path exists and can be reset for repeated tests.
@@ -160,9 +181,9 @@ Do not store Secrets or sensitive media URLs.
 
 BLOCKED when:
 
-- no stable reusable R001 Web Display/media candidate is approved;
-- accepted R001 architecture cannot support a remote play probe without Contract revision;
-- required browser automation cannot run after reasonable retry.
+- the accepted R001 interface proves insufficient and proceeding would require Contract/architecture revision;
+- required browser automation cannot run after reasonable retry;
+- a required repository capability is unavailable to the selected Worker/Actions path.
 
 FAIL when the probe itself cannot reliably deliver/observe remote play attempts without violating architecture/security boundaries.
 
