@@ -233,6 +233,7 @@ dependencies = [
  "serde_json",
  "site-adapter-api",
  "tokio",
+ "tower",
  "url",
  "uuid",
 ]

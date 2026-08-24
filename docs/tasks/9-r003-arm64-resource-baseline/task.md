@@ -9,20 +9,21 @@ Task / Research ID: R003-TARGET
 Task kind: verification
 Planning base commit: 2f3ec8dd279b62d7f2e6c1f73ecb7f1a37f0c649
 Session bootstrap prompt: docs/tasks/9-r003-arm64-resource-baseline/prompt.md
-Downstream handoff profile: docs/tasks/handoffs/web-gpt.md
-Preferred worker: web
-Eligible worker environments after publication: env:web-gpt
+Downstream handoff profile: docs/tasks/handoffs/cloud.md
+Preferred worker: cloud
+Eligible worker environments after publication: env:cloud
 Required capabilities: github-read-write, actions-dispatch, actions-log-artifact-read, metrics-analysis, target-proof-review
 Linked implementation task: Issue #8 / R003-PREP
 Execution plane: github-actions
 Runner class: ubuntu-arm64-self-hosted
 Target: ubuntu-arm64-phone
 Required runner labels: self-hosted, linux, ARM64, ubuntu-arm64, target-device
-Infrastructure dependency: Issue #1 / INFRA-001 ACCEPTED
-Hard publication dependencies: Issue #8 Coordinator-accepted/merged trusted harness+target workflow; a specific stable R001 candidate/deployment approved for target proof; target Runner available
+Infrastructure dependency: Issue #1 / INFRA-001 ACCEPTED; Issue #21 / INFRA-002 ACCEPTED
+Accepted security dependency: Issue #14 / R008 ACCEPTED
+Hard publication dependencies: Issue #8 Coordinator-accepted/merged trusted harness+target workflow; Issue #14 Final Acceptance; a specific stable integrated R001/Gateway Candidate approved for target proof; target Runner available
 ```
 
-> The Web Worker owns this Issue and orchestrates GitHub Actions. The phone Runner is the execution backend/target and does not claim the Issue.
+> The Cloud Worker owns this Issue and orchestrates GitHub Actions. The phone Runner is the execution backend/target and does not claim the Issue. Cloud must not execute target measurements locally or substitute hosted/Cloud evidence for the Ubuntu ARM64 phone.
 
 ## Goal
 
@@ -72,11 +73,12 @@ Before Issue #9 may become `status:ready`:
 
 1. Issue #1 / INFRA-001 remains accepted and the target runner is usable.
 2. Issue #8 has Coordinator Final Acceptance; its harness/workflow is in trusted repository state.
-3. Coordinator records the exact harness/workflow SHA to be used.
-4. Coordinator records the exact R001/Gateway Candidate SHA or deployed test SHA being measured.
-5. The R001 candidate has a documented build/start/stop/test-media entry suitable for target proof.
-6. The target workflow can isolate the test runtime from production state and use non-production ports/paths.
-7. Required test media is legal, non-DRM and suitable for repeatable measurement.
+3. Issue #14 / R008 has Coordinator Final Acceptance so the measured integrated Candidate includes the accepted Core security baseline.
+4. Coordinator records the exact harness/workflow SHA to be used.
+5. Coordinator records the exact R001/Gateway Candidate SHA or deployed test SHA being measured.
+6. The R001 candidate has a documented build/start/stop/test-media entry suitable for target proof.
+7. The target workflow can isolate the test runtime from production state and use non-production ports/paths.
+8. Required test media is legal, non-DRM and suitable for repeatable measurement.
 
 Runtime capability preflight may discover FFmpeg, Chromium or thermal metric gaps. Those are legitimate target findings. They must not be bypassed with sudo/root inside the target job.
 
@@ -392,4 +394,4 @@ If Evidence reveals an implementation bug in the measured candidate, report it a
 
 ## Completion Protocol
 
-Web Worker uses GitHub Actions as execution plane, posts one standard `[EXECUTION REPORT]` or `[BLOCKER REPORT]`, moves to `status:review`/`status:blocked`, releases ownership, and stops. Only Coordinator performs research-result acceptance, Task Final Acceptance and closure.
+Cloud Worker uses GitHub Actions as execution plane, posts one standard `[EXECUTION REPORT]` or `[BLOCKER REPORT]`, moves to `status:review`/`status:blocked`, releases ownership, and stops. Only Coordinator performs research-result acceptance, Task Final Acceptance and closure.

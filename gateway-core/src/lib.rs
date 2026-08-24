@@ -1,10 +1,11 @@
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::header::{
     ACCEPT_RANGES, AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG,
-    IF_RANGE, LAST_MODIFIED, RANGE,
+    HOST, IF_RANGE, LAST_MODIFIED, ORIGIN, RANGE,
 };
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -13,17 +14,22 @@ use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
 use site_adapter_api::{ResolvedStream, StreamProtocol};
 use std::collections::{HashMap, VecDeque};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
-use tokio::net::lookup_host;
 use url::Url;
 use uuid::Uuid;
 
+pub mod security;
+pub use security::{
+    EgressPolicy, EgressPolicyError, EgressScope, HttpAuthorityError, HttpAuthorityPolicy,
+    ValidatedTarget,
+};
+
 const MAX_MANIFEST_BYTES: usize = 512 * 1024;
 const MAX_REDIRECTS: usize = 5;
+const MAX_HTTP_BODY_BYTES: usize = 32 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Binding {
@@ -42,12 +48,6 @@ impl Binding {
             resource_id: resource.into(),
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum EgressScope {
-    PublicWeb,
-    FixtureLoopback,
 }
 
 #[derive(Clone, Debug)]
@@ -169,7 +169,8 @@ pub struct ProofPaths {
 #[derive(Clone)]
 struct GatewayState {
     store: Arc<CapabilityStore>,
-    client: reqwest::Client,
+    egress_policy: Arc<RwLock<EgressPolicy>>,
+    http_authorities: Arc<RwLock<HttpAuthorityPolicy>>,
     active_streams: Arc<AtomicUsize>,
     proof_paths: Arc<RwLock<ProofPaths>>,
     fixture_mp4: Arc<RwLock<Option<PathBuf>>>,
@@ -355,10 +356,32 @@ fn sanitize_optional(value: Option<String>, max: usize) -> Option<String> {
 }
 
 fn sanitize_text(value: &str, max: usize) -> String {
-    let value = value
-        .replace("Bearer ", "Bearer [redacted] ")
-        .replace("Cookie", "[redacted-header]");
-    value
+    let mut output = String::new();
+    let mut redact_next = false;
+    for token in value.split_whitespace() {
+        if redact_next {
+            output.push_str("[redacted]");
+            redact_next = false;
+        } else if token.eq_ignore_ascii_case("bearer")
+            || token.eq_ignore_ascii_case("basic")
+            || token.eq_ignore_ascii_case("cookie:")
+        {
+            output.push_str(if token.eq_ignore_ascii_case("cookie:") {
+                "[redacted-header]"
+            } else {
+                token
+            });
+            redact_next = true;
+        } else if token.eq_ignore_ascii_case("cookie") {
+            output.push_str("[redacted-header]");
+            redact_next = true;
+        } else {
+            output.push_str(token);
+        }
+        output.push(' ');
+    }
+    output
+        .trim_end()
         .chars()
         .filter(|character| !character.is_control())
         .take(max)
@@ -367,14 +390,11 @@ fn sanitize_text(value: &str, max: usize) -> String {
 
 impl GatewayService {
     pub fn new(max_capabilities: usize) -> Self {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("reqwest client");
         Self {
             state: Arc::new(GatewayState {
                 store: Arc::new(CapabilityStore::new(max_capabilities)),
-                client,
+                egress_policy: Arc::new(RwLock::new(EgressPolicy::default())),
+                http_authorities: Arc::new(RwLock::new(HttpAuthorityPolicy::default())),
                 active_streams: Arc::new(AtomicUsize::new(0)),
                 proof_paths: Arc::new(RwLock::new(ProofPaths {
                     chain: "SiteAdapterRegistry -> generic-direct -> ResolvedMedia -> MediaGateway -> WebDisplay".into(),
@@ -386,17 +406,39 @@ impl GatewayService {
         }
     }
 
+    /// Register a private integration from deployment/admin configuration.
+    /// User/plugin URLs cannot create this exception because validation also
+    /// requires the named entry and its configured origin.
+    pub fn configure_local_service(
+        &self,
+        name: impl Into<String>,
+        origin: Url,
+    ) -> Result<(), EgressPolicyError> {
+        self.state
+            .egress_policy
+            .write()
+            .expect("egress policy poisoned")
+            .configure_local_service(name, &origin)
+    }
+
+    /// Configure the exact deployment authority accepted by the HTTP/control
+    /// surface. This is deployment-owned; request Host/Origin values cannot
+    /// create or widen the authority set.
+    pub fn configure_http_authority(&self, origin: Url) -> Result<(), HttpAuthorityError> {
+        self.state
+            .http_authorities
+            .write()
+            .expect("http authority policy poisoned")
+            .configure(&origin)
+    }
+
     pub fn resource_from_resolved(
         stream: &ResolvedStream,
         scope: EgressScope,
     ) -> Result<UpstreamResource, GatewayError> {
         let mut public_headers = HeaderMap::new();
         for (name, value) in &stream.public_headers {
-            let lower = name.to_ascii_lowercase();
-            if matches!(
-                lower.as_str(),
-                "cookie" | "authorization" | "proxy-authorization"
-            ) {
+            if security::is_secret_header(name, value) {
                 return Err(GatewayError::SecretHeader);
             }
             let name =
@@ -478,8 +520,66 @@ impl GatewayService {
                 get(fixture_handler).head(fixture_handler),
             )
             .route("/healthz", get(|| async { "ok" }))
+            .layer(DefaultBodyLimit::max(MAX_HTTP_BODY_BYTES))
+            .layer(middleware::from_fn_with_state(
+                self.state.clone(),
+                http_surface_guard,
+            ))
             .with_state(self.state.clone())
     }
+}
+
+async fn http_surface_guard(
+    State(state): State<Arc<GatewayState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let headers = request.headers();
+    let Some(host) = headers.get(HOST).and_then(|value| value.to_str().ok()) else {
+        return (StatusCode::BAD_REQUEST, "invalid_host").into_response();
+    };
+    let http_authorities = state
+        .http_authorities
+        .read()
+        .expect("http authority policy poisoned")
+        .clone();
+    if !security::is_valid_http_host(host) {
+        return (StatusCode::BAD_REQUEST, "invalid_host").into_response();
+    }
+    if !http_authorities.allows_host(host) {
+        return (StatusCode::MISDIRECTED_REQUEST, "host_not_allowed").into_response();
+    }
+
+    if let Some(origin) = headers.get(ORIGIN).and_then(|value| value.to_str().ok())
+        && !http_authorities.allows_origin_for_host(origin, host)
+    {
+        return (StatusCode::FORBIDDEN, "origin_mismatch").into_response();
+    }
+
+    if matches!(
+        request.method(),
+        &Method::POST | &Method::PUT | &Method::PATCH | &Method::DELETE
+    ) {
+        let is_json = headers
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                value.split(';').next().is_some_and(|media_type| {
+                    media_type.trim().eq_ignore_ascii_case("application/json")
+                })
+            });
+        if !is_json {
+            return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "content_type_required").into_response();
+        }
+        let Some(origin) = headers.get(ORIGIN).and_then(|value| value.to_str().ok()) else {
+            return (StatusCode::FORBIDDEN, "origin_required").into_response();
+        };
+        if !http_authorities.allows_origin_for_host(origin, host) {
+            return (StatusCode::FORBIDDEN, "origin_mismatch").into_response();
+        }
+    }
+
+    next.run(request).await
 }
 
 fn stream_path(token: &str, binding: &Binding) -> String {
@@ -967,8 +1067,19 @@ async fn fetch_upstream(
 ) -> Result<(reqwest::Response, Url), &'static str> {
     let mut url = record.resource.url.clone();
     for hop in 0..=MAX_REDIRECTS {
-        validate_egress(&url, record.resource.egress_scope).await?;
-        let mut request = state.client.request(method.clone(), url.clone());
+        let egress_policy = state
+            .egress_policy
+            .read()
+            .expect("egress policy poisoned")
+            .clone();
+        let validated_target = egress_policy
+            .validate_and_resolve(&url, &record.resource.egress_scope)
+            .await
+            .map_err(egress_error_code)?;
+        let client = validated_target
+            .pinned_client()
+            .map_err(|_| "UPSTREAM_CLIENT_FAILED")?;
+        let mut request = client.request(method.clone(), url.clone());
         request = request.headers(record.resource.public_headers.clone());
         request = request.headers(record.resource.secret_headers.clone());
         if let Some(value) = request_headers.get(RANGE) {
@@ -998,71 +1109,16 @@ async fn fetch_upstream(
     Err("TOO_MANY_REDIRECTS")
 }
 
-async fn validate_egress(url: &Url, scope: EgressScope) -> Result<(), &'static str> {
-    if !matches!(url.scheme(), "http" | "https") {
-        return Err("EGRESS_SCHEME_REJECTED");
+fn egress_error_code(error: EgressPolicyError) -> &'static str {
+    match error {
+        EgressPolicyError::InvalidScheme => "EGRESS_SCHEME_REJECTED",
+        EgressPolicyError::MissingHost => "EGRESS_HOST_REJECTED",
+        EgressPolicyError::InvalidPort => "EGRESS_PORT_REJECTED",
+        EgressPolicyError::DnsLookupFailed => "EGRESS_DNS_FAILED",
+        EgressPolicyError::TargetRejected
+        | EgressPolicyError::LocalServiceOriginMismatch
+        | EgressPolicyError::LocalServiceNotConfigured => "EGRESS_TARGET_REJECTED",
     }
-    let host = url.host_str().ok_or("EGRESS_HOST_REJECTED")?;
-    match scope {
-        EgressScope::FixtureLoopback => {
-            let is_loopback = host.eq_ignore_ascii_case("localhost")
-                || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback());
-            if !is_loopback {
-                return Err("EGRESS_TARGET_REJECTED");
-            }
-        }
-        EgressScope::PublicWeb => {
-            let port = url.port_or_known_default().ok_or("EGRESS_PORT_REJECTED")?;
-            if let Ok(ip) = host.parse::<IpAddr>() {
-                if !is_public_ip(ip) {
-                    return Err("EGRESS_TARGET_REJECTED");
-                }
-            } else {
-                let addresses: Vec<_> = lookup_host((host, port))
-                    .await
-                    .map_err(|_| "EGRESS_DNS_FAILED")?
-                    .map(|address| address.ip())
-                    .collect();
-                if addresses.is_empty() || addresses.iter().any(|ip| !is_public_ip(*ip)) {
-                    return Err("EGRESS_TARGET_REJECTED");
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn is_public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => is_public_v4(ip),
-        IpAddr::V6(ip) => is_public_v6(ip),
-    }
-}
-
-fn is_public_v4(ip: Ipv4Addr) -> bool {
-    let octets = ip.octets();
-    !(ip.is_private()
-        || ip.is_loopback()
-        || ip.is_link_local()
-        || ip.is_multicast()
-        || ip.is_unspecified()
-        || ip.is_broadcast()
-        || ip.is_documentation()
-        || octets[0] == 0
-        || (octets[0] == 100 && (64..=127).contains(&octets[1]))
-        || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
-        || (octets[0] == 198 && (octets[1] == 18 || octets[1] == 19))
-        || octets[0] >= 240)
-}
-
-fn is_public_v6(ip: Ipv6Addr) -> bool {
-    let segments = ip.segments();
-    !(ip.is_loopback()
-        || ip.is_unspecified()
-        || ip.is_multicast()
-        || (segments[0] & 0xfe00) == 0xfc00
-        || (segments[0] & 0xffc0) == 0xfe80
-        || (segments[0] == 0x2001 && segments[1] == 0x0db8))
 }
 
 fn is_manifest(url: &Url, headers: &HeaderMap) -> bool {
@@ -1149,7 +1205,15 @@ async fn issue_hls_child(
     target: &str,
 ) -> Result<String, &'static str> {
     let url = base.join(target).map_err(|_| "INVALID_HLS_CHILD_URI")?;
-    validate_egress(&url, parent.resource.egress_scope).await?;
+    let egress_policy = state
+        .egress_policy
+        .read()
+        .expect("egress policy poisoned")
+        .clone();
+    egress_policy
+        .validate(&url, &parent.resource.egress_scope)
+        .await
+        .map_err(egress_error_code)?;
     let protocol = if url.path().to_ascii_lowercase().ends_with(".m3u8") {
         StreamProtocol::Hls
     } else {
@@ -1176,7 +1240,7 @@ async fn issue_hls_child(
             protocol,
             public_headers: parent.resource.public_headers.clone(),
             secret_headers: parent.resource.secret_headers.clone(),
-            egress_scope: parent.resource.egress_scope,
+            egress_scope: parent.resource.egress_scope.clone(),
         },
         ttl,
     );
@@ -1243,6 +1307,27 @@ mod unit {
             GatewayService::resource_from_resolved(&stream, EgressScope::PublicWeb),
             Err(GatewayError::SecretHeader)
         ));
+    }
+
+    #[test]
+    fn bearer_like_values_and_secret_header_names_are_rejected() {
+        for header in [
+            ("x-trace", "Bearer hidden-secret"),
+            ("Cookie", "session=hidden-secret"),
+            ("X-Api-Key", "hidden-secret"),
+        ] {
+            let stream = ResolvedStream {
+                id: "x".into(),
+                protocol: StreamProtocol::HttpFile,
+                url: Url::parse("https://example.com/a.mp4").unwrap(),
+                public_headers: BTreeMap::from([(header.0.into(), header.1.into())]),
+                upstream_access_ref: None,
+            };
+            assert!(matches!(
+                GatewayService::resource_from_resolved(&stream, EgressScope::PublicWeb),
+                Err(GatewayError::SecretHeader)
+            ));
+        }
     }
 
     #[test]

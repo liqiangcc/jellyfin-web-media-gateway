@@ -48,6 +48,9 @@ async fn main() {
         .expect("register generic-direct");
 
     let service = GatewayService::new(1024);
+    service
+        .configure_http_authority(Url::parse(&format!("http://{addr}")).unwrap())
+        .expect("configure R001 HTTP authority");
     let ttl = Duration::from_secs(30 * 60);
 
     let mp4_input = env::var("R001_PUBLIC_MP4").unwrap_or_else(|_| DEFAULT_MP4.into());
@@ -81,6 +84,12 @@ async fn main() {
     let fixture_path = env::var_os("R001_FIXTURE_MP4").map(PathBuf::from);
     service.configure_fixture_mp4(fixture_path.clone());
     let secret_path = fixture_path.map(|_| {
+        service
+            .configure_local_service(
+                "r001-fixture",
+                Url::parse(&format!("http://{addr}")).unwrap(),
+            )
+            .expect("configure R001 fixture local service");
         let mut secret_headers = HeaderMap::new();
         secret_headers.insert(
             "authorization",
@@ -93,7 +102,7 @@ async fn main() {
                 protocol: StreamProtocol::HttpFile,
                 public_headers: HeaderMap::new(),
                 secret_headers,
-                egress_scope: EgressScope::FixtureLoopback,
+                egress_scope: EgressScope::ConfiguredLocalService("r001-fixture".into()),
             },
             ttl,
         )
