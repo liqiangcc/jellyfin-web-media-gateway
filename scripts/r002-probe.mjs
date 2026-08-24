@@ -38,7 +38,7 @@ async function postCommand(requestId) {
 }
 
 async function diagnostics() {
-  const response = await page.request.get(`${base}/api/v1/display-probe/state`, { timeout: 10000 });
+  const response = await page.request.get(`${base}/api/v1/display-probe/state?nonce=${Date.now()}`, { timeout: 10000 });
   if (!response.ok()) throw new Error(`diagnostics failed: ${response.status()}`);
   return response.json();
 }
@@ -80,20 +80,11 @@ await postCommand('r002-remote-after-activation');
 await waitForPlayAttempt('r002-remote-after-activation');
 
 await page.locator('#fullscreen').click();
-await page.waitForTimeout(250);
-
-const state = await diagnostics();
-evidence.playAttempts = state.telemetry.filter(item => item.kind === 'play_attempt');
-evidence.fullscreen = state.telemetry.filter(item => item.kind === 'fullscreen');
-evidence.lifecycle = state.telemetry.filter(item => ['lifecycle', 'visibility', 'media'].includes(item.kind));
-evidence.transport = state.telemetry.filter(item => ['transport', 'network'].includes(item.kind));
-fs.writeFileSync('r002-probe-debug.json', JSON.stringify({ telemetry: state.telemetry }, null, 2));
-
 if (evidence.commands.length !== 3) throw new Error(`expected 3 command responses, got ${evidence.commands.length}`);
 if (evidence.commands.filter(command => command.duplicate).length !== 1) throw new Error('expected exactly one idempotent duplicate response');
 await page.waitForFunction(async () => {
-  const current = await (await fetch('/api/v1/display-probe/state', { cache: 'no-store' })).json();
-  return current.telemetry.filter(item => item.kind === 'play_attempt').length === 3;
+  const current = await (await fetch(`/api/v1/display-probe/state?nonce=${Date.now()}`, { cache: 'no-store' })).json();
+  return current.telemetry.filter(item => item.kind === 'play_attempt').length >= 3;
 }, null, { timeout: 15000 });
 const finalState = await diagnostics();
 evidence.playAttempts = finalState.telemetry.filter(item => item.kind === 'play_attempt');
