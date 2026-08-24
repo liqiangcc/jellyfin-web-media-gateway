@@ -4,6 +4,10 @@
 
 长期、不随单次任务变化的仓库规则放在根 `AGENTS.md`；本目录只描述“当前阶段要完成什么”。
 
+默认由网页 GPT + GitHub MCP 准备和审查任务；只有必须编译、执行、访问本地/真实设备或采集 Evidence 时才调用相应 Codex。环境分工和交接规则见 `../development-environments.md`。
+
+具体执行任务优先使用 GitHub Issue + `docs/tasks/<issue>-<slug>/task.md` 派发。Codex 读取任务契约、执行 Scope 内工作、提交实现和 Evidence 后停止，由网页 GPT/MCP 验收并决定下一项。
+
 ## 使用方式
 
 新开 Codex 会话时优先使用短指令：

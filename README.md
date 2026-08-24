@@ -166,6 +166,7 @@ Jellyfin Display、真实站点和 Native Site Panel 分别继续通过 R004/R00
 - [Implementation Contracts](docs/implementation-contracts.md)
 - [技术预研与可行性验证](docs/technical-feasibility-validation.md)
 - [MVP 实施计划](docs/mvp-plan.md)
+- [开发环境与多 Agent 协同](docs/development-environments.md)
 
 专题：
 

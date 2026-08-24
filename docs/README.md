@@ -54,6 +54,7 @@ P0 Core Feasibility 至少关注：
 - `control-experience-architecture.md`：统一 Control 体验如何聚合多个独立领域。
 - `site-plugin-architecture.md`：具体站点知识与插件边界。
 - `security.md`：跨领域安全不变量和威胁模型。
+- `development-environments.md`：网页 GPT/MCP、各 Codex 环境、Git 与 Evidence 的协同规则。
 
 专题文档不能重新定义与 canonical 架构冲突的核心对象。
 

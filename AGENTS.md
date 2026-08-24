@@ -140,7 +140,35 @@ Evidence
 - 不重写用户已有历史，不 force push，除非任务明确要求。
 - 提交前检查当前 diff 是否包含 Secret、账号信息、私有 Cookie、Token、完整敏感 URL 或实验产生的大文件。
 
-## 10. 阶段任务入口
+## 10. 多环境协同
+
+本项目默认采用“网页 GPT + GitHub MCP 优先，Codex 按需执行”：
+
+- 网页 GPT + GitHub MCP 默认负责需求澄清、设计、文档、Issue/任务包、轻量修改和 Review。
+- 只有任务必须访问本地文件、ADB、WSL、Ubuntu ARM64、真实浏览器/电视，或必须实际编译、运行、测试、测量时，才路由到相应 Codex 环境。
+- 网页分析、文档推理或模拟输出不能替代真实运行 Evidence，也不能把 Research Item 标记为 PASS。
+
+开始工作前必须：
+
+1. 识别当前执行环境及其允许证明的结论；
+2. 检查 GitHub 上是否已有同一任务的 owner、分支、PR 或更新提交；
+3. 只接手一个边界明确的任务，不与另一环境同时修改同一文件/Research Item；
+4. 从 GitHub 获取最新状态，不通过复制未提交工作目录在环境间交接；
+5. 在 Evidence 中记录实际执行环境，不能用 WSL/云端结果冒充 Ubuntu ARM64 或真实电视结果。
+
+当任务由 GitHub Issue 派发时，先读取 `docs/tasks/<issue>-<slug>/task.md`。Issue 是协调与状态入口，`task.md` 是执行契约；Codex 不自行扩大其 Scope，也不在完成后自动开始下一项。
+
+各执行环境（包括网页 GPT + GitHub MCP）使用 Issue 标签自助领取任务：只查询同时带有 `status:ready` 和匹配 `env:*` 的未领取 Issue；开始前先设置 assignee/claim 信息并切换为 `status:in-progress`。同一 Issue 即使允许多个环境执行，默认也只能有一个 active owner。
+
+没有匹配的 ready Issue 时停止，不自行从 backlog 推断新任务。无法完成时记录 Evidence/阻塞原因，并转为 `status:blocked` 或释放回 `status:ready`。
+
+环境默认职责、任务交接模板、Git 并发规则与 Tailscale 安全要求见：
+
+- `docs/development-environments.md`
+
+如果任务由网页 GPT/MCP 准备，优先读取其 Issue、任务文档或 PR 描述，不要求用户在聊天中重复粘贴项目背景；但仍必须按本文件读取适用的 canonical 文档。
+
+## 11. 阶段任务入口
 
 当前可直接执行的 Codex 任务：
 
