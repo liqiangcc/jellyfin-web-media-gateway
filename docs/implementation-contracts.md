@@ -234,13 +234,20 @@ PlaybackItem
 ├── item_revision
 ├── source_locator
 ├── resolved_media
+├── media_generation      # same-item resolve freshness，不是 item identity
 ├── metadata
 └── created_at
 ```
 
-`item_revision` 在同一 `PlaybackSession` 中每次切换 current item 时单调递增。
+规则：
 
-Display callback、媒体刷新和 ended 事件必须携带：
+- `item_revision` 是 current-item identity generation；在同一 `PlaybackSession` 中只在切换 current item 时单调递增。
+- 同一 item 因短期媒体 URL 过期而重新 resolve 时，不伪造新的 `item_revision`；使用独立 `media_generation` / freshness ticket。
+- 每次开始 same-item media refresh 都获得绑定 `item_id + item_revision + media_generation` 的 ticket；只有仍匹配 current item 且 generation 最新的结果允许提交。
+- 启动 refresh/ticket 本身不改变 `session_revision`；fresh media 真正提交并替换当前 `resolved_media` 时才属于 authoritative session mutation，并推进 `session_revision`。
+- item 已切换或 generation 已落后的 resolve result 必须丢弃，不得改变 media、position、revision 或其他 authoritative state。
+
+Display callback、ended 事件至少必须携带：
 
 ```text
 session_id
@@ -248,7 +255,7 @@ item_id
 item_revision
 ```
 
-旧 item 的延迟回报不能覆盖新 item 状态。
+same-item media resolve result 还必须携带等价 freshness generation/ticket。旧 item 或旧 media generation 的延迟回报不能覆盖当前 item 状态。
 
 ## 8. PlaybackSession / PlaybackContext
 
@@ -260,6 +267,7 @@ PlaybackSession
 ├── current_item: PlaybackItem
 ├── playback_context
 ├── position
+├── telemetry_sequence
 ├── subtitle_selection
 ├── active_display
 └── display_generation
@@ -277,9 +285,13 @@ PlaybackContext
 
 规则：
 
-- `session_revision`：任何会改变 session 全局可见状态的 mutation 成功后递增。
+- `session_revision` 是 **authoritative command/CAS revision**，不是所有高频 telemetry 的统一时钟。
+- 一个首次接受、会改变 authoritative command state 的 command 在该 command mutation 提交时推进 `session_revision` 一次；重复 `request_id` 重放同一结果时不得再次推进。
+- 其他真正提交到 session authority 的异步状态转换（例如 current-item commit、fresh media commit、handoff commit/失效）在各自 commit 时推进 revision；candidate/prepare-only 状态不得冒充 committed display authority。
+- 高频 `position` telemetry 不推进 `session_revision`。它必须绑定当前 item（Display 回调还绑定当前 display generation），并使用独立单调 `telemetry_sequence` 或等价 freshness guard 拒绝乱序/陈旧 telemetry。
+- 因此 position 频繁上报不会制造虚假的 `REVISION_CONFLICT`；Pause/Seek 等 Control command 仍只与 authoritative command revision 做 CAS。
 - 切换下一集：resolve 新 locator → 创建新 `PlaybackItem` → CAS 提交为 current item → active display 保持不变 → start new item。
-- handoff 不改变 current item；它只改变 `active_display/display_generation`。
+- handoff 不改变 current item；只有成功 commit 才改变 `active_display/display_generation`。
 - `position` 属于 current item。切 item 后默认重新从 0 或 plugin/context 指定位置开始。
 - 首个 MVP 不要求服务重启后恢复 active session；但运行期间必须能防止旧 callback 覆盖新状态。
 
@@ -330,8 +342,11 @@ CommandResult
 
 规则：
 
-- `request_id` 用于幂等/重复请求识别。
-- 客户端掌握 revision 时应带 `expected_session_revision`；冲突返回稳定 `REVISION_CONFLICT` 并附最新 revision。
+- `request_id` 用于幂等/重复请求识别。服务端必须保存足够的 request fingerprint/outcome，使完全相同的重试返回同一 outcome 且不产生第二次 side effect。
+- 已使用的 `request_id` 若被不同 command 或不同预期 revision 不兼容地复用，必须返回稳定 `REQUEST_ID_MISMATCH`（或协议中明确的等价错误），不得执行第二个 mutation。
+- 对首次出现的 request，`expected_session_revision` 必须在任何 authoritative side effect 之前比较；不匹配返回稳定 `REVISION_CONFLICT` 并附最新 revision。
+- 两个 Control 针对同一个旧 `expected_session_revision` 并发 mutation 时，最多一个允许提交；另一个看到新的 current revision 后必须冲突，不能双写。
+- 一个 accepted authoritative command mutation 只推进 command revision 一次；位置 telemetry 不参与这个 CAS 计数。
 - Control 不乐观宣布 handoff 成功；以服务端提交后的 snapshot 为准。
 
 Site Browser / Site Account 操作使用独立：
@@ -368,10 +383,28 @@ DisplayInstance
 └── adapter_metadata
 ```
 
+Handoff 使用独立 transition/candidate authority；概念 ticket 至少绑定：
+
+```text
+HandoffTransition
+├── transition_id
+├── item_id
+├── item_revision
+├── from_display_id
+├── from_generation
+├── target_display_id
+└── candidate_generation
+```
+
 关键规则：
 
-- `active_display` 只有 Playback Coordinator 能提交。
-- 每次 handoff 成功后 `display_generation` 递增。
+- `active_display` 只有 Playback Coordinator 能提交；candidate display 在 commit 前不是 active authority。
+- `Handoff` command 先 reserve 唯一 active transition，再 prepare/start target；此时 source display 继续保持 committed authority。
+- candidate callback 只能更新 transition-local/candidate-local 状态，不得覆盖 global position、`active_display` 或 committed `display_generation`。
+- commit 必须验证当前 transition、current item identity、`from_display_id/from_generation` 仍全部匹配；验证失败的旧 callback/旧 candidate 无 side effect。
+- 成功 handoff commit 后将 target 提升为 `active_display`，使用预留的 `candidate_generation` 作为新的 committed `display_generation`，并使旧 source generation 立即失去 authority。
+- timeout/cancel 必须使 transition reservation 失效；失效后的 candidate callback 或迟到 commit 不得复活该 handoff。
+- 同一 session 同时只允许一个 active handoff transition；重叠 handoff 返回稳定 `HANDOFF_IN_PROGRESS`（或协议中明确的等价错误），不能形成两条可提交 authority path。
 - adapter callback 必须携带 generation；旧 generation 不覆盖当前状态。
 - adapter 不能直接读取 Session Vault。
 - adapter 只消费 Gateway 签发的媒体能力。
@@ -458,14 +491,18 @@ http://10.0.0.116/
 
 ## 15. Contract / Architecture Tests
 
-开始实现后 CI 至少增加：
+开始实现后 CI 至少增加并保持：
 
 1. SiteAdapter conformance tests。
 2. ResolvedMedia schema tests。
-3. PlaybackSession revision/item_revision 竞态测试。
-4. Display generation 旧回调拒绝测试。
-5. scoped SiteAccessCapability 不跨站测试。
-6. EgressPolicy 私网/redirect 测试。
-7. Core concrete-site-knowledge architecture test：禁止站点域名、Cookie key、DOM selector、`if site == ...` 业务分支进入稳定 Core。
+3. Playback command CAS / `request_id` idempotency / stale revision / telemetry-separation tests。
+4. `item_revision` 与独立 media freshness generation 的 stale-result tests。
+5. Display generation、handoff candidate/commit、timeout/cancel、overlapping-handoff 旧回调拒绝 tests。
+6. two-Control same-revision deterministic interleaving test；不能只依赖 `sleep` 猜 race timing。
+7. scoped SiteAccessCapability 不跨站测试。
+8. EgressPolicy 私网/redirect 测试。
+9. Core concrete-site-knowledge architecture test：禁止站点域名、Cookie key、DOM selector、`if site == ...` 业务分支进入稳定 Core。
+
+R007 的 required hosted verification 还必须包含 bounded repeated/sharded execution；单次 deterministic PASS 不能替代重复竞态验证。
 
 新增一个站点插件的理想 diff 应主要位于 `plugins/<site>/`；若必须修改 PlaybackCoordinator、DisplayAdapter 或 Control 核心业务分支，需要架构评审。
