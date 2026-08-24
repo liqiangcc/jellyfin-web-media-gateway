@@ -22,8 +22,31 @@ flowchart LR
 ### 2.1 Control Console
 
 - 单页 PWA，由网关托管。
-- 负责 URL 输入、设备选择、登录流程、播放状态和错误展示。
+- 负责 URL 输入、设备选择、登录流程、当前内容、播放状态和错误展示。
 - 不直接接触媒体 Cookie；控制台只持有网关会话。
+- 通过 Jellyfin Session API 和网关 WebSocket 恢复并同步当前播放状态。
+- 可注册为浏览器显示端，使用 HTML5 播放器直接呈现网关媒体与字幕。
+
+### 2.1.1 单显示端所有权
+
+每个播放任务只有一个 `active_display`：电视 Jellyfin 客户端或一个浏览器实例。控制台始终显示服务端受控内容；只有成为活动显示端时才实际拉取和解码媒体。
+
+```text
+当前显示端 A
+  → 保存进度并准备切换
+  → 验证显示端 B 在线且可播放
+  → 停止 A
+  → B 从确认进度开始播放
+  → 提交 active_display = B
+```
+
+切换过程按“准备、确认、提交”处理。新显示端无法启动时保留旧显示端，避免因网页刷新、设备离线或格式不兼容而中断播放。首个版本不实现多显示端同步播放。
+
+### 2.1.2 与 Jellyfin Web 的边界
+
+Jellyfin Server 自带 Web 客户端保留原样，可直接通过 `http://<server>:8096/web/` 访问，用于媒体库浏览、服务端验证和独立播放。自定义 Control Console 面向“URL → 解析 → 选择或接管显示端 → 控制”流程，是由网关托管的独立 PWA。
+
+不 fork Jellyfin Web，也不把网站会话、解析器或网关逻辑注入其代码。控制台只调用稳定的 Jellyfin API，并可提供“打开 Jellyfin Web”入口，使 Jellyfin 与网关能够分别升级。
 
 ### 2.2 Gateway API
 
@@ -36,6 +59,25 @@ flowchart LR
 - 按站点隔离 Cookie 与必要凭据。
 - 密钥不与数据库放在同一文件中。
 - 仅解析子进程按最小权限读取目标站点会话。
+
+### 2.3.1 Auth Browser Worker
+
+- Chromium/Playwright 实际运行在 Ubuntu 服务端，按站点使用独立持久化 profile。
+- 控制台通过一次性授权的远程画面通道显示浏览器，并转发键盘、鼠标和触摸输入。
+- 用户在 Windows 或其他手机上完成账号密码、验证码、扫码和二次认证，但网站 Cookie、localStorage 与设备令牌始终留在服务端。
+- 登录确认成功后关闭 Chromium 进程，只持久化加密的站点 profile；下次失效时再按需启动。
+- 同一用户、同一站点默认只允许一个交互登录会话，并设置空闲超时和总时长上限。
+
+```text
+Control PWA
+  ↔ 一次性登录通道（画面 + 输入）
+Auth Browser Worker（服务端 Chromium）
+  ↔ 目标网站
+Session Vault
+  ← 加密保存站点 profile / Cookie
+```
+
+不能通过 iframe 直接嵌入目标网站并复制登录状态：站点通常受 SameSite、HttpOnly、CSP 和跨域策略保护。远程操作服务端浏览器可以在不把凭据下发给控制设备的前提下保留完整登录上下文。
 
 ### 2.4 Resolver
 
@@ -119,6 +161,8 @@ POST   /api/v1/sites/{site}/login   启动服务器端登录流程
 GET    /live/channels.m3u            Jellyfin M3U Tuner
 GET    /stream/{token}/...           临时媒体代理
 WS     /api/v1/events                任务与播放状态
+GET    /api/v1/now-playing           当前受控内容与活动显示端
+POST   /api/v1/display/handoff       将播放接管到指定显示端
 ```
 
 所有路径仅为设计草案，实施前需完成 OpenAPI 契约和威胁审查。
