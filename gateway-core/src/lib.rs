@@ -1,4 +1,3 @@
-use async_stream::try_stream;
 use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::header::{
@@ -7,9 +6,10 @@ use axum::http::header::{
 };
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{get, head};
+use axum::routing::get;
 use axum::{Json, Router};
-use futures_util::StreamExt;
+use bytes::Bytes;
+use futures_util::{stream, StreamExt};
 use serde::Serialize;
 use site_adapter_api::{ResolvedStream, StreamProtocol};
 use std::collections::{HashMap, VecDeque};
@@ -81,23 +81,26 @@ struct StoreInner {
 }
 
 #[derive(Debug)]
-pub struct CapabilityStore {
+struct CapabilityStore {
     inner: Mutex<StoreInner>,
     max_entries: usize,
     sequence: AtomicU64,
 }
 
 impl CapabilityStore {
-    pub fn new(max_entries: usize) -> Self {
+    fn new(max_entries: usize) -> Self {
         assert!(max_entries > 0);
         Self {
-            inner: Mutex::new(StoreInner { records: HashMap::new(), order: VecDeque::new() }),
+            inner: Mutex::new(StoreInner {
+                records: HashMap::new(),
+                order: VecDeque::new(),
+            }),
             max_entries,
             sequence: AtomicU64::new(1),
         }
     }
 
-    pub fn issue(&self, binding: Binding, resource: UpstreamResource, ttl: Duration) -> String {
+    fn issue(&self, binding: Binding, resource: UpstreamResource, ttl: Duration) -> String {
         let now = Instant::now();
         let seq = self.sequence.fetch_add(1, Ordering::Relaxed);
         let token = Uuid::new_v4().simple().to_string();
@@ -119,7 +122,12 @@ impl CapabilityStore {
         inner.order.push_back((seq, token.clone()));
         inner.records.insert(
             token.clone(),
-            CapabilityRecord { binding, resource, expires_at: now + ttl, created_seq: seq },
+            CapabilityRecord {
+                binding,
+                resource,
+                expires_at: now + ttl,
+                created_seq: seq,
+            },
         );
         token
     }
@@ -140,11 +148,13 @@ impl CapabilityStore {
         Ok(record)
     }
 
-    pub fn len(&self) -> usize {
-        self.inner.lock().expect("capability store poisoned").records.len()
+    fn len(&self) -> usize {
+        self.inner
+            .lock()
+            .expect("capability store poisoned")
+            .records
+            .len()
     }
-
-    pub fn max_entries(&self) -> usize { self.max_entries }
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -202,7 +212,10 @@ impl GatewayService {
         let mut public_headers = HeaderMap::new();
         for (name, value) in &stream.public_headers {
             let lower = name.to_ascii_lowercase();
-            if matches!(lower.as_str(), "cookie" | "authorization" | "proxy-authorization") {
+            if matches!(
+                lower.as_str(),
+                "cookie" | "authorization" | "proxy-authorization"
+            ) {
                 return Err(GatewayError::SecretHeader);
             }
             let name = HeaderName::from_bytes(name.as_bytes()).map_err(|_| GatewayError::InvalidHeader)?;
@@ -218,34 +231,58 @@ impl GatewayService {
         })
     }
 
-    pub fn issue_path(&self, binding: Binding, resource: UpstreamResource, ttl: Duration) -> String {
+    pub fn issue_path(
+        &self,
+        binding: Binding,
+        resource: UpstreamResource,
+        ttl: Duration,
+    ) -> String {
         let token = self.state.store.issue(binding.clone(), resource, ttl);
         stream_path(&token, &binding)
     }
 
     pub fn configure_proof_paths(&self, paths: ProofPaths) {
-        *self.state.proof_paths.write().expect("proof paths poisoned") = paths;
+        *self
+            .state
+            .proof_paths
+            .write()
+            .expect("proof paths poisoned") = paths;
     }
 
     pub fn configure_fixture_mp4(&self, path: Option<PathBuf>) {
-        *self.state.fixture_mp4.write().expect("fixture path poisoned") = path;
+        *self
+            .state
+            .fixture_mp4
+            .write()
+            .expect("fixture path poisoned") = path;
     }
 
     pub fn active_streams(&self) -> usize {
         self.state.active_streams.load(Ordering::SeqCst)
     }
 
-    pub fn capability_count(&self) -> usize { self.state.store.len() }
-    pub fn max_capabilities(&self) -> usize { self.state.store.max_entries() }
+    pub fn capability_count(&self) -> usize {
+        self.state.store.len()
+    }
+
+    pub fn max_capabilities(&self) -> usize {
+        self.state.store.max_entries
+    }
 
     pub fn router(&self) -> Router {
         Router::new()
-            .route("/stream/{token}/{session}/{item}/{revision}/{resource}", get(stream_handler).head(stream_handler))
+            .route(
+                "/stream/{token}/{session}/{item}/{revision}/{resource}",
+                get(stream_handler).head(stream_handler),
+            )
             .route("/metrics", get(metrics_handler))
             .route("/proof/paths", get(proof_paths_handler))
             .route("/display", get(display_handler))
             .route("/secret-display", get(secret_display_handler))
-            .route("/fixture/protected.mp4", get(fixture_handler).head(fixture_handler))
+            .route(
+                "/fixture/protected.mp4",
+                get(fixture_handler).head(fixture_handler),
+            )
             .route("/healthz", get(|| async { "ok" }))
             .with_state(self.state.clone())
     }
@@ -269,21 +306,37 @@ async fn metrics_handler(State(state): State<Arc<GatewayState>>) -> Json<Metrics
     Json(Metrics {
         active_streams: state.active_streams.load(Ordering::SeqCst),
         capability_count: state.store.len(),
-        capability_limit: state.store.max_entries(),
+        capability_limit: state.store.max_entries,
     })
 }
 
 async fn proof_paths_handler(State(state): State<Arc<GatewayState>>) -> Json<ProofPaths> {
-    Json(state.proof_paths.read().expect("proof paths poisoned").clone())
+    Json(
+        state
+            .proof_paths
+            .read()
+            .expect("proof paths poisoned")
+            .clone(),
+    )
 }
 
 async fn display_handler(State(state): State<Arc<GatewayState>>) -> Response {
-    let path = state.proof_paths.read().expect("proof paths poisoned").mp4_path.clone();
+    let path = state
+        .proof_paths
+        .read()
+        .expect("proof paths poisoned")
+        .mp4_path
+        .clone();
     video_page(path, "R001 public MP4 proof")
 }
 
 async fn secret_display_handler(State(state): State<Arc<GatewayState>>) -> Response {
-    let path = state.proof_paths.read().expect("proof paths poisoned").secret_path.clone();
+    let path = state
+        .proof_paths
+        .read()
+        .expect("proof paths poisoned")
+        .secret_path
+        .clone();
     video_page(path, "R001 secret-boundary fixture")
 }
 
@@ -293,7 +346,8 @@ fn video_page(path: Option<String>, title: &str) -> Response {
     };
     Html(format!(
         "<!doctype html><meta charset=\"utf-8\"><title>{title}</title><video id=\"player\" controls muted preload=\"auto\" src=\"{path}\"></video>"
-    )).into_response()
+    ))
+    .into_response()
 }
 
 async fn fixture_handler(
@@ -303,12 +357,16 @@ async fn fixture_handler(
 ) -> Response {
     let authorized = headers
         .get(AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v == "Bearer r001-fixture-secret");
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == "Bearer r001-fixture-secret");
     if !authorized {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let path = state.fixture_mp4.read().expect("fixture path poisoned").clone();
+    let path = state
+        .fixture_mp4
+        .read()
+        .expect("fixture path poisoned")
+        .clone();
     let Some(path) = path else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -323,7 +381,7 @@ fn ranged_bytes_response(method: Method, request_headers: &HeaderMap, bytes: Vec
     let mut status = StatusCode::OK;
     let mut body = bytes;
     let mut content_range = None;
-    if let Some(range) = request_headers.get(RANGE).and_then(|v| v.to_str().ok()) {
+    if let Some(range) = request_headers.get(RANGE).and_then(|value| value.to_str().ok()) {
         if let Some((start, end)) = parse_single_range(range, len) {
             status = StatusCode::PARTIAL_CONTENT;
             content_range = Some(format!("bytes {start}-{end}/{len}"));
@@ -342,17 +400,29 @@ fn ranged_bytes_response(method: Method, request_headers: &HeaderMap, bytes: Vec
         builder = builder.header(CONTENT_RANGE, value);
     }
     builder
-        .body(if method == Method::HEAD { Body::empty() } else { Body::from(body) })
+        .body(if method == Method::HEAD {
+            Body::empty()
+        } else {
+            Body::from(body)
+        })
         .expect("fixture response")
 }
 
 fn parse_single_range(value: &str, len: usize) -> Option<(usize, usize)> {
     let range = value.strip_prefix("bytes=")?;
-    if range.contains(',') { return None; }
+    if range.contains(',') {
+        return None;
+    }
     let (start, end) = range.split_once('-')?;
     let start: usize = start.parse().ok()?;
-    if start >= len { return None; }
-    let end = if end.is_empty() { len - 1 } else { end.parse::<usize>().ok()?.min(len - 1) };
+    if start >= len {
+        return None;
+    }
+    let end = if end.is_empty() {
+        len - 1
+    } else {
+        end.parse::<usize>().ok()?.min(len - 1)
+    };
     (start <= end).then_some((start, end))
 }
 
@@ -368,15 +438,22 @@ async fn stream_handler(
     let binding = Binding::new(&session, &item, revision, &resource);
     let record = match state.store.get(&token, &binding) {
         Ok(record) => record,
-        Err(CapabilityError::NotFound) => return (StatusCode::NOT_FOUND, "INVALID_MEDIA_CAPABILITY").into_response(),
-        Err(CapabilityError::Expired) => return (StatusCode::GONE, "EXPIRED_MEDIA_CAPABILITY").into_response(),
-        Err(CapabilityError::BindingMismatch) => return (StatusCode::FORBIDDEN, "MEDIA_CAPABILITY_BINDING_MISMATCH").into_response(),
+        Err(CapabilityError::NotFound) => {
+            return (StatusCode::NOT_FOUND, "INVALID_MEDIA_CAPABILITY").into_response();
+        }
+        Err(CapabilityError::Expired) => {
+            return (StatusCode::GONE, "EXPIRED_MEDIA_CAPABILITY").into_response();
+        }
+        Err(CapabilityError::BindingMismatch) => {
+            return (StatusCode::FORBIDDEN, "MEDIA_CAPABILITY_BINDING_MISMATCH").into_response();
+        }
     };
 
-    let (upstream, final_url) = match fetch_upstream(&state, &record, &method, &request_headers).await {
-        Ok(value) => value,
-        Err(code) => return (StatusCode::BAD_GATEWAY, code).into_response(),
-    };
+    let (upstream, final_url) =
+        match fetch_upstream(&state, &record, &method, &request_headers).await {
+            Ok(value) => value,
+            Err(code) => return (StatusCode::BAD_GATEWAY, code).into_response(),
+        };
 
     if request_headers.contains_key(RANGE) && upstream.status() == StatusCode::OK {
         return (StatusCode::BAD_GATEWAY, "UPSTREAM_RANGE_UNSUPPORTED").into_response();
@@ -391,7 +468,9 @@ async fn stream_handler(
         return response_from_parts(status, response_headers, Body::empty());
     }
 
-    if record.resource.protocol == StreamProtocol::Hls && is_manifest(&final_url, upstream.headers()) {
+    if record.resource.protocol == StreamProtocol::Hls
+        && is_manifest(&final_url, upstream.headers())
+    {
         let bytes = match collect_limited(upstream, MAX_MANIFEST_BYTES).await {
             Ok(bytes) => bytes,
             Err(code) => return (StatusCode::BAD_GATEWAY, code).into_response(),
@@ -406,19 +485,23 @@ async fn stream_handler(
         };
         let mut headers = response_headers;
         headers.remove(CONTENT_LENGTH);
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/vnd.apple.mpegurl"));
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/vnd.apple.mpegurl"),
+        );
         return response_from_parts(status, headers, Body::from(rewritten));
     }
 
     let guard = ActiveGuard::new(state.active_streams.clone());
-    let mut bytes = upstream.bytes_stream();
-    let stream = try_stream! {
-        let _guard = guard;
-        while let Some(chunk) = bytes.next().await {
-            yield chunk?;
+    let upstream_stream = Box::pin(upstream.bytes_stream());
+    let guarded = stream::unfold((upstream_stream, guard), |(mut source, guard)| async move {
+        match source.next().await {
+            Some(Ok(chunk)) => Some((Ok::<Bytes, reqwest::Error>(chunk), (source, guard))),
+            Some(Err(error)) => Some((Err(error), (source, guard))),
+            None => None,
         }
-    };
-    response_from_parts(status, response_headers, Body::from_stream(stream))
+    });
+    response_from_parts(status, response_headers, Body::from_stream(guarded))
 }
 
 async fn fetch_upstream(
@@ -433,15 +516,24 @@ async fn fetch_upstream(
         let mut request = state.client.request(method.clone(), url.clone());
         request = request.headers(record.resource.public_headers.clone());
         request = request.headers(record.resource.secret_headers.clone());
-        if let Some(value) = request_headers.get(RANGE) { request = request.header(RANGE, value); }
-        if let Some(value) = request_headers.get(IF_RANGE) { request = request.header(IF_RANGE, value); }
-        let response = request.send().await.map_err(|_| "UPSTREAM_REQUEST_FAILED")?;
+        if let Some(value) = request_headers.get(RANGE) {
+            request = request.header(RANGE, value);
+        }
+        if let Some(value) = request_headers.get(IF_RANGE) {
+            request = request.header(IF_RANGE, value);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|_| "UPSTREAM_REQUEST_FAILED")?;
         if response.status().is_redirection() {
-            if hop == MAX_REDIRECTS { return Err("TOO_MANY_REDIRECTS"); }
+            if hop == MAX_REDIRECTS {
+                return Err("TOO_MANY_REDIRECTS");
+            }
             let location = response
                 .headers()
                 .get("location")
-                .and_then(|v| v.to_str().ok())
+                .and_then(|value| value.to_str().ok())
                 .ok_or("INVALID_REDIRECT")?;
             url = url.join(location).map_err(|_| "INVALID_REDIRECT")?;
             continue;
@@ -460,17 +552,21 @@ async fn validate_egress(url: &Url, scope: EgressScope) -> Result<(), &'static s
         EgressScope::FixtureLoopback => {
             let is_loopback = host.eq_ignore_ascii_case("localhost")
                 || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback());
-            if !is_loopback { return Err("EGRESS_TARGET_REJECTED"); }
+            if !is_loopback {
+                return Err("EGRESS_TARGET_REJECTED");
+            }
         }
         EgressScope::PublicWeb => {
             let port = url.port_or_known_default().ok_or("EGRESS_PORT_REJECTED")?;
             if let Ok(ip) = host.parse::<IpAddr>() {
-                if !is_public_ip(ip) { return Err("EGRESS_TARGET_REJECTED"); }
+                if !is_public_ip(ip) {
+                    return Err("EGRESS_TARGET_REJECTED");
+                }
             } else {
                 let addresses: Vec<_> = lookup_host((host, port))
                     .await
                     .map_err(|_| "EGRESS_DNS_FAILED")?
-                    .map(|addr| addr.ip())
+                    .map(|address| address.ip())
                     .collect();
                 if addresses.is_empty() || addresses.iter().any(|ip| !is_public_ip(*ip)) {
                     return Err("EGRESS_TARGET_REJECTED");
@@ -489,7 +585,7 @@ fn is_public_ip(ip: IpAddr) -> bool {
 }
 
 fn is_public_v4(ip: Ipv4Addr) -> bool {
-    let o = ip.octets();
+    let octets = ip.octets();
     !(ip.is_private()
         || ip.is_loopback()
         || ip.is_link_local()
@@ -497,43 +593,53 @@ fn is_public_v4(ip: Ipv4Addr) -> bool {
         || ip.is_unspecified()
         || ip.is_broadcast()
         || ip.is_documentation()
-        || o[0] == 0
-        || (o[0] == 100 && (64..=127).contains(&o[1]))
-        || (o[0] == 192 && o[1] == 0 && o[2] == 0)
-        || (o[0] == 198 && (o[1] == 18 || o[1] == 19))
-        || o[0] >= 240)
+        || octets[0] == 0
+        || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+        || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
+        || (octets[0] == 198 && (octets[1] == 18 || octets[1] == 19))
+        || octets[0] >= 240)
 }
 
 fn is_public_v6(ip: Ipv6Addr) -> bool {
-    let s = ip.segments();
+    let segments = ip.segments();
     !(ip.is_loopback()
         || ip.is_unspecified()
         || ip.is_multicast()
-        || (s[0] & 0xfe00) == 0xfc00
-        || (s[0] & 0xffc0) == 0xfe80
-        || (s[0] == 0x2001 && s[1] == 0x0db8))
+        || (segments[0] & 0xfe00) == 0xfc00
+        || (segments[0] & 0xffc0) == 0xfe80
+        || (segments[0] == 0x2001 && segments[1] == 0x0db8))
 }
 
 fn is_manifest(url: &Url, headers: &HeaderMap) -> bool {
-    if url.path().to_ascii_lowercase().ends_with(".m3u8") { return true; }
+    if url.path().to_ascii_lowercase().ends_with(".m3u8") {
+        return true;
+    }
     headers
         .get(CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("mpegurl") || v.contains("m3u"))
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains("mpegurl") || value.contains("m3u"))
 }
 
-async fn collect_limited(response: reqwest::Response, limit: usize) -> Result<Vec<u8>, &'static str> {
-    if response.content_length().is_some_and(|len| len as usize > limit) {
+async fn collect_limited(
+    response: reqwest::Response,
+    limit: usize,
+) -> Result<Vec<u8>, &'static str> {
+    if response
+        .content_length()
+        .is_some_and(|length| length as usize > limit)
+    {
         return Err("HLS_MANIFEST_TOO_LARGE");
     }
-    let mut out = Vec::new();
-    let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
+    let mut output = Vec::new();
+    let mut source = response.bytes_stream();
+    while let Some(chunk) = source.next().await {
         let chunk = chunk.map_err(|_| "HLS_MANIFEST_INTERRUPTED")?;
-        if out.len() + chunk.len() > limit { return Err("HLS_MANIFEST_TOO_LARGE"); }
-        out.extend_from_slice(&chunk);
+        if output.len() + chunk.len() > limit {
+            return Err("HLS_MANIFEST_TOO_LARGE");
+        }
+        output.extend_from_slice(&chunk);
     }
-    Ok(out)
+    Ok(output)
 }
 
 async fn rewrite_manifest(
@@ -542,7 +648,7 @@ async fn rewrite_manifest(
     base: &Url,
     manifest: &str,
 ) -> Result<String, &'static str> {
-    let mut out = String::with_capacity(manifest.len() + 128);
+    let mut output = String::with_capacity(manifest.len() + 128);
     for line in manifest.lines() {
         let rewritten = if line.trim().is_empty() {
             String::new()
@@ -551,10 +657,10 @@ async fn rewrite_manifest(
         } else {
             issue_hls_child(state, parent, base, line.trim()).await?
         };
-        out.push_str(&rewritten);
-        out.push('\n');
+        output.push_str(&rewritten);
+        output.push('\n');
     }
-    Ok(out)
+    Ok(output)
 }
 
 async fn rewrite_uri_attribute(
@@ -563,14 +669,22 @@ async fn rewrite_uri_attribute(
     base: &Url,
     line: &str,
 ) -> Result<String, &'static str> {
-    let Some(start) = line.find("URI=\"") else { return Ok(line.to_string()); };
+    let Some(start) = line.find("URI=\"") else {
+        return Ok(line.to_string());
+    };
     let value_start = start + 5;
     let rest = &line[value_start..];
-    let Some(end_rel) = rest.find('"') else { return Err("INVALID_HLS_URI_ATTRIBUTE"); };
-    let value_end = value_start + end_rel;
-    let target = &line[value_start..value_end];
-    let rewritten = issue_hls_child(state, parent, base, target).await?;
-    Ok(format!("{}{}{}", &line[..value_start], rewritten, &line[value_end..]))
+    let Some(end_relative) = rest.find('"') else {
+        return Err("INVALID_HLS_URI_ATTRIBUTE");
+    };
+    let value_end = value_start + end_relative;
+    let rewritten = issue_hls_child(state, parent, base, &line[value_start..value_end]).await?;
+    Ok(format!(
+        "{}{}{}",
+        &line[..value_start],
+        rewritten,
+        &line[value_end..]
+    ))
 }
 
 async fn issue_hls_child(
@@ -586,7 +700,10 @@ async fn issue_hls_child(
     } else {
         StreamProtocol::HttpFile
     };
-    let child_id = format!("hls-{}", state.store.sequence.fetch_add(1, Ordering::Relaxed));
+    let child_id = format!(
+        "hls-{}",
+        state.store.sequence.fetch_add(1, Ordering::Relaxed)
+    );
     let binding = Binding::new(
         &parent.binding.session_id,
         &parent.binding.item_id,
@@ -594,7 +711,9 @@ async fn issue_hls_child(
         &child_id,
     );
     let ttl = parent.expires_at.saturating_duration_since(Instant::now());
-    if ttl.is_zero() { return Err("EXPIRED_MEDIA_CAPABILITY"); }
+    if ttl.is_zero() {
+        return Err("EXPIRED_MEDIA_CAPABILITY");
+    }
     let token = state.store.issue(
         binding.clone(),
         UpstreamResource {
@@ -610,28 +729,45 @@ async fn issue_hls_child(
 }
 
 fn filtered_response_headers(headers: &HeaderMap) -> HeaderMap {
-    let mut out = HeaderMap::new();
-    for name in [CONTENT_TYPE, CONTENT_LENGTH, CONTENT_RANGE, ACCEPT_RANGES, ETAG, LAST_MODIFIED, CACHE_CONTROL] {
-        if let Some(value) = headers.get(&name) { out.insert(name, value.clone()); }
+    let mut output = HeaderMap::new();
+    for name in [
+        CONTENT_TYPE,
+        CONTENT_LENGTH,
+        CONTENT_RANGE,
+        ACCEPT_RANGES,
+        ETAG,
+        LAST_MODIFIED,
+        CACHE_CONTROL,
+    ] {
+        if let Some(value) = headers.get(&name) {
+            output.insert(name, value.clone());
+        }
     }
-    out
+    output
 }
 
 fn response_from_parts(status: StatusCode, headers: HeaderMap, body: Body) -> Response {
-    let mut response = Response::builder().status(status).body(body).expect("response");
+    let mut response = Response::builder()
+        .status(status)
+        .body(body)
+        .expect("response");
     *response.headers_mut() = headers;
     response
 }
 
 struct ActiveGuard(Arc<AtomicUsize>);
+
 impl ActiveGuard {
     fn new(counter: Arc<AtomicUsize>) -> Self {
         counter.fetch_add(1, Ordering::SeqCst);
         Self(counter)
     }
 }
+
 impl Drop for ActiveGuard {
-    fn drop(&mut self) { self.0.fetch_sub(1, Ordering::SeqCst); }
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 #[cfg(test)]
@@ -648,7 +784,10 @@ mod unit {
             public_headers: BTreeMap::from([("Authorization".into(), "Bearer leak".into())]),
             upstream_access_ref: None,
         };
-        assert!(matches!(GatewayService::resource_from_resolved(&stream, EgressScope::PublicWeb), Err(GatewayError::SecretHeader)));
+        assert!(matches!(
+            GatewayService::resource_from_resolved(&stream, EgressScope::PublicWeb),
+            Err(GatewayError::SecretHeader)
+        ));
     }
 
     #[test]

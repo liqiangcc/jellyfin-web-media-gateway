@@ -13,9 +13,31 @@ on:
       - 'docs/**'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  autoformat:
+    name: Temporary trusted-branch rustfmt
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Apply rustfmt and push only formatting
+        run: |
+          cargo fmt --all
+          if git diff --quiet; then
+            echo 'No rustfmt changes required.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Cargo.toml gateway-core site-adapter-api plugins/generic-direct
+          git commit -m 'style: apply rustfmt for R001'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+
   deterministic:
     name: J1 deterministic x64
     runs-on: ubuntu-latest
@@ -41,6 +63,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+      - name: Install browser fixture dependency
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
       - name: Runtime versions
         run: |
           rustc --version
@@ -66,7 +90,7 @@ jobs:
           BASE_URL=http://127.0.0.1:8787 node scripts/browser-proof.mjs
       - name: Verify no secret leaked to artifacts/log
         run: |
-          ! grep -R "r001-fixture-secret" browser-proof.json server.log
+          ! grep -R 'r001-fixture-secret' browser-proof.json server.log
           curl -fsS http://127.0.0.1:8787/metrics | tee metrics.json
       - uses: actions/upload-artifact@v4
         if: always()
