@@ -7,20 +7,20 @@ GitHub Issue: #3
 Parent Goal / Research Item: R001 / Core Feasibility / Phase 0A-1 Media Path Proof
 Task / Research ID: R001
 Task kind: combined
-Publication base commit: 07b62e7eb0197a0306be9ffd69230b58eff34724
+Publication / integration base commit for Codex-first republish: ad18bd35ac17d28abc0af1d4a1c7d1c2b10950df
 Candidate commit: n/a (live state belongs in Issue)
 Session bootstrap prompt: docs/tasks/3-r001-media-path-proof/prompt.md
-Downstream handoff profile: docs/tasks/handoffs/web-gpt.md
-Preferred worker: web
-Eligible worker environments: env:web-gpt
+Downstream handoff profile: docs/tasks/handoffs/cloud.md
+Preferred worker: cloud
+Eligible worker environments: env:cloud
 Required capabilities: github-read-write, repository-static-analysis, code-authoring, automated-build, automated-test, rust-build, rust-test, browser-automation
 Hard publication dependencies: none
-Parallel sibling: Issue #2 / R007
+Accepted concurrency authority: Issue #2 / R007 is status:done and merged to main
 ```
 
 > Live status, owner, candidate, runs and results belong in Issue #3. This file does not store live Task state.
 >
-> R001 and R007 may execute in parallel. R001 owns media-path proof; R007 owns Playback concurrency/revision/handoff authority semantics. R001 must not redefine or bypass R007's domain.
+> R001 owns media-path proof. R007 owns Playback concurrency/revision/handoff authority semantics and is already accepted on `main`; R001 must integrate with, not redefine or bypass, that domain.
 
 ## Goal
 
@@ -58,15 +58,15 @@ Canonical R001 success requires:
 - Jellyfin disabled without breaking the path;
 - no evidence of unbounded media buffering/cache growth.
 
-`docs/mvp-plan.md` now distinguishes Task scheduling from Gate aggregation: R001 and R007 are parallelizable when their authority boundaries remain separate.
+`docs/mvp-plan.md` distinguishes Task scheduling from Gate aggregation. R001 was allowed to execute before R007 closure; now R007 is accepted and any final R001 Candidate must integrate with the accepted current-main Playback contract before acceptance.
 
 ## Dependency Decision
 
 ### Hard dependency: none
 
-R001 does **not** require R007 Final Acceptance to begin or complete its own media-path proof.
+R001 did **not** require R007 Final Acceptance to begin its own media-path proof, and R007 is now completed.
 
-Reason:
+Authority separation remains:
 
 ```text
 R001 authority
@@ -87,17 +87,15 @@ resource_id
 
 only as opaque capability-binding identities. It must not implement or redefine the Playback mutation state machine merely to obtain those identifiers.
 
-### Parallel integration rule
+### Integration rule after R007 acceptance
 
-If R007 later lands interfaces useful to R001:
+The final R001 Candidate must be based on / integrated with current `main`, including accepted R007 semantics:
 
-- rebase/adapt R001 candidate before merge when needed;
+- rebase/adapt the existing R001 candidate as needed;
 - do not lower R001 Success Criteria;
 - do not rewrite R007 concurrency semantics inside R001;
-- shared root `Cargo.toml`/workspace conflicts are normal integration work, not a Task blocker;
-- if R007 Evidence genuinely invalidates an R001 assumption, Coordinator may return R001 to `status:draft` for Contract revision based on that concrete Evidence.
-
-A speculative future interface change is not a publication dependency.
+- shared root `Cargo.toml`/workspace conflicts are normal integration work, not a business Task blocker;
+- any previous R001 Evidence remains historical Evidence for its exact Candidate SHA and must be rerun when integration changes the Candidate.
 
 ## Task Decomposition Decision
 
@@ -105,7 +103,7 @@ A speculative future interface change is not a publication dependency.
 Verification mode: inline
 Linked implementation task: n/a
 Linked verification task: n/a
-Decision reason: R001 implementation and required browser/HTTP integration evidence are portable and can be produced by Web Worker + GitHub-hosted CI. Phone thermal/resource proof is R003 and physical-TV behavior is R002, so no independent target Evidence Authority is required for R001 acceptance.
+Decision reason: R001 implementation and required browser/HTTP integration evidence are portable and can be produced by Codex Cloud Worker + GitHub-hosted CI. Phone thermal/resource proof is R003 and physical-TV behavior is R002, so no independent target Evidence Authority is required for R001 acceptance.
 ```
 
 Do not split MP4, HLS, browser, x64 and generic ARM64 into separate business Tasks merely because they use different Jobs.
@@ -162,7 +160,7 @@ Expected components/capabilities:
 - public/non-DRM acceptance source smoke;
 - meaningful GitHub-hosted CI/browser jobs.
 
-If no Rust workspace exists on the candidate branch, R001 may establish the minimum workspace/crates needed for its Scope. It must not wait solely for R007 to create root Cargo metadata. If both candidates later touch workspace metadata, rebase/merge normally.
+Use the current accepted root workspace/Core state rather than establishing a competing workspace. If a prior R001 candidate was based before R007 landed, integrate/rebase it normally and preserve both domains.
 
 ### Verification Claims
 
@@ -182,8 +180,8 @@ C10: canonical docs and executable behavior agree on the proven R001 path and un
 ## Routing Rationale
 
 ```text
-Implementation / orchestration
-→ Web ChatGPT Worker + GitHub connector
+Implementation / repository integration / orchestration
+→ Codex Cloud Worker (`env:cloud`)
 
 Portable HTTP/unit/contract verification
 → GitHub-hosted x64
@@ -204,15 +202,17 @@ TV autoplay/remote UX
 → NOT R001 acceptance; belongs to R002
 ```
 
-INFRA-001 and R007 are not publication dependencies for R001.
+Codex Cloud is the Worker, not the verification Runner. Required runtime/browser Evidence must remain tied to exact Candidate SHA through GitHub Actions.
 
 ## Preconditions
 
 - current canonical docs and this Task Contract are readable from GitHub;
+- current `main` includes accepted R007 semantics and must be integrated before final R001 acceptance;
+- Worker reads all Issue #3 history and evaluates any existing candidate PR before creating replacement work;
 - Rust stable/toolchain rules from current repository state are followed;
 - public acceptance source is legal, non-DRM and suitable for automated/recorded verification;
 - deterministic fixture coverage exists for protocol/security/failure semantics; external public host behavior cannot be the only proof;
-- if R007 is executing concurrently, R001 does not modify Playback command/revision/handoff semantics.
+- R001 does not modify Playback command/revision/media-refresh/handoff semantics accepted by R007.
 
 ## In Scope
 
@@ -229,11 +229,12 @@ INFRA-001 and R007 are not publication dependencies for R001.
 - invalid/expired/cross-session/cross-item/cross-resource token replay tests;
 - bounded streaming/abort cleanup tests;
 - public source acceptance smoke;
+- integration of R001 work with the accepted current-main workspace/Playback contract;
 - docs updates driven by Evidence.
 
 ## Out of Scope
 
-- PlaybackSession command/revision/handoff implementation owned by R007;
+- PlaybackSession command/revision/handoff implementation owned by accepted R007;
 - R002 TV audible autoplay / physical remote UX;
 - R003 target-phone CPU/RSS/temperature/60-minute resource acceptance;
 - Jellyfin DisplayAdapter;
@@ -260,7 +261,7 @@ R001 must still obey existing Egress/Secret invariants; “R008 is separate” i
 - redirect/egress handling must not silently bypass central EgressPolicy direction.
 - Jellyfin absence cannot block Web Display.
 - no large-media default disk cache or full-object buffering.
-- R001 must not create a second Playback authority or redefine R007 concurrency semantics.
+- R001 must not create a second Playback authority or redefine accepted R007 concurrency semantics.
 
 ## Media Capability Contract to Prove
 
@@ -413,8 +414,8 @@ Each Attempt must record in Issue #3:
 Role: implementation | verification | combined
 Task / Claim: R001 / C1..C10
 Attempt:
+Worker / Orchestrator:
 Job ID: J1 | J2 | J3 | J4 | J5
-Orchestrator:
 Execution plane:
 Runner class / image:
 Execution host:
@@ -423,7 +424,7 @@ OS / architecture:
 Rust toolchain:
 Browser/version (J2):
 Public source type/host (J3; no sensitive signed query):
-Publication base commit:
+Integration base commit:
 Candidate commit:
 Workflow / run / job:
 Commands / selectors:
@@ -458,15 +459,13 @@ BLOCKED examples:
 - GitHub-hosted browser/runtime required for J2 is unavailable after reasonable retry;
 - no suitable legal public non-DRM acceptance source is available at execution time;
 - canonical Egress/Secret contracts conflict in a way requiring Coordinator design revision;
-- concrete new R007 Evidence directly invalidates an R001 assumption and requires Contract revision.
-
-`R007 not finished` by itself is **not** a blocker.
+- current-main integration exposes a concrete contract conflict that cannot be resolved without changing R001 Scope/Claims.
 
 Do not lower Success Criteria to manufacture PASS.
 
 ## Deliverables
 
-- R001 media path implementation;
+- R001 media path implementation integrated with current main;
 - minimal SiteAdapter/Registry + `generic-direct` path;
 - Media Gateway direct HTTP proxy and scoped media capability;
 - HLS concrete-result implementation/tests;
@@ -483,23 +482,23 @@ Do not lower Success Criteria to manufacture PASS.
 
 Follow `docs/tasks/issue-lifecycle-protocol.md`.
 
-Normal implementation/test bugs or insufficient Evidence keep the same Task:
+Normal implementation/test/integration bugs or insufficient Evidence keep the same Task:
 
 ```text
 Attempt N
 → [EXECUTION REPORT]
 → Coordinator REVISE
 → status:ready
-→ next env:web-gpt handoff
+→ next env:cloud / Codex handoff
 → Attempt N+1
 ```
 
-If concrete R007/R001 Evidence changes Scope/Claims/Success Criteria/Evidence Authority, return to `status:draft`, revise Contract/canonical docs and republish.
+If concrete Evidence changes Scope/Claims/Success Criteria/Evidence Authority, return to `status:draft`, revise Contract/canonical docs and republish.
 
 ## Completion Protocol
 
 Worker never closes Issue #3.
 
-R001 completes only when Coordinator reviews required J1-J4 Evidence, accepts C1-C10, posts `[FINAL ACCEPTANCE]`, sets `status:done`, and closes Issue #3.
+R001 completes only when Coordinator reviews the final integrated Candidate and required J1-J4 Evidence, accepts C1-C10, posts `[FINAL ACCEPTANCE]`, sets `status:done`, and closes Issue #3.
 
-Closing R001 proves Web-only direct media-path feasibility. It does not prove R002 TV autoplay, R003 phone resource baseline, R004 Jellyfin, R005 real site plugin behavior, R006 Native Panel, R007 Playback concurrency closure, R008 full security boundary, or the overall Core Feasibility Gate.
+Closing R001 proves Web-only direct media-path feasibility. It does not prove R002 TV autoplay, R003 phone resource baseline, R004 Jellyfin, R005 real site plugin behavior, R006 Native Panel, R008 full security boundary, or the overall Core Feasibility Gate. R007 Playback concurrency is an already-accepted separate prerequisite authority, not a result claimed by R001.
