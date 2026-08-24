@@ -13,6 +13,24 @@ Expected worker: web | wsl | windows | cloud | ubuntu-arm64 | manual-tv | capabi
 Expected environment label: env:<environment>
 ```
 
+## Preferred Codex Entry
+
+仓库提供 repo-scoped Codex Skill：
+
+```text
+$task-worker
+```
+
+推荐从新 Codex 会话直接执行：
+
+```text
+$task-worker Execute Issue #<number> using `docs/tasks/<issue>-<slug>/prompt.md`.
+```
+
+`$task-worker` 负责通用的 claim / Attempt / feedback / stop 协议；本 `prompt.md` 负责当前 Task 的具体 bootstrap。Skill 不能覆盖本 Task Contract。
+
+如果当前客户端无法发现 repo Skill，仍按下面的 Start Protocol 手动执行；不要因为 Skill 不可见而绕过 Task 生命周期。
+
 ## Start Protocol
 
 1. 实际读取当前仓库，不根据聊天背景猜测状态。
@@ -59,6 +77,9 @@ GitHub Issue fields / labels
 
 GitHub Issue comments
 → Attempt / Blocker / Review / Acceptance append-only history
+
+Codex Skill
+→ 通用执行算法，不拥有 Task Scope
 ```
 
 本 `prompt.md` 不得重新定义：
@@ -89,7 +110,13 @@ GitHub Issue comments
 
 本 Task 通过 Publication Gate 并进入 `status:ready` 后，Coordinator 必须把一个**可直接复制给下游 Worker 新会话**的入口提示词交给用户。
 
-推荐最短形式：
+Codex 优先形式：
+
+```text
+$task-worker Execute Issue #<number> using `docs/tasks/<issue>-<slug>/prompt.md`.
+```
+
+兼容 fallback：
 
 ```text
 读取 `AGENTS.md` 和 `docs/tasks/<issue>-<slug>/prompt.md`，执行当前 Task。
@@ -102,6 +129,7 @@ Issue: #<number>
 Worker: <expected worker>
 Environment: env:<environment>
 Prompt: docs/tasks/<issue>-<slug>/prompt.md
+Skill: $task-worker
 ```
 
 要求：
