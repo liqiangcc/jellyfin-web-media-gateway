@@ -584,6 +584,45 @@ ready labels/state read-back PASS
 target worker queue search PASS
 ```
 
+### 15.6 Publication Handoff — 发布后必须给出下游执行入口
+
+当 15.5 的发布证明全部 PASS 后，Coordinator 还必须在当前聊天中向用户给出一个**可直接复制到下游 Worker 新会话**的入口提示词。
+
+最小 handoff 信息：
+
+```text
+Task: <real task title>
+Issue: #<real issue number>
+Worker: <real expected worker>
+Environment: env:<real environment>
+Prompt: docs/tasks/<real-issue>-<real-slug>/prompt.md
+```
+
+并给出一条可直接复制执行的入口，例如：
+
+```text
+读取 `AGENTS.md` 和 `docs/tasks/<real-issue>-<real-slug>/prompt.md`，执行当前 Task。
+```
+
+要求：
+
+- 所有 Issue、Worker、Environment、路径必须来自**发布后的 GitHub read-back**，不得保留模板 placeholder；
+- 入口提示词必须指向已通过 read-back 的真实 `prompt.md`；
+- 如果 Task 有特殊但不改变 Scope 的启动前置条件，可在入口后补一条简短提醒；
+- 不要重新把完整 `task.md` 粘进聊天；下游 Worker 应从仓库读取 Task Contract；
+- 如果 Post-publish Queue Verification 失败，不得给出下游执行入口；
+- 如果一次发布多个独立 Task，每个 Task 分别给出自己的下游入口，避免用户猜测哪个 Prompt 对应哪个 Worker。
+
+因此完整发布闭环是：
+
+```text
+materialize
+→ read-back verify
+→ status:ready
+→ queue verify
+→ output downstream handoff entry
+```
+
 原则：
 
-> **Plan is not execution. Write success is not publication. Publication requires independent read-back from GitHub.**
+> **Plan is not execution. Write success is not publication. Publication requires independent read-back from GitHub, and publication handoff is incomplete until the downstream entry prompt is delivered.**
