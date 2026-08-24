@@ -101,6 +101,31 @@ await waitForState(
   'Fullscreen rejection telemetry',
 );
 
+// Exercise the real visibilitychange listener with a synthetic state change.
+// This proves hosted probe mechanics only; physical-TV visibility behavior is
+// intentionally left to Issue #7.
+await page.evaluate(() => {
+  const original = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+  const setVisibility = value => Object.defineProperty(document, 'visibilityState', {
+    configurable: true,
+    get: () => value,
+  });
+  setVisibility('hidden');
+  document.dispatchEvent(new Event('visibilitychange'));
+  setVisibility('visible');
+  document.dispatchEvent(new Event('visibilitychange'));
+  if (original) Object.defineProperty(document, 'visibilityState', original);
+  else delete document.visibilityState;
+});
+await waitForState(
+  state => state.telemetry.some(item => item.kind === 'visibility' && item.result === 'hidden'),
+  'synthetic hidden visibilitychange telemetry',
+);
+await waitForState(
+  state => state.telemetry.some(item => item.kind === 'visibility' && item.result === 'visible'),
+  'synthetic visible visibilitychange telemetry',
+);
+
 // Abort one polling request, then allow the next one through to prove the
 // equivalent reconnect transport is observable and recovers.
 let failNextPoll = true;
@@ -145,6 +170,8 @@ for (const commandId of ['r002-remote-before-activation', 'r002-remote-after-act
 }
 if (evidence.fullscreen.length === 0 || !evidence.fullscreen.some(item => item.result === 'reject')) throw new Error('fullscreen result/degradation was not observable');
 if (!evidence.lifecycle.some(item => item.result === 'ready' || item.result === 'pageshow')) throw new Error('lifecycle telemetry was not observed');
+if (!evidence.lifecycle.some(item => item.kind === 'visibility' && item.result === 'hidden')) throw new Error('hidden visibilitychange telemetry was not observed');
+if (!evidence.lifecycle.some(item => item.kind === 'visibility' && item.result === 'visible')) throw new Error('visible visibilitychange telemetry was not observed');
 if (!evidence.transport.some(item => item.result === 'connected') || !evidence.transport.some(item => item.result === 'reconnecting')) throw new Error('remote transport connection/recovery was not observed');
 if (JSON.stringify(evidence).match(/(Bearer\s+|Cookie|r001-fixture-secret)/i)) throw new Error('secret-like material appeared in probe evidence');
 
@@ -155,6 +182,6 @@ console.log(JSON.stringify({
   commands: evidence.commands.map(command => ({ sequence: command.command.sequence, duplicate: command.duplicate })),
   playAttempts: evidence.playAttempts.map(attempt => ({ command_id: attempt.command_id, result: attempt.result, error_name: attempt.error_name || null })),
   fullscreen: evidence.fullscreen.map(item => item.result),
-  lifecycle: evidence.lifecycle.map(item => item.result),
+  lifecycle: evidence.lifecycle.map(item => `${item.kind}:${item.result}`),
   transport: evidence.transport.map(item => item.result),
 }, null, 2));
