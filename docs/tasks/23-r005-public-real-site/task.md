@@ -13,8 +13,8 @@ Downstream handoff profile: docs/tasks/handoffs/cloud.md
 Preferred worker: cloud
 Eligible worker environments after publication: env:cloud
 Required capabilities: github-read-write, repository-static-analysis, rust-code-authoring, automated-test, real-http-smoke, plugin-contract-design, evidence-authoring
-Hard publication dependencies: Issue #14/R008 Final Acceptance merged; Coordinator freezes one concrete legal public non-DRM target site/sample before publication
-Accepted upstream authority: Issue #2/R007, Issue #3/R001
+Hard publication dependencies: none beyond accepted Issue #2/R007 and Issue #3/R001
+Accepted upstream authority: Issue #2/R007, Issue #3/R001; canonical Egress/Secret rules remain authoritative while Issue #14/R008 integrates in parallel
 ```
 
 > Live status, selected target site/sample, Attempt, candidate/PR, runs and R005 result belong in Issue #23.
@@ -42,6 +42,24 @@ real public URL
 Canonical R005 asks whether a real source site validates the generic Plugin Boundary rather than merely working with synthetic/public generic fixtures. The canonical order explicitly requires public content first; authenticated content begins only after the public chain succeeds.
 
 R005 is not a Web-only Core P0 publication blocker, but it is required before claiming that the Site Plugin Boundary has been validated by a real site.
+
+Issue #14/R008 may execute in parallel. Its security implementation is not a hard publication dependency for writing the site plugin or proving SourceLocator/ResolvedMedia/navigation behavior. The final R005 candidate must never invent a plugin-local Egress/Secret bypass; if accepted R008 lands before final R005 verification, R005 must integrate it and rerun affected exact-SHA security/integration evidence.
+
+## Frozen Target Site / Sample
+
+Coordinator-frozen first real site:
+
+```text
+site: Bilibili
+mode: public / no-login / non-DRM only
+sample URL: https://www.bilibili.com/video/BV14V411W7r5/
+sample stable identifier: BV14V411W7r5
+sample purpose: public official BILIBILI MACRO LINK 2021 replay with four visible parts, suitable for real resolution plus continuous-content navigation
+```
+
+The Worker must not silently replace this sample. If it becomes unavailable, login-gated, DRM/access-controlled, region-blocked for the execution environment, or otherwise unsuitable, report the concrete condition; Coordinator decides whether to revise the sample.
+
+Do not commit media payloads or resolved signed media URLs. The stable page/BVID selector is Evidence metadata, not authorization to bulk-download content.
 
 ## Task Decomposition Decision
 
@@ -73,13 +91,20 @@ No phone/TV runner is required.
 
 Before Issue #23 may become `status:ready`:
 
-1. Issue #14 / R008 has Coordinator Final Acceptance and its accepted public-web Egress/Secret implementation is merged to main.
-2. Coordinator records one exact target site and one or more evidence-safe public sample locators/URLs.
+1. Issue #2 / R007 and Issue #3 / R001 remain Coordinator-accepted.
+2. Coordinator records one exact target site and evidence-safe public sample selector in Issue/task.md.
 3. Selected content is legal to access, public/no-login, non-DRM, and does not require bypassing access controls, regional restrictions or paid authorization.
 4. The sample is suitable for bounded repeatable resolution without committing copyrighted media payloads to the repository.
-5. Current main still contains accepted R001/R007 contracts and no unresolved contradiction makes this Task Contract stale.
+5. Current main has no unresolved canonical contradiction that makes this Task Contract stale.
 
-The target site/sample is live publication metadata and must be recorded in Issue #23; do not guess it from chat history.
+Issue #14 / R008 is **not** a hard publication dependency. Instead:
+
+- canonical `public_web` Egress/Secret rules apply from the start;
+- R005 must not add a private-network exception or plugin-local security bypass;
+- if #14 Final Acceptance merges before R005 final exact-SHA verification, R005 must integrate accepted R008 and rerun affected J2 evidence;
+- if #14 is still in progress when an R005 Attempt reaches review, Coordinator decides freshness/retest needs from live GitHub state rather than assuming the parallel candidate is accepted.
+
+The target site/sample is live publication metadata and must also be recorded in Issue #23; do not guess it from chat history.
 
 ## In Scope
 
@@ -88,10 +113,10 @@ The target site/sample is live publication metadata and must be recorded in Issu
 - versioned opaque SourceLocator encoding/decoding owned by the plugin;
 - public real-site resolution to current generic `ResolvedMedia` or explicit unsupported/error result;
 - protocol/public-header/media-expiry mapping;
-- previous/next or equivalent continuous-content navigation when the selected sample naturally supports it;
+- previous/next or equivalent continuous-content navigation for the frozen multi-part sample;
 - same-locator retry/re-resolve after expiry/refresh condition;
 - R007 freshness integration so stale async resolve cannot replace newer media/item state;
-- accepted R008 `public_web` egress boundary and Secret-header validation;
+- canonical/accepted central `public_web` egress boundary and Secret-header validation;
 - deterministic local fixtures for parser/schema/error/navigation behavior;
 - bounded real-site smoke with exact candidate identity and evidence-safe logging;
 - durable `docs/research/r005-real-site.md` result/evidence mapping.
@@ -105,7 +130,7 @@ The target site/sample is live publication metadata and must be recorded in Issu
 - storing passwords, login input or account state;
 - implementing site-specific logic in Core;
 - changing R007 command/revision/media-generation ownership;
-- weakening R008 EgressPolicy for site compatibility;
+- weakening central EgressPolicy for site compatibility;
 - adding a generic open proxy or exposing upstream Secret to Display;
 - bulk crawling/downloading or retaining media payloads.
 
@@ -115,30 +140,31 @@ The target site/sample is live publication metadata and must be recorded in Issu
 2. Core routes through `SiteAdapterRegistry`; no `if site == ...` or concrete domain/content-ID parsing in Core.
 3. `SourceLocator.opaque_payload` is plugin-owned/versioned and contains no Cookie/Authorization/account Secret.
 4. `ResolvedMedia.public_headers` contains no Secret; sensitive access is not invented for this public-only Task.
-5. All real network egress uses accepted R008 `public_web` policy; plugin cannot declare private exceptions.
+5. All real network egress follows canonical central `public_web` policy; plugin cannot declare private exceptions.
 6. URL expiry/re-resolve consumes accepted R007 item/media freshness semantics; an old resolve result cannot overwrite a newer item/media generation.
 7. Failure/unsupported/DRM states are explicit; no fallback silently bypasses Plugin or security boundaries.
+8. R005 must remain integrable with parallel R008; if accepted R008 changes the central security API, R005 adapts at the plugin/Core contract boundary rather than preserving a plugin-specific bypass.
 
 ## Claims
 
 ```text
 C1 — Registry/plugin boundary
-The selected real-site URL is recognized/routed by SiteAdapterRegistry to the concrete plugin without concrete-site branches in Core.
+The selected Bilibili URL is recognized/routed by SiteAdapterRegistry to the concrete plugin without concrete-site branches in Core.
 
 C2 — SourceLocator opacity and recoverability
 The plugin produces a versioned opaque SourceLocator that can round-trip/retry and does not contain Secret/account material. Core does not parse the opaque payload.
 
 C3 — Real ResolvedMedia mapping
-A real public sample resolves to the current generic ResolvedMedia shape with protocol, public headers, media-expiry and explicit unsupported/error semantics preserved. DRM/access-control conditions are rejected rather than bypassed.
+The frozen public sample resolves to the current generic ResolvedMedia shape with protocol, public headers, media-expiry and explicit unsupported/error semantics preserved. DRM/access-control conditions are rejected rather than bypassed.
 
 C4 — Navigation contract
-For a selected sample with natural previous/next/queue semantics, the plugin returns SourceLocator-based navigation without Core understanding site identifiers. If the frozen sample/site cannot meaningfully exercise navigation, Publication Gate must predeclare this C4 as N/A and require a second public sample that can, or split navigation proof before acceptance.
+The frozen four-part sample proves previous/next or equivalent SourceLocator-based navigation without Core understanding BVID/page/part identifiers.
 
 C5 — Re-resolve / freshness
 A refresh/expiry path can re-resolve the same SourceLocator, and deterministic interleaving tests prove stale old resolve results cannot overwrite the current R007 item/media generation.
 
 C6 — Egress / Secret boundary
-Real-site and fixture resolution uses accepted R008 public-web egress; no private/loopback exception, Cookie/Authorization in locator/public headers, or browser-visible upstream Secret is introduced.
+Real-site and fixture resolution uses the canonical central public-web boundary; no private/loopback exception, Cookie/Authorization in locator/public headers, or browser-visible upstream Secret is introduced. If accepted R008 lands before final verification, its relevant suite must pass on the exact final R005 candidate.
 
 C7 — Failure observability
 Representative invalid URL/content-not-found/upstream-denied/unsupported/parse/schema errors map to stable plugin/Core error semantics without leaking sensitive full URLs/query material.
@@ -160,7 +186,7 @@ At minimum cover:
 - locator Secret sentinel rejection;
 - deterministic public resolution fixture;
 - ResolvedMedia schema/public headers/expiry;
-- navigation mapping;
+- multi-part navigation mapping;
 - error mapping;
 - re-resolve freshness/stale result behavior integrated with accepted R007 semantics;
 - no concrete-site knowledge added outside allowed plugin/test/doc paths.
@@ -171,40 +197,41 @@ GitHub-hosted x64, exact Candidate SHA.
 
 Required:
 
-- accepted R008 public-web/Secret relevant regressions;
+- current central public-web/Secret relevant regressions from the integrated repository;
 - accepted R001 media capability regressions affected by the new plugin output;
 - accepted R007 freshness regressions;
+- if #14/R008 is Final Accepted before final verification, accepted R008 relevant regressions on the exact final R005 candidate;
 - sentinel scan showing no Cookie/Authorization/account/signature value in accepted logs/artifacts.
 
 ### J3 — Bounded real-site smoke
 
-Use only the Coordinator-frozen public sample.
+Use only the Coordinator-frozen Bilibili sample `BV14V411W7r5`.
 
 Record:
 
 - UTC time;
 - exact Candidate SHA;
 - selected site/plugin/version;
-- evidence-safe input identifier (redact unnecessary query/signature material);
+- evidence-safe input identifier (`BV14V411W7r5` / public page URL; redact unnecessary query/signature material);
 - resolution outcome/protocol;
 - SourceLocator version/opaque hash or redacted representation, never account Secret;
 - ResolvedMedia protocol/expiry/capability-relevant summary without publishing unnecessary signed media URL;
-- navigation result where applicable;
+- four-part navigation result;
 - retry/re-resolve result where safely reproducible;
 - HTTP/status/error classification;
 - tool/runtime versions used by plugin implementation.
 
-A transient public-site outage may produce BLOCKED/failed smoke Evidence; it must not be rewritten as contract PASS from fixtures alone.
+A transient public-site outage, anti-bot challenge, login wall, or sample change may produce BLOCKED/failed smoke Evidence; it must not be rewritten as contract PASS from fixtures alone and must not be bypassed with CAPTCHA/access-control workarounds.
 
 ## Success Criteria
 
 Task is complete when:
 
-1. one real public site is implemented through `plugins/<site>/` and Registry with no Core site special case;
-2. C1-C7 have required deterministic Evidence and C3 has real-site smoke Evidence;
-3. SourceLocator supports retry/re-resolve and required navigation without leaking site semantics into Core;
+1. Bilibili public content is implemented through `plugins/<site>/` and Registry with no Core site special case;
+2. C1-C7 have required deterministic Evidence and C3/C4 have real-site smoke Evidence from the frozen sample;
+3. SourceLocator supports retry/re-resolve and multi-part navigation without leaking site semantics into Core;
 4. accepted R007 stale refresh protection remains valid;
-5. accepted R008 Egress/Secret boundary remains valid;
+5. the integrated central Egress/Secret boundary remains valid, including accepted R008 relevant regressions when R008 has landed before final verification;
 6. affected R001 media regressions remain passing;
 7. `docs/research/r005-real-site.md` records result, maintenance risk, exact Evidence and architecture impact;
 8. Worker posts standard `[EXECUTION REPORT]`, moves to `status:review`, releases ownership and stops;
@@ -218,15 +245,15 @@ Real public-site evidence and deterministic tests show the existing Plugin/Sourc
 
 ### CONDITIONAL PASS
 
-The contracts remain valid but the selected site requires a clearly bounded plugin-only limitation (for example an optional navigation/media shape is unavailable). Conditions must not weaken Core/security invariants.
+The contracts remain valid but the selected site requires a clearly bounded plugin-only limitation. Conditions must not weaken Core/security invariants.
 
 ### FAIL
 
-Real evidence requires concrete-site knowledge in Core, breaks the generic SourceLocator/ResolvedMedia/navigation model, or requires weakening R007/R008 boundaries. The next action is contract/architecture review, not a site-specific Core exception.
+Real evidence requires concrete-site knowledge in Core, breaks the generic SourceLocator/ResolvedMedia/navigation model, or requires weakening R007/security boundaries. The next action is contract/architecture review, not a site-specific Core exception.
 
 ### BLOCKED
 
-Required real public sample/site is unavailable, required upstream behavior cannot be legally/reliably exercised, or an accepted dependency/capability is unavailable. Missing real evidence is not PASS.
+Required real public sample/site is unavailable, required upstream behavior cannot be legally/reliably exercised, or a required capability is unavailable. Missing real evidence is not PASS.
 
 ## Evidence Contract
 
@@ -234,7 +261,7 @@ Issue #23 report must include:
 
 ```text
 Attempt:
-Target site/sample selector:
+Target site/sample selector: Bilibili / BV14V411W7r5
 Plugin path/version:
 Base/Candidate SHA:
 PR:
@@ -245,7 +272,7 @@ SourceLocator version/redacted evidence:
 ResolvedMedia protocol/expiry summary:
 Navigation evidence:
 Re-resolve/freshness evidence:
-R001/R007/R008 regression evidence:
+R001/R007/(R008 when accepted/integrated) regression evidence:
 Secret/sensitive URL scan result:
 Claims C1-C8:
 R005-PUBLIC result: PASS | CONDITIONAL PASS | FAIL | BLOCKED
