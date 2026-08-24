@@ -9,9 +9,9 @@ Task / Research ID: R002-PREP
 Task kind: implementation
 Planning / integration base commit: 2b0a1a0ea95753ff416e41759b7c33823be1b9e0
 Session bootstrap prompt: docs/tasks/6-r002-tv-remote-play-probe/prompt.md
-Downstream handoff profile: docs/tasks/handoffs/cloud.md
-Preferred worker: cloud
-Eligible worker environments after publication: env:cloud
+Downstream handoff profile: docs/tasks/handoffs/web-gpt.md
+Preferred worker: web
+Eligible worker environments after publication: env:web-gpt
 Required capabilities: github-read-write, repository-static-analysis, code-authoring, automated-build, automated-test, browser-automation
 Linked verification task: Issue #7 / R002-TV
 Hard publication dependency: satisfied — Issue #3 / R001 Final Acceptance; accepted Candidate 42c92db2a380895ec3909cdc9afa847478150eb0, merged to main as 2b0a1a0ea95753ff416e41759b7c33823be1b9e0
@@ -57,8 +57,8 @@ R002-PREP must consume that accepted media/Web Display path. Normal integration 
 
 ```text
 Repository implementation / browser-probe authoring / CI orchestration
-→ cloud-codex
-→ env:cloud
+→ web
+→ env:web-gpt
 
 Hosted probe verification
 → GitHub Actions
@@ -69,7 +69,7 @@ Physical audible-autoplay verdict
 → env:manual-tv
 ```
 
-Codex Cloud is the Worker, not the browser/TV Evidence Authority. Hosted browser results prove probe mechanics only; they cannot classify R002.
+The Web Worker owns the repository/GitHub integration for this Attempt and orchestrates hosted Evidence through GitHub Actions. Hosted browser results prove probe mechanics only; they cannot classify R002.
 
 ## Work Role
 
@@ -173,7 +173,7 @@ Desktop/hosted browser results prove only that the probe works. They cannot clas
 
 ## Evidence Contract
 
-Each Attempt records candidate SHA/PR, R001 base candidate, browser version, remote trigger method, commands/workflows, play resolve/reject telemetry, Fullscreen result, lifecycle/reconnect observations, and J1/J2 run/job evidence.
+Each Attempt records candidate SHA/PR, R001 base candidate, browser version, remote trigger method, commands/workflows, play resolve/reject telemetry, Fullscreen result, lifecycle/visibility/reconnect observations, and J1/J2 run/job evidence.
 
 Do not store Secrets or sensitive media URLs.
 
