@@ -71,6 +71,8 @@ docs/tasks/prompt.template.md
 
 对于一个准备进入 `status:ready`、需要独立 Worker 新会话执行的 Task，`task.md` 与 `prompt.md` 应先提交到仓库，Issue 再链接两者及 base commit。
 
+**在任何 Task 被告知“已发布 / 可以领取”之前，还必须通过本文第 15 节的 Task Publication Gate。写入 API 返回成功不等于发布完成。**
+
 如果只是 Coordinator 当前会话内完成、且不进入独立 Worker 队列的极小协调性修改，可以不建立 Task Package。
 
 ## 2. Authority 与状态所有权
@@ -454,3 +456,134 @@ Result
 同样优先使用对应 Task Package 的 `prompt.md`，避免用户重复粘贴整套背景。
 
 如果某个旧 Task 尚无 `prompt.md`，Worker 仍可以直接读取 `AGENTS.md` + Issue + `task.md` 执行；Prompt 是标准 bootstrap 入口，不是新的业务 authority。
+
+## 15. Task Publication Gate
+
+发布 Task 使用**两阶段发布 + 发布后读回验证**。Coordinator 不能把“准备创建”“工具调用已发出”或“create/update 返回成功”当作任务已经发布。
+
+### 15.1 Phase A — Materialize，但保持 draft
+
+先完成：
+
+1. 创建真实 GitHub Issue，并保持 `status:draft`，不得提前设置 `status:ready`；
+2. 获得真实 Issue Number；
+3. 创建并提交：
+
+```text
+docs/tasks/<issue>-<slug>/task.md
+docs/tasks/<issue>-<slug>/prompt.md
+```
+
+4. 更新 Issue，使其明确链接：
+   - `task.md`；
+   - `prompt.md`；
+   - base commit；
+   - Parent Goal / Research Item（如适用）；
+5. 确认 eligible environment / Required Capabilities / Success Criteria / Evidence Contract 已冻结到可执行状态。
+
+此阶段只能称为：
+
+```text
+materialized / draft
+```
+
+不能告诉用户或 Worker “任务已发布”。
+
+### 15.2 Phase B — Read-back Verify
+
+**必须重新从 GitHub 读取，而不是只相信刚才的写操作返回值。**
+
+至少重新确认：
+
+```text
+Issue exists and is open
+Issue number is the expected real number
+Issue is still unclaimed
+Issue links task.md + prompt.md + base commit
+
+task.md exists on the intended branch/main
+prompt.md exists on the intended branch/main
+prompt.md points to the same Issue and task.md
+
+eligible env / Required Capabilities are correct
+Success Criteria / Evidence Contract are present
+no Secret/token was written into Issue/task/prompt
+```
+
+任一项失败：
+
+```text
+keep status:draft
+→ fix
+→ read back again
+```
+
+不得跳过。
+
+### 15.3 Publish — 最后才切 status:ready
+
+只有 Phase B 全部通过后，才允许：
+
+1. 设置正确的 `env:*` eligibility；
+2. 将 Issue 从 `status:draft` 切换为 `status:ready`；
+3. 保持无 active owner，等待 Worker claim。
+
+`status:ready` 是**发布动作的最后一步**，不是创建 Issue 时的默认状态。
+
+### 15.4 Post-publish Queue Verification
+
+切到 `status:ready` 后，还要再次验证 Worker 真能看到它。
+
+Coordinator 必须使用与目标 Worker 等价的队列查询，例如：
+
+```text
+status:ready + env:ubuntu-arm64
+```
+
+或对应环境查询，并确认：
+
+```text
+expected Issue appears exactly as a claimable task
+status = ready
+eligible env matches
+no active owner
+linked task.md / prompt.md still resolve
+```
+
+如果目标队列查询找不到该 Task：
+
+```text
+publication = FAILED
+```
+
+应立即修复；必要时退回 `status:draft`。不能让用户拿着 Prompt 去执行一个 GitHub 队列中不可见的 Task。
+
+### 15.5 Coordinator Completion Rule
+
+只有完成上述全部步骤后，Coordinator 才允许使用：
+
+```text
+“任务已创建”
+“任务已发布”
+“现在可以让 <environment> Worker 领取”
+```
+
+这样的完成表述。
+
+发布完成的最小可验证条件是：
+
+```text
+Issue read-back PASS
++
+task.md read-back PASS
++
+prompt.md read-back PASS
++
+ready labels/state read-back PASS
++
+target worker queue search PASS
+```
+
+原则：
+
+> **Plan is not execution. Write success is not publication. Publication requires independent read-back from GitHub.**
