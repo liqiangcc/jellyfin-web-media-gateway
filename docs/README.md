@@ -54,7 +54,7 @@ P0 Core Feasibility 至少关注：
 - `control-experience-architecture.md`：统一 Control 体验如何聚合多个独立领域。
 - `site-plugin-architecture.md`：具体站点知识与插件边界。
 - `security.md`：跨领域安全不变量和威胁模型。
-- `development-environments.md`：网页 GPT/MCP、各 Codex 环境、Git 与 Evidence 的协同规则。
+- `development-environments.md`：Web Coordinator / Web Worker、各外部 Worker、Git 与 Evidence 的协同规则。
 
 专题文档不能重新定义与 canonical 架构冲突的核心对象。
 
@@ -81,21 +81,41 @@ ADR 是决策历史，不是当前系统完整规范。接受新的 ADR 后，�
 
 面向第一次进入仓库的人，只解释项目目标、顶层架构、核心原则和文档入口。
 
-## 2. Agent / Codex 工作入口
+## 2. Agent / Worker 工作入口
 
-Agent 的长期仓库规则由根 `AGENTS.md` 定义；阶段性可直接执行的任务提示词位于 `docs/codex/`。
+Agent 的长期仓库规则由根 `AGENTS.md` 定义；多环境调度规则由 `development-environments.md` 定义。
+
+默认模型：
+
+```text
+Web Coordinator
+→ Web Worker（最高执行优先级）
+→ 缺少 capability 时才路由外部 Worker
+→ Commit / PR / Evidence
+→ Web Coordinator Review
+```
+
+网页包含两种独立会话：
+
+- **Web Coordinator Session**：长期项目控制面；
+- **Web Worker Session**：短期单 Task 执行者，使用 `env:web-gpt`。
 
 当前入口：
 
-- `../AGENTS.md`：长期架构、安全、测试、Git 和技术验证规则。
-- `codex/README.md`：Codex 任务入口说明。
-- `codex/technical-feasibility.md`：继续当前风险驱动技术预研的可执行任务提示词。
+- `../AGENTS.md`：长期架构、安全、测试、Git 和 Agent 规则。
+- `development-environments.md`：Web-first、多环境 capability routing、Evidence 边界。
+- `tasks/README.md`：Issue + `task.md` 任务协议。
+- `tasks/task.template.md`：稳定执行契约模板。
+- `codex/README.md`：外部 Codex Worker 入口说明。
+- `codex/technical-feasibility.md`：需要外部运行能力时的阶段性技术预研入口。
 
-推荐新会话只给一条短指令：
+新 Web Worker 会话优先读取对应 Issue / Task：
 
-> 读取 `AGENTS.md`，然后按照 `docs/codex/technical-feasibility.md` 继续执行下一项。
+> 读取 `AGENTS.md`、对应 GitHub Issue 和 `docs/tasks/<issue>-<slug>/task.md`；claim `env:web-gpt` 任务，只执行当前 Scope，提交结果并转为 `status:review` 后停止。
 
-`AGENTS.md` 与 `docs/codex/*` 是 Agent 工作指令，不高于本文件定义的 canonical 产品/架构文档；若任务 Prompt 与 canonical 文档冲突，应修复 Prompt 漂移而不是覆盖架构。
+只有 Web Worker 缺少任务所需 capability 时，才启动相应外部 Worker；外部 Worker 同样读取 Issue / `task.md` 并在完成后停止，不自动开始下一项。
+
+`AGENTS.md`、`docs/tasks/*` 与 `docs/codex/*` 是 Agent 工作指令，不高于本文件定义的 canonical 产品/架构文档；若任务 Prompt 与 canonical 文档冲突，应修复 Prompt 漂移而不是覆盖架构。
 
 ## 3. 设计变更检查表
 
