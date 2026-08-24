@@ -15,6 +15,9 @@ on:
 permissions:
   contents: read
 
+env:
+  R001_PUBLIC_MP4: https://raw.githubusercontent.com/mediaelement/mediaelement-files/master/big_buck_bunny.mp4
+
 jobs:
   deterministic:
     name: J1 deterministic x64
@@ -70,6 +73,7 @@ jobs:
         run: |
           ! grep -R 'r001-fixture-secret' browser-proof.json server.log
           curl -fsS http://127.0.0.1:8787/metrics | tee metrics.json
+          cat browser-proof.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -95,8 +99,11 @@ jobs:
       - name: Public MP4 Range smoke
         run: |
           curl -fsS http://127.0.0.1:8787/proof/paths > paths.json
+          cat paths.json
           MP4=$(python3 -c 'import json; print(json.load(open("paths.json"))["mp4_path"])')
           CODE=$(curl -sS -o mp4-range.bin -D mp4-headers.txt -w '%{http_code}' -H 'Range: bytes=0-1023' "http://127.0.0.1:8787${MP4}")
+          echo "MP4 status=$CODE bytes=$(wc -c < mp4-range.bin)"
+          cat mp4-headers.txt
           test "$CODE" = 206
           test "$(wc -c < mp4-range.bin)" = 1024
           grep -qi '^content-range: bytes 0-1023/' mp4-headers.txt
@@ -111,7 +118,7 @@ jobs:
           SEGMENT=$(grep -v '^#' variant.m3u8 | sed '/^$/d' | head -1)
           curl -fsS "http://127.0.0.1:8787${SEGMENT}" -o public-segment.bin
           test -s public-segment.bin
-          printf 'MP4=PASS\nHLS master rewrite=PASS\nHLS variant rewrite=PASS\nHLS segment=PASS\n' > public-smoke.txt
+          printf 'MP4=PASS\nHLS master rewrite=PASS\nHLS variant rewrite=PASS\nHLS segment=PASS\n' | tee public-smoke.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
