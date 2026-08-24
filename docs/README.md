@@ -54,7 +54,8 @@ P0 Core Feasibility 至少关注：
 - `control-experience-architecture.md`：统一 Control 体验如何聚合多个独立领域。
 - `site-plugin-architecture.md`：具体站点知识与插件边界。
 - `security.md`：跨领域安全不变量和威胁模型。
-- `development-environments.md`：Web Coordinator / Web Worker、各外部 Worker、Git 与 Evidence 的协同规则。
+- `development-environments.md`：Web Coordinator / Web Worker、Implementation / Verification、环境 capability 与 Evidence 协同规则。
+- `runner-execution-architecture.md`：GitHub Actions 统一执行平面、GitHub-hosted / Cloud / Ubuntu ARM64 Runner 分层、路由与安全边界。
 
 专题文档不能重新定义与 canonical 架构冲突的核心对象。
 
@@ -83,15 +84,19 @@ ADR 是决策历史，不是当前系统完整规范。接受新的 ADR 后，�
 
 ## 2. Agent / Worker 工作入口
 
-Agent 的长期仓库规则由根 `AGENTS.md` 定义；多环境调度规则由 `development-environments.md` 定义。
+Agent 的长期仓库规则由根 `AGENTS.md` 定义；多环境调度规则由 `development-environments.md` 定义；自动执行与 Runner 规则由 `runner-execution-architecture.md` 定义。
 
 默认模型：
 
 ```text
 Web Coordinator
-→ Web Worker（最高执行优先级）
-→ 缺少 capability 时才路由外部 Worker
-→ Commit / PR / Evidence
+→ Web Worker implementation
+→ GitHub Actions execution plane
+     ├── GitHub-hosted runner: portable/fast verification
+     ├── Cloud self-hosted runner: long-running/repeated verification
+     └── Ubuntu ARM64 self-hosted runner: target proof
+→ WSL / Windows external worker only for interactive capability
+→ Real TV / Manual only for physical UX proof
 → Web Coordinator Review
 ```
 
@@ -103,17 +108,18 @@ Web Coordinator
 当前入口：
 
 - `../AGENTS.md`：长期架构、安全、测试、Git 和 Agent 规则。
-- `development-environments.md`：Web-first、多环境 capability routing、Evidence 边界。
+- `development-environments.md`：Web-first、Implementation/Verification 分离、capability routing、Evidence 边界。
+- `runner-execution-architecture.md`：Actions/Runner 执行架构、Runner 分层和安全约束。
 - `tasks/README.md`：Issue + `task.md` 任务协议。
-- `tasks/task.template.md`：稳定执行契约模板。
-- `codex/README.md`：外部 Codex Worker 入口说明。
-- `codex/technical-feasibility.md`：需要外部运行能力时的阶段性技术预研入口。
+- `tasks/task.template.md`：稳定执行契约模板，包含 Execution Plane / Runner / Target / Trust Gate。
+- `codex/README.md`：外部 Codex Worker fallback 入口说明。
+- `codex/technical-feasibility.md`：需要交互式或目标环境能力时的阶段性技术预研入口。
 
 新 Web Worker 会话优先读取对应 Issue / Task：
 
-> 读取 `AGENTS.md`、对应 GitHub Issue 和 `docs/tasks/<issue>-<slug>/task.md`；claim `env:web-gpt` 任务，只执行当前 Scope，提交结果并转为 `status:review` 后停止。
+> 读取 `AGENTS.md`、对应 GitHub Issue 和 `docs/tasks/<issue>-<slug>/task.md`；claim `env:web-gpt` 任务，只执行当前 Scope；优先通过 GitHub Actions/匹配 Runner 完成自动验证，提交结果并转为 `status:review` 后停止。
 
-只有 Web Worker 缺少任务所需 capability 时，才启动相应外部 Worker；外部 Worker 同样读取 Issue / `task.md` 并在完成后停止，不自动开始下一项。
+只有 Web + Actions Runner 能力仍不足，或者确实需要交互式人工诊断时，才启动相应外部 Worker。
 
 `AGENTS.md`、`docs/tasks/*` 与 `docs/codex/*` 是 Agent 工作指令，不高于本文件定义的 canonical 产品/架构文档；若任务 Prompt 与 canonical 文档冲突，应修复 Prompt 漂移而不是覆盖架构。
 
@@ -151,4 +157,5 @@ Security
 - MVP 是可信 LAN / 单用户，不实现 Gateway Identity/RBAC。
 - SiteAccount 只代表来源网站会话，不代表 Gateway 用户身份。
 - Native Site Panel 失败不得破坏已经开始的 Gateway 播放。
+- Self-hosted Runner 不得因为与目标 Gateway 同机而继承 Vault/生产 Secret/Root 权限。
 - 尚未完成 P0 技术验证前，不把 Web-only Core 的真实设备可行性写成已验证事实。
