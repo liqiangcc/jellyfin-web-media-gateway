@@ -2,9 +2,7 @@
 
 你正在查看 `liqiangcc/jellyfin-web-media-gateway` 的 R007 Task Package。
 
-**当前 Issue #2 仍是 `status:draft`。本文件已为后续执行准备，但在 Coordinator 完成 Publication Gate 前禁止 claim / implementation。**
-
-本文件只是会话启动入口，不是 Task Contract。
+本文件只是会话启动入口，不是 Task Contract，也不保存实时 Task 状态。
 
 ## Execution Context
 
@@ -17,27 +15,24 @@ Preferred Skill: $task-worker
 Research Item: R007
 ```
 
-## Draft Gate
+## Live Gate
 
-新会话必须先重新读取 Issue #2。
-
-如果仍然是：
+新会话必须先重新读取 Issue #2，并以 Issue 当前 labels / owner 为实时 authority。
 
 ```text
 status:draft
+→ 停止，不 claim、不实现、不自行发布
+
+status:ready + env:web-gpt + no active owner
+→ 可以按 $task-worker 流程 claim
+
+其他状态
+→ 按 docs/tasks/issue-lifecycle-protocol.md 停止或交回 Coordinator
 ```
 
-则停止，不执行代码修改，不自行把它改成 ready。
+只有 Coordinator 通过 `$task-publisher` / Publication Gate 才能把 draft Task 发布为 ready；Worker 不自行改变发布状态。
 
-只有 Coordinator 通过 `$task-publisher` / Publication Gate 将 Issue #2 正式切换为：
-
-```text
-status:ready + env:web-gpt
-```
-
-并给出下游入口后，Worker 才能 claim。
-
-## Preferred Codex Entry after publication
+## Preferred Codex Entry
 
 ```text
 $task-worker Execute Issue #2 using `docs/tasks/2-r007-playback-concurrency-closure/prompt.md`.
@@ -45,7 +40,7 @@ $task-worker Execute Issue #2 using `docs/tasks/2-r007-playback-concurrency-clos
 
 如果 repo Skill 不可见，则按下面 Start Protocol 手动执行。
 
-## Start Protocol after publication
+## Start Protocol
 
 1. 同步并实际读取当前仓库，不根据聊天背景猜测状态。
 2. 读取：
@@ -57,7 +52,7 @@ $task-worker Execute Issue #2 using `docs/tasks/2-r007-playback-concurrency-clos
    - `docs/implementation-contracts.md`
    - `docs/technical-feasibility-validation.md`
    - `docs/mvp-plan.md`
-3. 确认 Issue 为 `status:ready + env:web-gpt` 且无 active owner。
+3. 确认 Issue 当前为 `status:ready + env:web-gpt` 且无 active owner。
 4. claim → `status:in-progress` → 确定新的 `Attempt N`。
 5. 严格执行 Task Contract，只做 R007 executable Playback model / contract closure / race tests。
 6. 正常结束评论 `[EXECUTION REPORT]` → `status:review`；阻塞评论 `[BLOCKER REPORT]` → `status:blocked`。
