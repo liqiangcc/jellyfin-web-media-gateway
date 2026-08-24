@@ -267,11 +267,7 @@ impl PlaybackSession {
         })
     }
 
-    pub fn switch_item(
-        &mut self,
-        item_id: impl Into<String>,
-        resolved_media: impl Into<String>,
-    ) {
+    pub fn switch_item(&mut self, item_id: impl Into<String>, resolved_media: impl Into<String>) {
         let item_revision = self
             .current_item
             .item_revision
@@ -323,12 +319,7 @@ impl PlaybackSession {
             return false;
         }
 
-        self.apply_position_callback(
-            item_id,
-            item_revision,
-            telemetry_sequence,
-            position_ms,
-        )
+        self.apply_position_callback(item_id, item_revision, telemetry_sequence, position_ms)
     }
 
     pub fn begin_media_refresh(&mut self) -> MediaRefreshTicket {
@@ -361,11 +352,7 @@ impl PlaybackSession {
         true
     }
 
-    pub fn apply_candidate_callback(
-        &mut self,
-        ticket: &HandoffTicket,
-        position_ms: u64,
-    ) -> bool {
+    pub fn apply_candidate_callback(&mut self, ticket: &HandoffTicket, position_ms: u64) -> bool {
         let valid = match &self.handoff {
             Some(transition) => transition.ticket == *ticket,
             None => false,
