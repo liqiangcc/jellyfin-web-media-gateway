@@ -265,6 +265,112 @@ fn handoff_cancel_invalidates_candidate() {
 }
 
 #[test]
+fn cancelled_candidate_generation_is_not_reused_after_same_target_handoff() {
+    let mut session = session();
+
+    let old_result = session
+        .execute(envelope(
+            "handoff-cancel-old",
+            0,
+            Command::BeginHandoff {
+                target_display_id: "display-b".to_owned(),
+            },
+        ))
+        .expect("reserve old handoff");
+    let old_ticket = old_result.transition.expect("old handoff ticket");
+    assert!(session.apply_candidate_callback(&old_ticket, 4_321));
+    assert!(session.cancel_handoff(&old_ticket));
+
+    let new_result = session
+        .execute(envelope(
+            "handoff-cancel-new",
+            session.session_revision(),
+            Command::BeginHandoff {
+                target_display_id: "display-b".to_owned(),
+            },
+        ))
+        .expect("reserve new handoff");
+    let new_ticket = new_result.transition.expect("new handoff ticket");
+    assert!(new_ticket.candidate_generation > old_ticket.candidate_generation);
+    assert!(session.commit_handoff(&new_ticket));
+
+    let item_id = session.current_item_id().to_owned();
+    let item_revision = session.item_revision();
+    let revision_after_commit = session.session_revision();
+
+    assert_eq!(session.active_display().display_id, "display-b");
+    assert_eq!(
+        session.active_display().generation,
+        new_ticket.candidate_generation
+    );
+    assert!(!session.apply_display_position_callback(
+        &old_ticket.target_display_id,
+        old_ticket.candidate_generation,
+        &item_id,
+        item_revision,
+        1,
+        99_000,
+    ));
+    assert!(!session.apply_candidate_callback(&old_ticket, 99_000));
+    assert_eq!(session.position_ms(), 0);
+    assert_eq!(session.telemetry_sequence(), 0);
+    assert_eq!(session.session_revision(), revision_after_commit);
+}
+
+#[test]
+fn expired_candidate_generation_is_not_reused_after_same_target_handoff() {
+    let mut session = session();
+
+    let old_result = session
+        .execute(envelope(
+            "handoff-timeout-old",
+            0,
+            Command::BeginHandoff {
+                target_display_id: "display-b".to_owned(),
+            },
+        ))
+        .expect("reserve old handoff");
+    let old_ticket = old_result.transition.expect("old handoff ticket");
+    assert!(session.apply_candidate_callback(&old_ticket, 5_432));
+    assert!(session.expire_handoff(&old_ticket));
+
+    let new_result = session
+        .execute(envelope(
+            "handoff-timeout-new",
+            session.session_revision(),
+            Command::BeginHandoff {
+                target_display_id: "display-b".to_owned(),
+            },
+        ))
+        .expect("reserve new handoff");
+    let new_ticket = new_result.transition.expect("new handoff ticket");
+    assert!(new_ticket.candidate_generation > old_ticket.candidate_generation);
+    assert!(session.commit_handoff(&new_ticket));
+
+    let item_id = session.current_item_id().to_owned();
+    let item_revision = session.item_revision();
+    let revision_after_commit = session.session_revision();
+
+    assert_eq!(session.active_display().display_id, "display-b");
+    assert_eq!(
+        session.active_display().generation,
+        new_ticket.candidate_generation
+    );
+    assert!(!session.apply_display_position_callback(
+        &old_ticket.target_display_id,
+        old_ticket.candidate_generation,
+        &item_id,
+        item_revision,
+        1,
+        88_000,
+    ));
+    assert!(!session.apply_candidate_callback(&old_ticket, 88_000));
+    assert_eq!(session.position_ms(), 0);
+    assert_eq!(session.telemetry_sequence(), 0);
+    assert_eq!(session.session_revision(), revision_after_commit);
+}
+
+#[test]
 fn old_source_callback_after_handoff_commit_is_ignored() {
     let mut session = session();
     let source_display = session.active_display().clone();
@@ -414,6 +520,8 @@ fn run_r007_stress_iteration(iteration: usize) {
     handoff_candidate_callback_before_commit_has_no_global_authority();
     handoff_timeout_invalidates_candidate();
     handoff_cancel_invalidates_candidate();
+    cancelled_candidate_generation_is_not_reused_after_same_target_handoff();
+    expired_candidate_generation_is_not_reused_after_same_target_handoff();
     old_source_callback_after_handoff_commit_is_ignored();
     overlapping_handoff_has_single_authority_path();
 }
