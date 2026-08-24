@@ -17,7 +17,7 @@ $task-reviewer
 → Coordinator: review Evidence + REVISE/BLOCK/SPLIT/ACCEPT + close when valid
 
 $task-dispatcher
-→ Coordinator: sync main and launch an Issue-linked Codex tmux Worker session
+→ Coordinator utility: sync main, create an isolated Issue worktree, launch/track an Issue-linked local Codex tmux Worker session
 ```
 
 Lifecycle:
@@ -38,6 +38,8 @@ $task-reviewer
       ├── SPLIT → $task-publisher for child Task(s)
       └── ACCEPT → [FINAL ACCEPTANCE] → status:done → close
 ```
+
+`$task-dispatcher` sits outside this authority chain: it may bootstrap/inspect local Worker processes, but it does not claim/review/accept/close Tasks itself.
 
 ## Authority
 
@@ -82,7 +84,9 @@ $task-worker Execute Issue #123 using `docs/tasks/123-runner-bootstrap/prompt.md
 
 $task-reviewer Review Issue #123 and continue the Task lifecycle.
 
-$task-dispatcher Dispatch the complete Worker prompt for Issue #123 through tmux.
+$task-dispatcher Dispatch the complete Worker handoff for Issue #123 through an isolated tmux worktree.
+
+$task-dispatcher Track Issue #123 Worker progress.
 ```
 
 ## Scripts
