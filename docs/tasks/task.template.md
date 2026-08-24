@@ -9,6 +9,7 @@ Task / Research ID: <id>
 Task kind: implementation | verification | combined | research
 Base commit: <sha>
 Candidate commit: <sha or n/a>
+Session bootstrap prompt: docs/tasks/<issue>-<slug>/prompt.md | n/a
 Preferred worker: web | cloud | wsl | windows | ubuntu-arm64 | manual-tv | capability-driven
 Eligible worker environments: env:web-gpt | env:cloud | env:wsl | env:windows | env:ubuntu-arm64 | env:manual-tv
 Required capabilities: <capability list>
@@ -17,6 +18,33 @@ Required capabilities: <capability list>
 > GitHub Actions / Runner 是 execution backend，不是会 claim Issue 的 Worker，因此不使用 `env:actions` / `env:runner`。
 >
 > 实时 `status`、assignee、claim、active branch、PR/commit、verification status 和 result summary 只保存在 GitHub Issue，不在本文件重复维护。
+
+## Session Bootstrap
+
+如果本 Task 会进入 `status:ready` 并由独立 Worker 新会话领取，默认从：
+
+```text
+docs/tasks/prompt.template.md
+```
+
+生成同目录：
+
+```text
+prompt.md
+```
+
+`prompt.md` 只负责：
+
+- 指向 GitHub Issue；
+- 指向本 `task.md`；
+- 声明预期 Worker / environment；
+- 提醒读取 `AGENTS.md` 和相关 canonical docs；
+- 提醒 claim / `status:in-progress` / `status:review` / stop 协议；
+- 提供不会改变 Scope 的最少启动提醒。
+
+`prompt.md` **不得复制或重新定义**本文件中的 Goal、Scope、Claims、Success Criteria、Architecture Invariants、Verification Job Matrix 或 Evidence 判断标准。
+
+如果 Prompt 与本 Task Contract、`AGENTS.md` 或 canonical docs 冲突，Prompt 的冲突内容无效。
 
 ## Goal
 
@@ -351,6 +379,7 @@ Reason: <why repository/static evidence is sufficient>
 
 - Implementation / docs：
 - Candidate commit / PR：
+- Session bootstrap prompt：
 - Linked verification task（如分离）：
 - Verification Jobs / runs：
 - Target Evidence：
