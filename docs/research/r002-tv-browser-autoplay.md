@@ -41,6 +41,7 @@ the viewport-immersive layout when the request is unavailable or rejected.
 
    ```sh
    curl -fsS -X POST "$GATEWAY/api/v1/display-probe/commands" \
+     -H "origin: $GATEWAY" \
      -H 'content-type: application/json' \
      -d '{"request_id":"case-a-1"}'
    ```
