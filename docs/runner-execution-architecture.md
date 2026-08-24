@@ -4,11 +4,11 @@
 
 本文件定义 Web Media Gateway 的自动执行与验证后端。
 
-核心目标不是“给每个环境都装一个 Runner”，而是让 Web Worker 尽可能通过 GitHub + GitHub Actions 完成实现后的真实执行、验证、长时间实验和目标设备验证，同时严格控制 Cloud 与 Ubuntu ARM64 等稀缺资源的使用范围。
+核心目标不是“给每个环境都装 Runner”，而是让 Web Worker 尽可能通过 GitHub + GitHub Actions 完成真实 build/test、通用 ARM64 验证和目标设备验证，同时避免浪费 Cloud 与 Ubuntu 手机等稀缺资源。
 
 默认原则：
 
-> **Actions is the execution bus; runners are capability providers.**
+> **Actions is the execution bus; GitHub-hosted first; target self-hosted only for target proof.**
 
 ```text
 Web Coordinator
@@ -19,21 +19,21 @@ Candidate commit / PR
       ↓
 GitHub Actions
       │
-      ├── GitHub-hosted runner
-      │     fast / portable verification
+      ├── GitHub-hosted x64 runner
+      │     portable / fast verification
       │
-      ├── Cloud self-hosted runner
-      │     long-running / repeated / unattended
+      ├── GitHub-hosted ARM64 runner
+      │     portable ARM64 verification
       │
       └── Ubuntu ARM64 self-hosted runner
-            target runtime / resource / compatibility proof
+            phone-specific target runtime / metrics / compatibility proof
       ↓
 Run / Job / Artifact / Metrics
       ↓
 Web Worker / Coordinator Review
 ```
 
-真实电视等无法合理 Runner 化的最终物理交互继续走 Manual Verification。
+Cloud **不部署 self-hosted Runner**。真实电视等无法合理 Runner 化的最终物理交互继续走 Manual Verification。
 
 本文是 `development-environments.md` 的执行后端细化；安全不变量同时受 `security.md` 约束。
 
@@ -57,38 +57,46 @@ Target
 = claim 实际需要证明的对象
 ```
 
-典型例子：
+例如：
 
 ```text
-Orchestrator   = web-gpt
+Orchestrator    = web-gpt
 Execution plane = github-actions
-Runner         = github-hosted-x64
-Target         = runner itself
+Runner          = github-hosted-x64
+Target          = runner itself
 ```
 
 ```text
-Orchestrator   = web-gpt
+Orchestrator    = web-gpt
 Execution plane = github-actions
-Runner         = cloud-x64
-Target         = cloud-x64
+Runner          = github-hosted-arm64
+Target          = generic Linux ARM64 environment
 ```
 
 ```text
-Orchestrator   = web-gpt
+Orchestrator    = web-gpt
 Execution plane = github-actions
-Runner         = ubuntu-arm64-phone
-Target         = ubuntu-arm64-phone
+Runner          = ubuntu-arm64-phone
+Target          = ubuntu-arm64-phone
 ```
 
-GitHub Actions Runner 不 claim Issue，也不成为 Task owner。Issue owner 仍然是 Web Worker 或外部 Worker；Runner 只是它使用的执行能力。
+Runner 不 claim Issue，也不成为 Task owner。Issue owner 仍然是 Web Worker 或明确的外部 Worker；Runner 只是它使用的执行能力。
 
 ---
 
-## 3. 三层 Runner 模型
+## 3. Runner 模型
 
 ### Tier 1 — GitHub-hosted Runner
 
 默认、最先使用。
+
+GitHub-hosted Runner 同时承担：
+
+```text
+x64 portable verification
++
+ARM64 portable verification
+```
 
 适合：
 
@@ -98,84 +106,46 @@ GitHub Actions Runner 不 claim Issue，也不成为 Task owner。Issue owner �
 - `cargo clippy`；
 - contract / concurrency / security suite；
 - portable integration test；
-- 短中时长 regression；
+- x64 / generic ARM64 compile + test；
+- regression / matrix / repeated test；
 - artifact 生成。
 
 优势：
 
+- 无自建机器维护成本；
+- 资源通常优于当前 Cloud 小机器；
 - 环境相对干净；
-- 无设备维护成本；
 - 与 commit / PR 自然绑定；
+- x64 和 ARM64 都可以用于通用验证；
 - 最适合 Web Worker 的快速迭代闭环。
 
 限制：
 
-- 不代表 ARM64 手机；
+- generic ARM64 runner 仍不等于目标 Ubuntu 手机；
 - 不代表家庭 LAN；
-- 不代表目标 FFmpeg/Chromium 组合；
-- 不代表手机温度/资源；
+- 不代表目标 FFmpeg/Chromium/Jellyfin 安装组合；
+- 不代表手机温度、真实 RSS/吞吐或 chroot 特性；
 - 不代表真实电视。
 
 默认规则：
 
-> 只要 claim 不依赖特定目标环境，先尝试 GitHub-hosted Runner。
+> 只要 claim 不依赖目标手机/电视的具体环境，就先用 GitHub-hosted Runner。
 
-### Tier 2 — Cloud Self-hosted Runner
+### Tier 2 — Ubuntu ARM64 Target Self-hosted Runner
 
-Cloud Runner 是长期自动执行资源，不是默认开发 Agent。
+Ubuntu ARM64 手机 Runner 是高价值、受限的 **Target Proof** 后端。
 
-建议 capability labels：
-
-```text
-self-hosted
-linux
-x64
-cloud
-long-running
-```
-
-适合：
-
-- 6h / 24h soak；
-- 大量 repeated concurrency race；
-- benchmark matrix；
-- failure injection；
-- 大型 regression matrix；
-- 持续内存增长观察；
-- 长时间 media-path synthetic test；
-- GitHub-hosted Runner 不适合承载的稳定长跑工作。
-
-Cloud 资源有限，因此不得因为 job “也能在 Cloud 跑”就默认使用 Cloud。
-
-Cloud 调度条件至少满足一个：
-
-```text
-requires: long-running
-or
-requires: high-repetition
-or
-requires: persistent-experiment
-or
-GitHub-hosted execution is insufficient for the defined claim
-```
-
-普通 build/test/fmt/clippy 继续使用 Tier 1。
-
-### Tier 3 — Ubuntu ARM64 Target Runner
-
-Ubuntu ARM64 手机 Runner 是高价值、受限的 Target Proof 后端。
-
-建议 capability labels：
+建议 labels：
 
 ```text
 self-hosted
 linux
-arm64
+ARM64
 ubuntu-arm64
 target-device
 ```
 
-根据设备真实能力再增加：
+根据设备实际能力再增加：
 
 ```text
 device-metrics
@@ -187,89 +157,142 @@ lan-target
 
 它只用于 claim 本身依赖目标设备真实性的任务，例如：
 
-- ARM64 原生 build/run；
 - Gateway 在目标 Ubuntu/chroot 环境是否可运行；
-- FFmpeg / Chromium / Jellyfin 目标兼容性；
+- 目标设备上的 FFmpeg / Chromium / Jellyfin 兼容性；
 - CPU / RSS / temperature / throughput；
-- Direct Proxy / Remux 的目标机稳定性；
+- Direct Proxy / Remux 的目标机表现；
 - 设备特有网络、文件系统、进程限制；
-- 5/30/60 min 目标稳定性；
-- 后续明确要求的更长 target soak。
+- 5/30/60 分钟目标稳定性；
+- 明确要求的 target deployment verification。
+
+**通用 ARM64 compile/test 优先 GitHub-hosted ARM64 Runner，不占用手机 Runner。**
 
 禁止把普通可移植单元测试批量丢给手机 Runner。
 
 原则：
 
-> **Portable verification stays off target; target runner is reserved for target-bound proof.**
+> **Generic ARM64 proof stays hosted; phone runner is reserved for phone-specific proof.**
 
 ---
 
-## 4. 默认 Runner 路由
+## 4. Cloud 的定位
 
-Coordinator / Web Worker 对每个 Verification Claim 按以下顺序路由：
+Cloud 不加入 Runner 池。
+
+原因：
+
+- 当前 Cloud 资源有限；
+- 普通 x64/ARM64 build/test 使用 GitHub-hosted Runner 更合适；
+- 把低资源 Cloud 常驻成 Runner会增加维护和状态污染，却没有形成明显验证优势。
+
+Cloud 只保留为低优先级 **External Worker / Remote Orchestrator**，适用于 GitHub Actions 不适合表达的场景，例如：
+
+- 需要长期保持交互式 shell/state；
+- 需要经 Tailscale 做明确授权的远程设备操作；
+- 需要人工持续观察而不是一次 Actions job；
+- 特定网络复现必须来自该 Cloud 主机。
+
+因此：
+
+```text
+Cloud
+!= default verification backend
+!= self-hosted runner
+```
+
+---
+
+## 5. 长时间 / 大量重复验证
+
+不要因为存在 `long-running` 就自动使用 Cloud。
+
+优先：
+
+1. GitHub-hosted Runner；
+2. 使用 matrix / shard / repeated jobs 拆分大量 race、benchmark、regression；
+3. 每个 job 保存明确 artifact / summary，最终聚合；
+4. 如果 claim 必须连续运行超过 hosted job 能承载的窗口，再单独评审执行后端。
+
+例如：
+
+```text
+10000x concurrency race
+→ 20 hosted jobs × 500 repetitions
+→ aggregate result
+```
+
+而不是：
+
+```text
+→ 小 Cloud 单机硬跑
+```
+
+如果研究问题本身要求“同一个进程连续运行 N 小时”，不能用分片结果伪装连续 soak；此时应根据 claim 选择真正足够的环境，并把限制写入 Verification Task。
+
+目标设备连续 soak 如果本身就是 R003/R001 的 target claim，则使用 Ubuntu ARM64 Target Runner。
+
+---
+
+## 6. 默认 Runner 路由
+
+Coordinator / Web Worker 对 Verification Claim 按以下顺序路由：
 
 ```text
 Claim
  ↓
-是否依赖特定目标环境？
+是否依赖目标手机/TV本身？
  ├── Yes
- │    ├── ARM64 / phone runtime / device metrics
+ │    ├── phone runtime / thermal / metrics / target software
  │    │      → Ubuntu ARM64 Target Runner
  │    └── TV / remote / physical UX
  │           → Manual TV Verification
  │
  └── No
       ↓
-是否需要长时间 / 大量重复 / 持续状态？
-      ├── Yes → Cloud Self-hosted Runner
-      └── No  → GitHub-hosted Runner
+是否只要求 generic ARM64？
+      ├── Yes → GitHub-hosted ARM64 Runner
+      └── No  → GitHub-hosted x64 Runner
 ```
 
-只有自动化失败后需要人工交互式诊断时，才进入：
+如果任务需要大量重复：
+
+```text
+→ GitHub-hosted matrix/sharding first
+```
+
+只有自动化失败且需要人工交互式诊断时，才进入：
 
 ```text
 WSL interactive debug
 Windows / ADB debug
-External Codex Worker
+Cloud external worker (rare)
+Ubuntu ARM64 Codex (target interactive debug)
 ```
 
 因此：
 
 ```text
-Runner = execution backend
+Runner = automatic execution backend
 Codex = interactive problem-solving fallback
 ```
 
-不能把两者混为同一层。
-
 ---
 
-## 5. Web Worker 的默认开发闭环
+## 7. Web Worker 的默认开发闭环
 
-普通开发尽可能保持：
+普通开发：
 
 ```text
 Web Worker
 → read Issue / task.md
 → modify code / tests
 → candidate commit / PR
-→ Actions on GitHub-hosted runner
+→ Actions on GitHub-hosted x64/ARM64 runner
 → read status / logs / artifact
 → fix
 → rerun
 → verification PASS
 → Coordinator Review
-```
-
-长跑场景：
-
-```text
-Web Worker
-→ candidate commit
-→ Actions workflow
-→ Cloud Runner
-→ long-running Evidence / artifact
-→ Web Worker review
 ```
 
 目标验证：
@@ -278,39 +301,38 @@ Web Worker
 Web Worker
 → candidate commit
 → Actions target workflow
-→ Ubuntu ARM64 Runner
+→ Ubuntu ARM64 Target Runner
 → target Evidence / metrics
 → Web Worker review
 ```
 
-这意味着 Web Worker 即使自身没有本地 shell，也可以完成大量具有真实 runtime Evidence 的工程任务。
+这样 Web Worker 即使自身没有本地 shell，也可以完成绝大多数 implementation + runtime verification 闭环。
 
 ---
 
-## 6. Workflow 分层
+## 8. Workflow 分层
 
-第一个 Rust workspace / 实际测试落地后，优先建立可复用 workflow，而不是为每个 Research Item 写一套重复脚本。
+第一个 Rust workspace / 实际测试落地后，优先建立可复用 workflow。
 
 建议逻辑能力：
 
 ```text
 portable-ci
-├── fmt
-├── clippy
-├── unit / contract
-└── portable integration
+├── x64 fmt / clippy / unit / contract
+├── x64 portable integration
+└── generic ARM64 build / test
 
-long-running-verification
-├── repeated race
-├── soak
-├── benchmark
-└── failure injection
+stress-verification
+├── repeated race (sharded)
+├── benchmark matrix
+├── failure injection
+└── bounded soak
 
 target-arm64-verification
-├── build / deploy
+├── deploy test instance
 ├── smoke
 ├── media path
-├── process compatibility
+├── target process compatibility
 └── metrics capture
 ```
 
@@ -320,7 +342,7 @@ Workflow 不应把站点 Secret、Vault、账号资料作为普通 CI 输入。
 
 ---
 
-## 7. Candidate SHA 是验证对象
+## 9. Candidate SHA 是验证对象
 
 Verification 必须明确验证哪个 commit。
 
@@ -330,100 +352,67 @@ Candidate commit: <sha>
 
 Actions run、artifact、metrics 和 Research Evidence 都必须能回指 Candidate SHA。
 
-禁止：
-
-```text
-“测试昨天那个版本通过了”
-```
-
-正确：
-
-```text
-Candidate: abc123
-Workflow: target-arm64-verification
-Runner: ubuntu-arm64-phone
-Result: PASS
-```
-
-如果实现发生变化，之前的 runtime Evidence 不自动证明新 commit。
+实现发生变化后，之前 Evidence 不自动证明新 commit。
 
 ---
 
-## 8. Self-hosted Runner 安全边界
+## 10. Ubuntu ARM64 Self-hosted Runner 安全边界
 
-Self-hosted Runner 能执行仓库 workflow 中的代码，因此属于部署安全边界，不只是 CI 工具。
+Self-hosted Runner 能执行仓库 workflow 中的代码，因此属于部署安全边界。
 
-### 8.1 Runner 身份与权限
+### 10.1 Runner 身份与权限
 
-Cloud / Ubuntu ARM64 Runner 必须：
+Ubuntu ARM64 Runner 必须：
 
 - 使用专用低权限 OS 用户；
 - 默认无 root / sudo；
-- 不使用 Gateway 生产服务账号运行；
+- 不使用 Gateway 生产服务账号；
 - Runner workspace 与 Gateway Vault 分离；
 - 只能访问当前验证真正需要的文件、设备和端口；
-- 不持有 SSH 私钥、Tailscale auth key、GitHub PAT、站点 Cookie 等长期 Secret；
-- 任务结束后清理临时 workspace / runtime data。
+- 不持有 SSH 私钥、Tailscale auth key、长期 GitHub PAT、站点 Cookie 等长期 Secret；
+- job 结束后清理临时 workspace / runtime data。
 
-Ubuntu ARM64 Runner 尤其禁止读取：
+默认禁止读取：
 
 ```text
 /var/lib/web-media-gateway/vault/
 真实 browser profile
 来源站点 Cookie/token
-Jellyfin API Key（除非某个受控 verification 明确需要并使用专门短期 secret）
+Jellyfin API Key
 宿主 root credential
 ADB privileged socket
 ```
 
-### 8.2 受信 Workflow 才能进入 Target Runner
+### 10.2 受信 Workflow 才能进入 Target Runner
 
 Target Runner 不允许任意分支或不可信 PR 自动获得代码执行权。
 
-Target-bound workflow 必须采用受控触发，例如：
+至少：
 
 - 只验证 Coordinator/Worker 已明确标记的 candidate SHA；
+- target workflow 与普通 PR CI 分离；
 - workflow 定义来自受信仓库状态；
 - 未受信输入不能直接拼接为 shell；
 - 需要时使用 manual dispatch / approval gate；
-- 不允许 fork/untrusted change 直接命中 ARM64 Runner；
-- 高风险 target job 与普通 PR CI 分离。
+- fork/untrusted change 不直接命中 ARM64 Runner。
 
 原则：
 
 > **PR can request target proof; it must not automatically inherit target-device shell authority.**
 
-### 8.3 网络权限
-
-Runner 网络能力按最小权限配置。
-
-Cloud Runner：
-
-- 默认 public internet；
-- 只有任务明确要求时经 Tailscale 访问目标设备；
-- 不因为加入 Tailnet 就获得任意家庭 LAN 扫描权限。
-
-Ubuntu ARM64 Runner：
-
-- 只允许测试需要的 LAN/public targets；
-- Runner 本身不得成为绕过 Gateway `EgressPolicy` 的任意代理；
-- 测试不允许读取生产 Vault 后自行向站点发请求。
-
-### 8.4 并发与资源
+### 10.3 并发与资源
 
 目标手机资源有限：
 
-- ARM64 Runner 默认单并发或严格限并发；
+- Runner 默认单并发或严格限并发；
 - 高 CPU / Chromium / FFmpeg job 必须有 timeout；
-- target soak 与真实服务运行避免互相污染；
-- 资源实验要记录是否有其他重负载 job 同时运行；
-- Runner 空闲时不应保持高频轮询或额外重型进程。
+- target soak 与正式服务避免互相污染；
+- 资源实验记录其他高负载进程；
+- Runner 空闲时不应保持额外重型进程。
 
 ---
 
-## 9. Runner 与生产服务隔离
-
-目标机既可能运行 Gateway，又可能作为 Runner，因此必须明确两套生命周期：
+## 11. Runner 与生产服务隔离
 
 ```text
 Runner control plane
@@ -441,43 +430,32 @@ Gateway production/runtime plane
     production state / vault / runtime
 ```
 
-Runner 只通过受控部署脚本或临时测试实例操作被测 binary。
+验证优先启动独立 test instance / test ports，不直接覆盖正在使用的正式实例。
 
-验证默认优先启动独立 test instance / test ports，不直接覆盖正在使用的正式实例。
-
-只有明确的 deployment verification Task 才允许 stop/start 正式服务，并必须在 Task Scope 和 Evidence 中记录。
+只有明确 deployment verification Task 才允许 stop/start 正式服务。
 
 ---
 
-## 10. Runner 可用性与降级
-
-Runner 不可用不能自动改变 Success Criteria。
+## 12. Runner 可用性与降级
 
 ```text
-GitHub-hosted unavailable
+GitHub-hosted x64 unavailable
 → retry / BLOCKED
 
-Cloud Runner unavailable
-→ 如果 claim 不需要 long-running，退回 GitHub-hosted
-→ 如果 claim 需要 long-running，BLOCKED 或显式换等价 backend
+GitHub-hosted ARM64 unavailable
+→ generic ARM64 verification BLOCKED / 等价 hosted ARM64 backend
+→ 不能直接把 phone target Evidence 当普通 CI 替代
 
-ARM64 Runner unavailable
-→ 不能用 Cloud x64 冒充
+Ubuntu ARM64 Target Runner unavailable
+→ 不能用 hosted ARM64 冒充 phone target
 → target verification = BLOCKED
 ```
 
-如果必须临时使用 Ubuntu ARM64 Codex 交互执行同样的验证，应记录：
-
-```text
-Execution plane = external-codex/manual
-Executor / Target = ubuntu-arm64-phone
-```
-
-结论可以等价，但不能伪装成 Actions Evidence。
+如果必须临时使用 Ubuntu ARM64 Codex 交互执行同样验证，应记录真实 execution plane，不能伪装成 Actions Evidence。
 
 ---
 
-## 11. Evidence Contract
+## 13. Evidence Contract
 
 Runner 产生的 Evidence 至少包含：
 
@@ -485,8 +463,8 @@ Runner 产生的 Evidence 至少包含：
 Role: verification
 Orchestrator:
 Execution plane: github-actions
-Runner class: github-hosted | cloud-self-hosted | ubuntu-arm64-self-hosted
-Runner labels:
+Runner class: github-hosted-x64 | github-hosted-arm64 | ubuntu-arm64-self-hosted
+Runner labels / image:
 Execution host:
 Target:
 OS / architecture:
@@ -499,7 +477,7 @@ Metrics / artifact:
 Result: PASS | CONDITIONAL PASS | FAIL | BLOCKED
 ```
 
-目标环境结果还应记录环境噪声，例如：
+目标环境结果还应记录：
 
 - 温度初始值；
 - 是否充电；
@@ -509,7 +487,7 @@ Result: PASS | CONDITIONAL PASS | FAIL | BLOCKED
 
 ---
 
-## 12. R007 / R001 / R003 的推荐映射
+## 14. Research 推荐映射
 
 ### R007
 
@@ -518,10 +496,13 @@ contract / test authoring
 → Web Worker
 
 automated concurrency suite
-→ GitHub-hosted Runner
+→ GitHub-hosted x64
+
+generic ARM64 regression (if useful)
+→ GitHub-hosted ARM64
 
 large repeated race
-→ Cloud Runner
+→ GitHub-hosted sharded matrix
 
 interactive race debugging
 → WSL
@@ -530,17 +511,17 @@ interactive race debugging
 ### R001
 
 ```text
-implementation / test source / proxy logic
+implementation / proxy / tests
 → Web Worker
 
 portable MP4/HLS integration
-→ GitHub-hosted Runner（能力允许时）
+→ GitHub-hosted
 
-long-running synthetic stability
-→ Cloud Runner
+generic ARM64 compatibility
+→ GitHub-hosted ARM64
 
-target media-path / target FFmpeg / target resource sample
-→ Ubuntu ARM64 Runner
+target media-path / target FFmpeg / device metrics
+→ Ubuntu ARM64 Target Runner
 ```
 
 ### R003
@@ -550,59 +531,63 @@ metrics scripts / harness
 → Web Worker
 
 portable harness checks
-→ GitHub-hosted Runner
+→ GitHub-hosted
 
-long-running harness dry-run
-→ Cloud Runner
+generic ARM64 harness checks
+→ GitHub-hosted ARM64
 
 CPU / RSS / temperature / target throughput
-→ Ubuntu ARM64 Runner
+→ Ubuntu ARM64 Target Runner
 ```
 
-R002 的最终 TV autoplay/遥控体验仍保留 Manual TV Gate。
+R002 最终 TV autoplay/遥控体验仍保留 Manual TV Gate。
 
 ---
 
-## 13. 实施顺序
+## 15. 实施顺序
 
-当前仓库尚无可运行 Rust workspace，也尚无 `.github/workflows/`。
+当前仓库尚无可运行 Rust workspace，也尚无 `.github/workflows/` 或 self-hosted Runner。
 
-因此 Runner 架构按以下顺序落地：
+按以下顺序落地：
 
 ```text
 1. Contract / first runnable code
-2. GitHub-hosted portable CI
-3. Cloud self-hosted Runner + long-running workflow
-4. Ubuntu ARM64 self-hosted Runner + target workflow
-5. Target metrics/artifact 标准化
-6. 根据真实使用再考虑更多 Runner / runner group / ephemeral strategy
+2. GitHub-hosted x64 CI
+3. GitHub-hosted ARM64 portable verification
+4. repeated/stress workflow 的 matrix/sharding
+5. Ubuntu ARM64 Target Runner
+6. target verification / metrics artifact 标准化
+7. 根据真实缺口再决定是否需要其他执行后端
 ```
 
-不要为了流程完整性提前创建空 workflow 或让手机 Runner 空跑。
+**Cloud Runner 不在计划内。**
 
 ---
 
-## 14. 完成定义
+## 16. 完成定义
 
-Runner 执行架构成熟后，应达到：
+成熟后的默认闭环：
 
 ```text
 大多数代码和测试编写
 → Web Worker
 
-普通 runtime verification
-→ GitHub-hosted Actions
+普通 x64 runtime verification
+→ GitHub-hosted x64
 
-长时间自动实验
-→ Cloud Runner
+通用 ARM64 verification
+→ GitHub-hosted ARM64
 
-目标 ARM64 proof
-→ ARM64 Runner
+大量重复 verification
+→ GitHub-hosted matrix/sharding
+
+目标手机 proof
+→ Ubuntu ARM64 Target Runner
 
 最终物理 TV UX
 → Manual
 ```
 
-最终目标不是“减少使用其他环境”，而是：
+最终目标：
 
-> **把环境变成 Web 可以按需调度的受控能力，让上下文、实现和验证尽可能留在 Web 闭环中。**
+> **让 Web 通过 GitHub Actions 调度尽可能多的真实执行能力；只有“设备本身”是证据对象时才占用自建 Target Runner。**
