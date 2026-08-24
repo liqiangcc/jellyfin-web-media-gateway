@@ -440,7 +440,8 @@ async fn hls_manifest_query_segment_and_interruption_have_concrete_results() {
         .send()
         .await
         .unwrap();
-    assert!(interrupted.bytes().await.is_err());
+    let partial = interrupted.bytes().await.unwrap();
+    assert_eq!(partial.as_ref(), b"partial");
     wait_active_zero(&service).await;
 }
 
