@@ -9,7 +9,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use bytes::Bytes;
-use futures_util::{stream, StreamExt};
+use futures_util::{StreamExt, stream};
 use serde::Serialize;
 use site_adapter_api::{ResolvedStream, StreamProtocol};
 use std::collections::{HashMap, VecDeque};
@@ -218,7 +218,8 @@ impl GatewayService {
             ) {
                 return Err(GatewayError::SecretHeader);
             }
-            let name = HeaderName::from_bytes(name.as_bytes()).map_err(|_| GatewayError::InvalidHeader)?;
+            let name =
+                HeaderName::from_bytes(name.as_bytes()).map_err(|_| GatewayError::InvalidHeader)?;
             let value = HeaderValue::from_str(value).map_err(|_| GatewayError::InvalidHeader)?;
             public_headers.insert(name, value);
         }
@@ -381,7 +382,10 @@ fn ranged_bytes_response(method: Method, request_headers: &HeaderMap, bytes: Vec
     let mut status = StatusCode::OK;
     let mut body = bytes;
     let mut content_range = None;
-    if let Some(range) = request_headers.get(RANGE).and_then(|value| value.to_str().ok()) {
+    if let Some(range) = request_headers
+        .get(RANGE)
+        .and_then(|value| value.to_str().ok())
+    {
         if let Some((start, end)) = parse_single_range(range, len) {
             status = StatusCode::PARTIAL_CONTENT;
             content_range = Some(format!("bytes {start}-{end}/{len}"));

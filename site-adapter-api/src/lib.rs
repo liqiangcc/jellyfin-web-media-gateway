@@ -128,7 +128,9 @@ mod tests {
 
     struct Fake(&'static str, u16);
     impl SiteAdapter for Fake {
-        fn plugin_id(&self) -> &'static str { self.0 }
+        fn plugin_id(&self) -> &'static str {
+            self.0
+        }
         fn recognize(&self, input: &str) -> Result<RecognizeResult, AdapterError> {
             Ok(RecognizeResult {
                 matched: input.starts_with("https://"),
@@ -136,7 +138,9 @@ mod tests {
                 plugin_id: self.0.into(),
                 priority: self.1,
                 locator: Some(SourceLocator {
-                    site_id: "fake".into(), plugin_id: self.0.into(), locator_version: 1,
+                    site_id: "fake".into(),
+                    plugin_id: self.0.into(),
+                    locator_version: 1,
                     opaque_payload: input.into(),
                 }),
             })

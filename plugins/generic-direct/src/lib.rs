@@ -22,15 +22,22 @@ impl GenericDirectAdapter {
 }
 
 impl SiteAdapter for GenericDirectAdapter {
-    fn plugin_id(&self) -> &'static str { "generic-direct" }
+    fn plugin_id(&self) -> &'static str {
+        "generic-direct"
+    }
 
     fn recognize(&self, input: &str) -> Result<RecognizeResult, AdapterError> {
         let url = match Url::parse(input) {
             Ok(url) if matches!(url.scheme(), "http" | "https") => url,
-            _ => return Ok(RecognizeResult {
-                matched: false, site_id: "generic".into(), plugin_id: self.plugin_id().into(),
-                priority: 10, locator: None,
-            }),
+            _ => {
+                return Ok(RecognizeResult {
+                    matched: false,
+                    site_id: "generic".into(),
+                    plugin_id: self.plugin_id().into(),
+                    priority: 10,
+                    locator: None,
+                });
+            }
         };
         let matched = Self::protocol(&url).is_some();
         Ok(RecognizeResult {
@@ -89,8 +96,15 @@ mod tests {
 
     #[test]
     fn non_media_url_is_not_claimed() {
-        assert!(!adapter().recognize("https://example.com/page").unwrap().matched);
+        assert!(
+            !adapter()
+                .recognize("https://example.com/page")
+                .unwrap()
+                .matched
+        );
     }
 
-    fn adapter() -> GenericDirectAdapter { GenericDirectAdapter }
+    fn adapter() -> GenericDirectAdapter {
+        GenericDirectAdapter
+    }
 }
