@@ -89,6 +89,41 @@ await postCommand('r002-remote-after-activation');
 await waitForPlayAttempt('r002-remote-after-activation');
 
 await page.locator('#fullscreen').click();
+// Exercise the degradation branch in hosted mechanics without claiming that
+// this synthetic denial represents a physical TV browser policy.
+await page.evaluate(() => {
+  document.exitFullscreen?.().catch?.(() => {});
+  document.documentElement.requestFullscreen = () => Promise.reject(new DOMException('probe denial', 'NotAllowedError'));
+});
+await page.locator('#fullscreen').click();
+await waitForState(
+  state => state.telemetry.some(item => item.kind === 'fullscreen' && item.result === 'reject'),
+  'Fullscreen rejection telemetry',
+);
+
+// Abort one polling request, then allow the next one through to prove the
+// equivalent reconnect transport is observable and recovers.
+let failNextPoll = true;
+await page.route('**/api/v1/display-probe/events*', async route => {
+  if (failNextPoll) {
+    failNextPoll = false;
+    await route.abort('failed');
+  } else {
+    await route.continue();
+  }
+});
+await page.evaluate(() => window.__r002Probe.poll());
+await waitForState(
+  state => state.telemetry.some(item => item.kind === 'transport' && item.result === 'reconnecting'),
+  'transport reconnecting telemetry',
+);
+await page.evaluate(() => window.__r002Probe.poll());
+await waitForState(
+  state => state.telemetry.filter(item => item.kind === 'transport' && item.result === 'connected').length >= 2,
+  'transport recovery telemetry',
+);
+await page.unroute('**/api/v1/display-probe/events*');
+
 if (evidence.commands.length !== 3) throw new Error(`expected 3 command responses, got ${evidence.commands.length}`);
 if (evidence.commands.filter(command => command.duplicate).length !== 1) throw new Error('expected exactly one idempotent duplicate response');
 await waitForState(
@@ -108,9 +143,9 @@ for (const commandId of ['r002-remote-before-activation', 'r002-remote-after-act
     throw new Error(`expected exactly one play attempt for ${commandId}`);
   }
 }
-if (evidence.fullscreen.length === 0) throw new Error('fullscreen result was not observable');
+if (evidence.fullscreen.length === 0 || !evidence.fullscreen.some(item => item.result === 'reject')) throw new Error('fullscreen result/degradation was not observable');
 if (!evidence.lifecycle.some(item => item.result === 'ready' || item.result === 'pageshow')) throw new Error('lifecycle telemetry was not observed');
-if (!evidence.transport.some(item => item.result === 'connected')) throw new Error('remote transport connection was not observed');
+if (!evidence.transport.some(item => item.result === 'connected') || !evidence.transport.some(item => item.result === 'reconnecting')) throw new Error('remote transport connection/recovery was not observed');
 if (JSON.stringify(evidence).match(/(Bearer\s+|Cookie|r001-fixture-secret)/i)) throw new Error('secret-like material appeared in probe evidence');
 
 fs.writeFileSync('r002-probe.json', JSON.stringify(evidence, null, 2));
