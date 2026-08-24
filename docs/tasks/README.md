@@ -114,6 +114,10 @@ result summary
 
 这些字段不写回 `task.md` 或 `prompt.md`。
 
+Issue comments 是 Attempt / Blocker / Coordinator Review / Final Acceptance 的 append-only 协作历史。完整格式与状态机见：
+
+- `issue-lifecycle-protocol.md`
+
 如果 `prompt.md` 与 `task.md`、`AGENTS.md` 或 canonical docs 冲突，忽略 Prompt 中的冲突内容。
 
 ## 3. prompt.md 规则
@@ -401,14 +405,17 @@ Worker：
 1. 查询 `status:ready + env:<current-environment>`；
 2. 确认 Task kind、Required Capabilities / Execution Plane；
 3. 确认无 active owner；
-4. claim + `status:in-progress`；
+4. claim + `status:in-progress`；每次成功 claim 开始新的 `Attempt N`；
 5. 读取 `AGENTS.md` / Issue / `task.md`；如果存在 `prompt.md`，先用它完成会话 bootstrap；
 6. 只执行当前 Scope；
-7. 提交 candidate / Evidence；
-8. Issue → `status:review`；
-9. 停止，不自动开始下一项。
+7. 正常结束时按 `issue-lifecycle-protocol.md` 评论 `[EXECUTION REPORT]`；阻塞时评论 `[BLOCKER REPORT]`；
+8. 正常结束 → Issue `status:review`；阻塞 → `status:blocked`；
+9. 释放 active execution ownership；
+10. 停止，不自动开始下一项。
 
 GitHub Actions Job 不参与 claim。
+
+Worker 不能自行 `status:done` 或关闭 Issue。只有 Coordinator Review 可以决定 `ACCEPT / REVISE / BLOCK / SPLIT / NOT_PLANNED`。
 
 ## 13. Evidence
 
@@ -417,6 +424,7 @@ GitHub Actions Job 不参与 claim。
 ```text
 Role
 Task / Claim
+Attempt
 Orchestrator
 Execution Plane
 Executor / Runner class
@@ -626,3 +634,98 @@ materialize
 原则：
 
 > **Plan is not execution. Write success is not publication. Publication requires independent read-back from GitHub, and publication handoff is incomplete until the downstream entry prompt is delivered.**
+
+## 16. Issue Feedback / Review / Iteration / Closure
+
+完整规范：
+
+- `issue-lifecycle-protocol.md`
+
+核心闭环：
+
+```text
+ready
+→ Worker claim
+→ in-progress / Attempt N
+→ [EXECUTION REPORT] or [BLOCKER REPORT]
+→ review / blocked
+→ Coordinator Review
+   ├── ACCEPT → [FINAL ACCEPTANCE] → done → close
+   ├── REVISE → ready → downstream entry → Attempt N+1
+   ├── BLOCK → blocked → UNBLOCK → ready
+   └── SPLIT → child Task(s) → Evidence return → parent Review
+```
+
+### 16.1 Issue Comments 是执行历史
+
+标准评论类型：
+
+```text
+[EXECUTION REPORT]
+[BLOCKER REPORT]
+[COORDINATOR REVIEW]
+[COORDINATOR UNBLOCK]
+[SPLIT]
+[FINAL ACCEPTANCE]
+[COORDINATOR REOPEN]
+[CORRECTION]
+```
+
+Issue body / labels 保存当前状态快照；comments 保存发生过什么以及为什么改变。旧 Attempt / Review 默认不删除、不覆盖。
+
+### 16.2 Worker 只报告，Coordinator 才决策
+
+```text
+Worker execution outcome
+!= Verification claim result
+!= Coordinator Task decision
+!= Parent Goal / Gate decision
+```
+
+Worker 正常结束必须先评论 Execution Report，再进入 `status:review`；阻塞必须评论 Blocker Report，再进入 `status:blocked`。
+
+Coordinator 必须把 Review 决定评论到 Issue，不能只在聊天中说“再修改”或“通过”。
+
+### 16.3 同一 Contract 优先反复 Attempt
+
+如果只是 bug、测试失败、Evidence 不足、漏实现或同一 Claim 需要重测：
+
+```text
+task.md unchanged
+prompt.md unchanged
+→ REVISE
+→ status:ready
+→ no active owner
+→ downstream entry
+→ Attempt N+1
+```
+
+不要机械创建新 Issue。
+
+如果 Scope / Claims / Success Criteria / Evidence Authority / architecture 前提本身改变，则先修订 canonical docs / `task.md`，重新走 read-back / ready / queue verification，再发布下一轮入口。
+
+### 16.4 Close Gate
+
+Worker 不得自行 `status:done` 或关闭 Issue。
+
+只有以下全部满足后 Coordinator 才能关闭：
+
+```text
+Task Success Criteria accepted
++ required Claims accepted
++ required Verification Evidence reviewed
++ Candidate / PR accepted when required
++ no unresolved blocker
++ required child Tasks complete
++ [FINAL ACCEPTANCE] posted
+```
+
+顺序：
+
+```text
+[FINAL ACCEPTANCE]
+→ status:done
+→ close Issue as completed
+```
+
+Task 关闭不自动等于 Parent Goal / Research Gate PASS；Parent 必须由 Coordinator 根据其 required Tasks / Claims 独立判定。
