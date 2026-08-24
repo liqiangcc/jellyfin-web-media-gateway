@@ -97,12 +97,7 @@ fn high_frequency_position_plus_pause_seek_has_no_telemetry_conflict() {
     let item_revision = session.item_revision();
 
     for sequence in 1..=1_000 {
-        assert!(session.apply_position_callback(
-            &item_id,
-            item_revision,
-            sequence,
-            sequence * 10,
-        ));
+        assert!(session.apply_position_callback(&item_id, item_revision, sequence, sequence * 10,));
     }
     assert_eq!(session.session_revision(), 0);
 
@@ -263,7 +258,10 @@ fn old_source_callback_after_handoff_commit_is_ignored() {
     assert!(session.commit_handoff(&ticket));
 
     assert_eq!(session.active_display().display_id, "display-b");
-    assert_eq!(session.active_display().generation, ticket.candidate_generation);
+    assert_eq!(
+        session.active_display().generation,
+        ticket.candidate_generation
+    );
     assert!(!session.apply_display_position_callback(
         &source_display.display_id,
         source_display.generation,
