@@ -3,23 +3,41 @@ use gateway_core::{Binding, EgressScope, GatewayService, ProofPaths, UpstreamRes
 use generic_direct::GenericDirectAdapter;
 use site_adapter_api::{SiteAdapterRegistry, StreamProtocol};
 use std::env;
+use std::net::IpAddr;
+#[cfg(test)]
+use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use url::Url;
 
+const DEFAULT_BIND_ADDR: &str = "127.0.0.1";
+const DEFAULT_PORT: u16 = 8787;
 const DEFAULT_MP4: &str =
     "https://raw.githubusercontent.com/mediaelement/mediaelement-files/master/big_buck_bunny.mp4";
 const DEFAULT_HLS: &str = "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8";
+
+fn parse_bind_addr(value: Option<&str>) -> Result<IpAddr, String> {
+    let value = value.unwrap_or(DEFAULT_BIND_ADDR);
+    value
+        .parse::<IpAddr>()
+        .map_err(|_| format!("R001_BIND_ADDR must be an IP address, got {value:?}"))
+}
+
+fn configured_bind_addr() -> IpAddr {
+    let configured = env::var("R001_BIND_ADDR").ok();
+    parse_bind_addr(configured.as_deref()).unwrap_or_else(|error| panic!("{error}"))
+}
 
 #[tokio::main]
 async fn main() {
     let port: u16 = env::var("R001_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(8787);
-    let listener = TcpListener::bind(("127.0.0.1", port))
+        .unwrap_or(DEFAULT_PORT);
+    let bind_addr = configured_bind_addr();
+    let listener = TcpListener::bind((bind_addr, port))
         .await
         .expect("bind R001 server");
     let addr = listener.local_addr().expect("listener addr");
@@ -111,4 +129,45 @@ async fn main() {
     axum::serve(listener, service.router())
         .await
         .expect("serve R001");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bind_address_defaults_to_loopback() {
+        assert_eq!(
+            parse_bind_addr(None).expect("default bind address"),
+            parse_bind_addr(Some(DEFAULT_BIND_ADDR)).unwrap()
+        );
+    }
+
+    #[test]
+    fn bind_address_accepts_explicit_ip() {
+        assert_eq!(
+            parse_bind_addr(Some("192.168.1.42")).expect("explicit bind address"),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 1, 42))
+        );
+    }
+
+    #[test]
+    fn bind_address_rejects_hostnames_and_socket_strings() {
+        for value in ["gateway.local", "0.0.0.0:8787", "not-an-ip"] {
+            let error = parse_bind_addr(Some(value)).expect_err("invalid bind address accepted");
+            assert!(error.contains("R001_BIND_ADDR must be an IP address"));
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_bind_address_is_used_by_listener() {
+        let bind_addr = parse_bind_addr(Some("127.0.0.1")).expect("explicit bind address");
+        let listener = TcpListener::bind((bind_addr, 0))
+            .await
+            .expect("bind explicit listener");
+        assert_eq!(
+            listener.local_addr().expect("listener address").ip(),
+            bind_addr
+        );
+    }
 }
