@@ -1,0 +1,76 @@
+name: r002-probe
+
+on:
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'gateway-core/**'
+      - 'site-adapter-api/**'
+      - 'plugins/generic-direct/**'
+      - 'scripts/r002-probe.mjs'
+      - '.github/workflows/r002-probe.yml'
+      - 'docs/research/r002-tv-browser-autoplay.md'
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic:
+    name: J1 deterministic x64 probe contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: rustc --version && cargo --version && uname -a
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace --all-targets
+
+  browser:
+    name: J2 Chromium remote play and lifecycle probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Install deterministic media fixture tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - name: Runtime versions
+        run: |
+          rustc --version
+          google-chrome --version
+          ffmpeg -version | head -1
+          node --version
+      - name: Build probe server
+        run: cargo build -p gateway-core --bin r001-server
+      - name: Generate audible MP4 fixture
+        run: |
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=320x180:rate=24 -f lavfi -i sine=frequency=440:sample_rate=44100 -t 5 -c:v libx264 -pix_fmt yuv420p -c:a aac -movflags +faststart /tmp/r002-fixture.mp4
+          test -s /tmp/r002-fixture.mp4
+      - name: Start R002 probe server
+        run: |
+          R001_FIXTURE_MP4=/tmp/r002-fixture.mp4 R002_USE_FIXTURE_DISPLAY=1 ./target/debug/r001-server >server.log 2>&1 &
+          echo $! > server.pid
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8787/healthz && exit 0; sleep 1; done
+          cat server.log
+          exit 1
+      - name: Browser probe
+        run: |
+          npm install --no-save playwright-core@1.55.0
+          BASE_URL=http://127.0.0.1:8787 node scripts/r002-probe.mjs
+      - name: Verify diagnostics contain no secrets
+        run: |
+          ! grep -Eiq 'Bearer[[:space:]]+|Cookie|r001-fixture-secret|r002-fixture' r002-probe.json server.log
+          cat r002-probe.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r002-probe-browser
+          path: |
+            r002-probe.json
+            r002-probe-debug.json
+            server.log

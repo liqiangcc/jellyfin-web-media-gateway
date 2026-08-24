@@ -230,6 +230,7 @@ dependencies = [
  "generic-direct",
  "reqwest",
  "serde",
+ "serde_json",
  "site-adapter-api",
  "tokio",
  "url",
