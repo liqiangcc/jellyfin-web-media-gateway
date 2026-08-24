@@ -336,62 +336,74 @@ Target = ubuntu-arm64-phone
 
 “谁发起”不能替代“实际在哪里运行”。
 
-## 10. Issue 与 task.md
+## 10. Task Package：Issue + task.md + prompt.md
 
-Issue 是动态状态 authority：
-
-```text
-status
-active owner / claim
-branch
-candidate commit / PR
-linked implementation / verification task
-verification status
-blocker
-review state
-result summary
-```
-
-`docs/tasks/<issue>-<slug>/task.md` 是稳定执行契约：
+进入独立 Worker 队列的标准 Task Package：
 
 ```text
-Task kind
-Parent Goal / Research Item
-Goal / Context
-Task decomposition decision
-Base / Candidate commit
-Claims to verify
-Required capabilities
-Verification Job Matrix
-Execution Plane
-Runner class / image / labels
-Target / Trust gate
-Scope
-Implementation Requirements
-Verification Plan
-Success Criteria
-Evidence Contract
-Failure / Blocked Rules
-Deliverables
+GitHub Issue
++
+docs/tasks/<issue>-<slug>/
+├── task.md
+└── prompt.md
 ```
+
+职责必须分开：
+
+```text
+Issue
+= 实时 status / owner / blocker / branch / result summary
+
+task.md
+= 当前 Task 唯一执行契约
+
+prompt.md
+= 新会话 bootstrap / navigation only
+```
+
+`prompt.md` 不能重新定义或复制 Goal、Scope、Claims、Success Criteria、Architecture Invariants、Verification Job Matrix、Evidence 判断标准。
+
+独立 Worker Task 进入 `status:ready` 前，默认先提交 `task.md + prompt.md`，并让 Issue 链接两者和 base commit。
+
+Prompt 模板：
+
+- `docs/tasks/prompt.template.md`
+
+冲突时：
+
+```text
+canonical docs
+→ AGENTS.md
+→ task.md
+→ prompt.md
+```
+
+Issue 是实时状态 authority，但不能通过评论静默改写 canonical architecture 或 Task Contract。
 
 ## 11. Worker 协议
 
-1. 读取 `AGENTS.md`、Issue、`task.md`；
-2. 确认 Task kind、Scope 和执行路径满足 Required Capabilities；
-3. 确认 Issue `status:ready` 且无 active owner；
-4. claim + `status:in-progress`；
-5. 只执行 Scope；
-6. 提交 candidate / Evidence；
-7. 记录真实 Task/Claim/Job、Orchestrator/Execution Plane/Runner/Target；
-8. Issue → `status:review`；
-9. 停止，不自动开始下一项。
+1. 读取 `AGENTS.md`；如果 Task Package 有 `prompt.md`，先用它完成 bootstrap；
+2. 读取 Issue、`task.md` 以及 Task 引用的适用 canonical /专题文档；
+3. 确认 Task kind、Scope 和执行路径满足 Required Capabilities；
+4. 确认 Issue `status:ready` 且无 active owner；
+5. claim + `status:in-progress`；
+6. 只执行 Scope；
+7. 提交 candidate / Evidence；
+8. 记录真实 Task/Claim/Job、Orchestrator/Execution Plane/Runner/Target；
+9. Issue → `status:review`；
+10. 停止，不自动开始下一项。
 
 GitHub Actions Job 不参与 claim。大型 Research Item 可以拆多个 Task；最终 Gate 由 Web Coordinator 汇总已接受 Evidence 决定。
 
+推荐新会话只给：
+
+> 读取 `AGENTS.md` 和 `docs/tasks/<issue>-<slug>/prompt.md`，执行当前 Task。
+
+如果旧 Task 没有 `prompt.md`，仍可使用 `AGENTS.md` + Issue + `task.md` 执行。
+
 ## 12. 外部 Codex 入口
 
-优先使用 GitHub Issue + `docs/tasks/<issue>-<slug>/task.md`。
+优先使用标准 Task Package。
 
 阶段性 fallback：
 
