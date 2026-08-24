@@ -76,3 +76,29 @@ GitHub Issue
 - 一条不会改变 Scope 的启动提醒。
 
 不要复制 `task.md` 的完整内容，不要在这里维护动态状态或实验结果。
+
+## Coordinator Handoff Entry
+
+本 Task 通过 Publication Gate 并进入 `status:ready` 后，Coordinator 必须把一个**可直接复制给下游 Worker 新会话**的入口提示词交给用户。
+
+推荐最短形式：
+
+```text
+读取 `AGENTS.md` 和 `docs/tasks/<issue>-<slug>/prompt.md`，执行当前 Task。
+```
+
+Coordinator 对外给出的 handoff 还应同时明确真实值：
+
+```text
+Issue: #<number>
+Worker: <expected worker>
+Environment: env:<environment>
+Prompt: docs/tasks/<issue>-<slug>/prompt.md
+```
+
+要求：
+
+- 必须使用发布后从 GitHub read-back 得到的真实 Issue/路径/环境，不得保留 `<placeholder>`；
+- 只有 Post-publish Queue Verification PASS 后才能输出；
+- 如果发布验证失败，不得提供下游执行入口；
+- 下游入口只负责启动导航，不复制 `task.md`，也不重新定义 Scope/Claims/Success Criteria。
