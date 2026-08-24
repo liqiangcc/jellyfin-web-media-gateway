@@ -378,6 +378,7 @@ fn sanitize_text(value: &str, max: usize) -> String {
         output.push(' ');
     }
     output
+        .trim_end()
         .chars()
         .filter(|character| !character.is_control())
         .take(max)
