@@ -18,19 +18,24 @@ Expected environment label: env:<environment>
 1. 实际读取当前仓库，不根据聊天背景猜测状态。
 2. 读取并遵守：
    - `AGENTS.md`
-   - GitHub Issue `#<number>`
+   - GitHub Issue `#<number>` 及 relevant comments
    - `docs/tasks/<issue>-<slug>/task.md`
+   - `docs/tasks/issue-lifecycle-protocol.md`
    - `task.md` 明确引用的 canonical /专题文档
 3. 确认 Issue 仍满足可领取条件：
    - `status:ready`
    - 当前环境/能力匹配
    - 没有 active owner
-4. claim 后切换为 `status:in-progress`，再开始写入性工作。
+4. claim 后切换为 `status:in-progress`，确定新的 `Attempt N`，再开始写入性工作。
 5. 严格执行 `task.md` 的 Scope、Claims、Success Criteria、Verification Plan 和 Evidence Contract。
-6. 完成后在 Issue 记录 candidate/Evidence/未验证范围，切换到 `status:review`。
-7. 停止，不自动开始下一 Task。
+6. 正常结束时，先在 Issue 评论标准 `[EXECUTION REPORT]`，记录 Attempt、Candidate、Claim results、Jobs/commands、Evidence、问题与未验证范围；然后切换到 `status:review`。
+7. 如果无法继续，评论标准 `[BLOCKER REPORT]`，记录 blocker、已完成部分、Evidence、恢复条件与 cleanup；然后切换到 `status:blocked`。
+8. 结束当前 Attempt 后释放 active execution ownership。
+9. 停止，不自动开始下一 Task，也不自行开始下一 Attempt。
 
 如果 Issue 已被其他 Worker claim、状态不再是 `status:ready`，或当前环境不满足 Required Capabilities，则停止，不自行扩大或改写任务。
+
+Worker 不得自行设置 `status:done` 或关闭 Issue。只有 Coordinator 可以通过 `[COORDINATOR REVIEW]` 决定 `ACCEPT / REVISE / BLOCK / SPLIT / NOT_PLANNED`；只有 `[FINAL ACCEPTANCE]` 后才能关闭。
 
 ## Authority
 
@@ -49,8 +54,11 @@ task.md
 prompt.md
 → 当前会话 bootstrap / navigation only
 
-GitHub Issue
+GitHub Issue fields / labels
 → 当前 Task 实时状态 / owner / blocker / result summary
+
+GitHub Issue comments
+→ Attempt / Blocker / Review / Acceptance append-only history
 ```
 
 本 `prompt.md` 不得重新定义：
@@ -101,4 +109,5 @@ Prompt: docs/tasks/<issue>-<slug>/prompt.md
 - 必须使用发布后从 GitHub read-back 得到的真实 Issue/路径/环境，不得保留 `<placeholder>`；
 - 只有 Post-publish Queue Verification PASS 后才能输出；
 - 如果发布验证失败，不得提供下游执行入口；
-- 下游入口只负责启动导航，不复制 `task.md`，也不重新定义 Scope/Claims/Success Criteria。
+- 下游入口只负责启动导航，不复制 `task.md`，也不重新定义 Scope/Claims/Success Criteria；
+- 如果上一 Attempt 被 Coordinator `REVISE` 后重新进入 `status:ready`，Coordinator 必须重新给出同一 Task 的 downstream entry，让下一 Worker 从 Issue history 继续，而不是让用户猜测如何恢复。
