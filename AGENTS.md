@@ -142,38 +142,146 @@ Evidence
 
 ## 10. 多环境协同
 
-本项目默认采用“网页 GPT + GitHub MCP 优先，Codex 按需执行”：
+本项目采用：
 
-- 网页 GPT + GitHub MCP 默认负责需求澄清、设计、文档、Issue/任务包、轻量修改和 Review。
-- 只有任务必须访问本地文件、ADB、WSL、Ubuntu ARM64、真实浏览器/电视，或必须实际编译、运行、测试、测量时，才路由到相应 Codex 环境。
-- 网页分析、文档推理或模拟输出不能替代真实运行 Evidence，也不能把 Research Item 标记为 PASS。
+> **Web-first，Capability-driven fallback。**
 
-开始工作前必须：
+网页 GPT 明确分成两种会话：
 
-1. 识别当前执行环境及其允许证明的结论；
-2. 检查 GitHub 上是否已有同一任务的 owner、分支、PR 或更新提交；
-3. 只接手一个边界明确的任务，不与另一环境同时修改同一文件/Research Item；
-4. 从 GitHub 获取最新状态，不通过复制未提交工作目录在环境间交接；
-5. 在 Evidence 中记录实际执行环境，不能用 WSL/云端结果冒充 Ubuntu ARM64 或真实电视结果。
+```text
+Web Coordinator Session
+= 长生命周期、项目全局控制面
 
-当任务由 GitHub Issue 派发时，先读取 `docs/tasks/<issue>-<slug>/task.md`。Issue 是协调与状态入口，`task.md` 是执行契约；Codex 不自行扩大其 Scope，也不在完成后自动开始下一项。
+Web Worker Session
+= 短生命周期、单 Task、env:web-gpt 执行者
+```
 
-各执行环境（包括网页 GPT + GitHub MCP）使用 Issue 标签自助领取任务：只查询同时带有 `status:ready` 和匹配 `env:*` 的未领取 Issue；开始前先设置 assignee/claim 信息并切换为 `status:in-progress`。同一 Issue 即使允许多个环境执行，默认也只能有一个 active owner。
+### 10.1 Web Coordinator
 
-没有匹配的 ready Issue 时停止，不自行从 backlog 推断新任务。无法完成时记录 Evidence/阻塞原因，并转为 `status:blocked` 或释放回 `status:ready`。
+Web Coordinator 负责：
 
-环境默认职责、任务交接模板、Git 并发规则与 Tailscale 安全要求见：
+- 读取仓库、Issue、PR、Research Matrix 和 canonical docs 的全局状态；
+- 决定当前最高优先级工作；
+- 拆分 Issue / Task；
+- 定义 Scope、Success Criteria 和 Evidence Requirements；
+- 判断 Web Worker 是否能够产生有效结果；
+- 对缺少网页能力的任务进行环境路由；
+- Review Worker 提交和 Evidence；
+- 决定 `done / ready / blocked` 和下一任务；
+- 根据已经接受的 Evidence 更新 Gate / canonical docs。
+
+Coordinator 可以执行协调本身所需的 GitHub 写操作，但一个已经形成独立 Task 的实现工作默认交给单独 Worker Session，避免项目全局会话被局部实现上下文吞噬。
+
+### 10.2 Web Worker 是默认最高优先级执行者
+
+只要 Web Worker 能完整完成任务并提供该 Task 要求的有效证据，就优先使用 `env:web-gpt`。
+
+不要使用错误规则：
+
+```text
+“这是执行任务，所以必须交给 Codex”
+```
+
+正确规则是：
+
+```text
+Web Worker 能否提供有效结果？
+  ├── Yes → Web Worker 优先
+  └── No  → 按缺失 capability 路由
+```
+
+Web Worker 可以：
+
+- 修改代码；
+- 修改文档；
+- 分析仓库；
+- 创建 commit / PR；
+- 完成 GitHub 工具真实支持范围内的执行任务。
+
+Web Worker 不能把没有真实运行过的编译、自动化测试、本地进程或设备行为标记为 PASS。
+
+### 10.3 外部 Worker 是能力扩展
+
+只有任务需要网页环境缺失的能力时，才路由到：
+
+- WSL：Rust 编译、测试、lint、本地并发/安全测试；
+- Windows：ADB、Android host、手机生命周期和部署协调；
+- Ubuntu ARM64：目标架构运行、CPU/RSS/温度/长时间稳定性；
+- Cloud：长时间构建、自动化执行、独立复现；
+- Real TV / manual：audible autoplay、遥控器、真实 TV UX、Jellyfin Android TV。
+
+能够通过 Tailscale 远程访问目标设备，不代表执行 target 发生变化；Evidence 必须分别记录 Executor 和 Target。
+
+### 10.4 Issue 与 task.md 的职责
+
+GitHub Issue 是动态状态 authority，负责：
+
+```text
+status
+assignee / active owner
+claimed environment / claimed at
+active branch
+PR / commit
+blocker
+review state
+result summary
+```
+
+`docs/tasks/<issue>-<slug>/task.md` 是稳定执行契约，负责：
+
+```text
+Goal / Context
+Preferred executor
+Eligible environments
+Required capabilities
+Base commit
+Preconditions
+In Scope / Out of Scope
+Architecture Invariants
+Commands / Tests
+Success Criteria
+Evidence Requirements
+Failure / Blocked Rules
+Deliverables
+```
+
+`task.md` 不重复维护实时 status、claim、active branch 或最终 result。执行 Worker 不为了 claim/review/done 修改任务契约。
+
+### 10.5 Worker 协议
+
+当任务由 GitHub Issue 派发时：
+
+1. 读取 `AGENTS.md`、Issue 和 `docs/tasks/<issue>-<slug>/task.md`；
+2. 确认当前环境满足 Required Capabilities；
+3. 检查 Issue 仍为 `status:ready` 且无 active owner；
+4. claim 后切换为 `status:in-progress`；
+5. 只执行当前 Scope；
+6. 提交 commit / PR / Evidence；
+7. 在 Issue 中记录结果摘要和未验证范围；
+8. 切换为 `status:review`；
+9. 停止，不自动领取下一任务。
+
+`env:web-gpt` 专指 Web Worker 执行资格，不代表 Web Coordinator 正在承担该 Task。
+
+同一具体 Task 任一时刻只能有一个 active owner。大型 Research Item 可以拆成多个独立 Task 并行，但整个 Research Gate 的最终结论由 Web Coordinator 根据已接受 Evidence 汇总。
+
+没有匹配的 ready Issue 时 Worker 停止，不自行从 backlog 推断新任务。无法完成时，不降低 Success Criteria；记录缺失 capability / blocker，并转 `status:blocked` 或释放回 `status:ready`。
+
+环境职责、会话模型、任务交接模板、Git 并发规则与 Tailscale 安全要求见：
 
 - `docs/development-environments.md`
+- `docs/tasks/README.md`
 
-如果任务由网页 GPT/MCP 准备，优先读取其 Issue、任务文档或 PR 描述，不要求用户在聊天中重复粘贴项目背景；但仍必须按本文件读取适用的 canonical 文档。
+网页分析、文档推理或模拟输出不能替代真实运行 Evidence。WSL/Cloud 结果不能冒充 Ubuntu ARM64 或真实电视结果。
 
 ## 11. 阶段任务入口
 
-当前可直接执行的 Codex 任务：
+当前外部 Codex 可直接执行的阶段任务入口：
 
 - `docs/codex/technical-feasibility.md`
 
-新会话推荐指令：
+当 Web Coordinator 判断当前最高优先级任务需要外部运行能力时，可以使用该入口或创建更聚焦的 Issue + `task.md`。
 
-> 读取 `AGENTS.md`，然后按照 `docs/codex/technical-feasibility.md` 继续执行下一项。
+新外部 Codex 会话推荐指令：
+
+> 读取 `AGENTS.md`，然后按照对应 GitHub Issue / `docs/tasks/<issue>-<slug>/task.md` 执行当前 Scope；如果本轮明确使用阶段任务入口，则读取 `docs/codex/technical-feasibility.md`。完成后提交结果并停止，不自动开始下一项。
