@@ -43,7 +43,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.85.0
+          toolchain: stable
       - name: Format, lint, and run workspace tests
         run: |
           cargo fmt --all -- --check
@@ -67,7 +67,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.85.0
+          toolchain: stable
       - name: Run security fixture and media replay suites
         shell: bash --noprofile --norc -euo pipefail {0}
         run: |
@@ -95,6 +95,6 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.85.0
+          toolchain: stable
       - name: Run repository workflow trust checks
         run: cargo test -p gateway-core --test security_baseline -- --nocapture
