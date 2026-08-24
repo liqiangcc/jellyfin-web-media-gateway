@@ -9,9 +9,9 @@ Task / Research ID: R003-TARGET
 Task kind: verification
 Planning base commit: 2f3ec8dd279b62d7f2e6c1f73ecb7f1a37f0c649
 Session bootstrap prompt: docs/tasks/9-r003-arm64-resource-baseline/prompt.md
-Downstream handoff profile: docs/tasks/handoffs/web-gpt.md
-Preferred worker: web
-Eligible worker environments after publication: env:web-gpt
+Downstream handoff profile: docs/tasks/handoffs/cloud.md
+Preferred worker: cloud
+Eligible worker environments after publication: env:cloud
 Required capabilities: github-read-write, actions-dispatch, actions-log-artifact-read, metrics-analysis, target-proof-review
 Linked implementation task: Issue #8 / R003-PREP
 Execution plane: github-actions
@@ -22,7 +22,7 @@ Infrastructure dependency: Issue #1 / INFRA-001 ACCEPTED
 Hard publication dependencies: Issue #8 Coordinator-accepted/merged trusted harness+target workflow; a specific stable R001 candidate/deployment approved for target proof; target Runner available
 ```
 
-> The Web Worker owns this Issue and orchestrates GitHub Actions. The phone Runner is the execution backend/target and does not claim the Issue.
+> The Cloud Worker owns this Issue and orchestrates GitHub Actions. The phone Runner is the execution backend/target and does not claim the Issue. Cloud must not execute target measurements locally or substitute hosted/Cloud evidence for the Ubuntu ARM64 phone.
 
 ## Goal
 
@@ -392,4 +392,4 @@ If Evidence reveals an implementation bug in the measured candidate, report it a
 
 ## Completion Protocol
 
-Web Worker uses GitHub Actions as execution plane, posts one standard `[EXECUTION REPORT]` or `[BLOCKER REPORT]`, moves to `status:review`/`status:blocked`, releases ownership, and stops. Only Coordinator performs research-result acceptance, Task Final Acceptance and closure.
+Cloud Worker uses GitHub Actions as execution plane, posts one standard `[EXECUTION REPORT]` or `[BLOCKER REPORT]`, moves to `status:review`/`status:blocked`, releases ownership, and stops. Only Coordinator performs research-result acceptance, Task Final Acceptance and closure.
