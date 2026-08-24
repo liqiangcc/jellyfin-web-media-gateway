@@ -183,6 +183,16 @@ ADR：
 - [ADR-0005：统一 Control 体验](docs/adr/0005-unified-control-experience.md)
 - [ADR-0006：Site Plugin Boundary](docs/adr/0006-site-plugin-boundary.md)
 
+## Codex / Agent
+
+仓库长期 Agent 工作规则见 [AGENTS.md](AGENTS.md)。当前阶段可以直接交给 Codex 的任务入口见 [docs/codex/technical-feasibility.md](docs/codex/technical-feasibility.md)。
+
+新开 Codex 会话时可以只给：
+
+> 读取 `AGENTS.md`，然后按照 `docs/codex/technical-feasibility.md` 继续执行下一项。
+
+Codex 应自行读取仓库当前 Research Matrix、Evidence 和 canonical 文档，不需要重新粘贴整套项目背景。
+
 ## 当前状态
 
-设计收敛完成到可编码契约阶段；技术可行性验证框架已建立，尚未把真实设备/真实媒体路径标记为已验证，也尚无可运行正式版本。
+设计收敛完成到可编码契约阶段；技术可行性验证框架和 Codex 工作入口已经建立，尚未把真实设备/真实媒体路径标记为已验证，也尚无可运行正式版本。
