@@ -17,7 +17,7 @@ $task-reviewer
 → Coordinator: review Evidence + REVISE/BLOCK/SPLIT/ACCEPT + close when valid
 
 $task-dispatcher
-→ Coordinator utility: sync main, create an isolated Issue worktree, launch/track an Issue-linked local Codex tmux Worker session
+→ Coordinator utility: sync main, create an isolated Issue worktree, launch/track an Issue-linked child Codex tmux Worker session in the current Dispatcher execution context
 ```
 
 Lifecycle:
@@ -39,7 +39,9 @@ $task-reviewer
       └── ACCEPT → [FINAL ACCEPTANCE] → status:done → close
 ```
 
-`$task-dispatcher` sits outside this authority chain: it may bootstrap/inspect local Worker processes, but it does not claim/review/accept/close Tasks itself.
+`$task-dispatcher` sits outside this authority chain: it may bootstrap/inspect child Worker processes in its current execution context, but it does not claim/review/accept/close Tasks itself.
+
+`local` in `$task-dispatcher` is relative to the Dispatcher execution context, not an `env:*` classification. A child session launched from the current context must still match the Issue's real Worker environment/capability contract; the fact that it is a local child neither qualifies nor disqualifies `env:cloud`, `env:wsl`, `env:windows`, `env:ubuntu-arm64`, or other routes.
 
 ## Authority
 
@@ -73,7 +75,7 @@ Do not duplicate those documents into Skills.
 
 ## Invocation policy
 
-All Task lifecycle/dispatch skills set `allow_implicit_invocation: false` because they can mutate GitHub Task state or launch local processes. Invoke them explicitly with `$task-publisher`, `$task-worker`, `$task-reviewer`, or `$task-dispatcher`.
+All Task lifecycle/dispatch skills set `allow_implicit_invocation: false` because they can mutate GitHub Task state or launch child processes. Invoke them explicitly with `$task-publisher`, `$task-worker`, `$task-reviewer`, or `$task-dispatcher`.
 
 Examples:
 
