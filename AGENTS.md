@@ -16,6 +16,7 @@
 8. `docs/development-environments.md`
 9. `docs/runner-execution-architecture.md`
 10. 当前 Task / Research Item 相关专题文档 / ADR
+11. 当前独立 Task 的 `docs/tasks/issue-lifecycle-protocol.md`
 
 不要从旧聊天或旧代码猜测架构事实；冲突按 `docs/README.md` 权威层级处理。
 
@@ -353,6 +354,7 @@ docs/tasks/<issue>-<slug>/
 ```text
 Issue
 = 实时 status / owner / blocker / branch / result summary
++ append-only Attempt / Review / Acceptance history
 
 task.md
 = 当前 Task 唯一执行契约
@@ -368,6 +370,10 @@ prompt.md
 Prompt 模板：
 
 - `docs/tasks/prompt.template.md`
+
+Issue 闭环协议：
+
+- `docs/tasks/issue-lifecycle-protocol.md`
 
 冲突时：
 
@@ -438,18 +444,96 @@ Prompt: docs/tasks/<real-issue>-<real-slug>/prompt.md
 
 > **Plan is not execution. Write success is not publication. Publication requires independent read-back from GitHub, and handoff is incomplete until the downstream entry prompt is delivered.**
 
+### 10.2 Issue Feedback / Review / Iteration / Closure
+
+每次 Worker 成功 claim：
+
+```text
+status:ready
+→ status:in-progress
+→ starts Attempt N
+```
+
+Worker 正常结束：
+
+```text
+post [EXECUTION REPORT]
+→ status:review
+→ release active execution ownership
+→ STOP
+```
+
+Worker 阻塞：
+
+```text
+post [BLOCKER REPORT]
+→ status:blocked
+→ release active execution ownership unless explicitly resolving blocker
+→ STOP
+```
+
+Coordinator 必须读取 Issue history + `task.md` + candidate/PR + required Evidence，并把决定评论到 Issue：
+
+```text
+[COORDINATOR REVIEW]
+Decision: ACCEPT | REVISE | BLOCK | SPLIT | NOT_PLANNED
+```
+
+规则：
+
+- `REVISE`：如果 Contract 没变，`task.md` / `prompt.md` 不变，Issue → `status:ready`，输出下一轮 downstream entry；
+- `BLOCK`：Issue → `status:blocked`；解阻后评论 `[COORDINATOR UNBLOCK]`，再 `status:ready`；
+- `SPLIT`：只有独立 Scope/lifecycle/Success Criteria/Evidence Authority 才建 child Task；不能按 Runner/环境拆；
+- Contract 改变：先回 `status:draft`，更新 canonical docs / `task.md`，再走 read-back / ready / queue verification；
+- `ACCEPT`：只有 Final Acceptance Gate 全部满足后才允许 `status:done` + close。
+
+Issue Comment 标准类型：
+
+```text
+[EXECUTION REPORT]
+[BLOCKER REPORT]
+[COORDINATOR REVIEW]
+[COORDINATOR UNBLOCK]
+[SPLIT]
+[FINAL ACCEPTANCE]
+[COORDINATOR REOPEN]
+[CORRECTION]
+```
+
+Issue comments 默认 append-only；不要删除旧 Attempt / Review 来隐藏失败历史。
+
+Worker execution outcome、Verification Claim Result、Coordinator Task Decision、Parent Goal / Research Gate Decision 必须分开。
+
+最终关闭顺序：
+
+```text
+Success Criteria accepted
++ required Claims/Evidence accepted
++ no unresolved blocker
++ required child Tasks complete
+→ post [FINAL ACCEPTANCE]
+→ status:done
+→ close Issue as completed
+```
+
+Worker 不得自行 `done` 或关闭 Issue。
+
+完整模板与 reopen/split/contract revision 规则见 `docs/tasks/issue-lifecycle-protocol.md`。
+
 ## 11. Worker 协议
 
 1. 读取 `AGENTS.md`；如果 Task Package 有 `prompt.md`，先用它完成 bootstrap；
-2. 读取 Issue、`task.md` 以及 Task 引用的适用 canonical /专题文档；
+2. 读取 Issue、全部 relevant comments、`task.md`、`docs/tasks/issue-lifecycle-protocol.md` 以及 Task 引用的适用 canonical /专题文档；
 3. 确认 Task kind、Scope 和执行路径满足 Required Capabilities；
 4. 确认 Issue `status:ready` 且无 active owner；
-5. claim + `status:in-progress`；
+5. claim + `status:in-progress`，确定新的 `Attempt N`；
 6. 只执行 Scope；
 7. 提交 candidate / Evidence；
-8. 记录真实 Task/Claim/Job、Orchestrator/Execution Plane/Runner/Target；
-9. Issue → `status:review`；
-10. 停止，不自动开始下一项。
+8. 正常完成时评论 `[EXECUTION REPORT]`，阻塞时评论 `[BLOCKER REPORT]`；
+9. 记录真实 Task/Claim/Attempt/Job、Orchestrator/Execution Plane/Runner/Target；
+10. 正常完成 → Issue `status:review`；阻塞 → `status:blocked`；
+11. 释放 active execution ownership；
+12. 停止，不自动开始下一项。
 
 GitHub Actions Job 不参与 claim。大型 Research Item 可以拆多个 Task；最终 Gate 由 Web Coordinator 汇总已接受 Evidence 决定。
 
@@ -459,7 +543,24 @@ GitHub Actions Job 不参与 claim。大型 Research Item 可以拆多个 Task�
 
 如果旧 Task 没有 `prompt.md`，仍可使用 `AGENTS.md` + Issue + `task.md` 执行。
 
-## 12. 外部 Codex 入口
+## 12. Coordinator Review / Closure 协议
+
+Coordinator 不能只在聊天中 Review。
+
+每次 Review 必须：
+
+1. 读取当前 Issue 与 relevant comments；
+2. 读取 `task.md`；
+3. 读取 candidate commit / PR / required Actions / artifact / target Evidence；
+4. 评论 `[COORDINATOR REVIEW]`；
+5. 明确 `ACCEPT / REVISE / BLOCK / SPLIT / NOT_PLANNED`；
+6. 执行对应状态转换；
+7. 如果回到 `status:ready`，重新给用户真实 downstream entry；
+8. 只有 `[FINAL ACCEPTANCE]` 后才能 `status:done` 并关闭 Issue。
+
+聊天只是操作界面；Task 的可恢复协作历史必须留在 GitHub。
+
+## 13. 外部 Codex 入口
 
 优先使用标准 Task Package。
 
