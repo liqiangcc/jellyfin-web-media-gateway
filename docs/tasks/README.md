@@ -4,7 +4,7 @@
 
 核心原则：
 
-> **Task 按工作与 Claim 拆；Job 按执行能力拆；环境和 Runner 不决定业务 Task 边界。**
+> **Task 按工作与 Claim 拆；Job 按执行能力拆；Worker/client、环境和 Runner 不决定业务 Task 边界。**
 
 默认层级：
 
@@ -18,6 +18,8 @@ Task
 └── research
         ↓
 Claims to verify
+        ↓
+Worker / client routing
         ↓
 Verification Jobs
 ├── GitHub-hosted x64
@@ -33,14 +35,15 @@ Coordinator Decision
 默认调度：
 
 ```text
-Web Worker implementation
+Codex Cloud Worker implementation / repository integration
 → GitHub-hosted x64 / ARM64 verification
 → Ubuntu ARM64 Target Runner only for phone-specific proof
-→ WSL / Windows / Cloud Codex only for interactive capability
+→ WSL / Windows / Ubuntu ARM64 Codex when a specific interactive capability is required
+→ Web Worker for GitHub-only lightweight fallback
 → Real TV / Manual for physical UX proof
 ```
 
-Cloud 不部署 Runner。
+Cloud Codex 是 Worker，不是 Runner；Cloud 不部署 self-hosted Runner。
 
 ## 1. Task Package 目录
 
@@ -71,7 +74,7 @@ docs/tasks/prompt.template.md
 
 对于一个准备进入 `status:ready`、需要独立 Worker 新会话执行的 Task，`task.md` 与 `prompt.md` 应先提交到仓库，Issue 再链接两者及 base commit。
 
-**在任何 Task 被告知“已发布 / 可以领取”之前，还必须通过本文第 15 节的 Task Publication Gate。写入 API 返回成功不等于发布完成。**
+**在任何 Task 被告知“已发布 / 可以领取”之前，还必须通过本文第 15 节 Task Publication Gate。写入 API 返回成功不等于发布完成。**
 
 如果只是 Coordinator 当前会话内完成、且不进入独立 Worker 队列的极小协调性修改，可以不建立 Task Package。
 
@@ -84,7 +87,7 @@ canonical docs
 = 产品 / 架构 / 安全事实
 
 AGENTS.md
-= 长期 Agent 规则
+= 长期 Agent / Worker 路由规则
 
 GitHub Issue
 = 实时状态 authority
@@ -122,9 +125,15 @@ Issue comments 是 Attempt / Blocker / Coordinator Review / Final Acceptance 的
 
 ## 3. prompt.md 规则
 
-`prompt.md` 的目标是让用户启动新 Web/Codex/设备会话时，只需给出非常短的入口，例如：
+`prompt.md` 的目标是让用户启动新 Codex/Web/设备会话时，只需给出非常短的入口。
 
-> 读取 `AGENTS.md` 和 `docs/tasks/123-example/prompt.md`，执行当前 Task。
+Codex 环境推荐：
+
+```text
+$task-worker Execute Issue #<issue> using `docs/tasks/<issue>-<slug>/prompt.md`.
+```
+
+Web/Manual 或 Skill 不可见时使用对应 `docs/tasks/handoffs/<env>.md` fallback。
 
 Worker 应自行从 GitHub 获取 Issue、Task Contract 和相关 canonical 文档，不要求用户重复粘贴完整项目背景。
 
@@ -133,11 +142,12 @@ Worker 应自行从 GitHub 获取 Issue、Task Contract 和相关 canonical 文�
 - GitHub Issue 编号；
 - `task.md` 路径；
 - 预期 Worker / environment 提示；
+- handoff profile；
 - 必须先读取哪些入口文件；
 - claim 前置条件；
 - `status:in-progress` / `status:review` 生命周期提醒；
 - 完成后停止、不自动开始下一项；
-- 必要的最少启动提醒，例如先检查设备连接状态。
+- 必要的最少启动提醒，例如先读取前一 Attempt Review 或检查设备连接状态。
 
 ### 3.2 prompt.md 不得包含
 
@@ -156,14 +166,12 @@ Worker 应自行从 GitHub 获取 Issue、Task Contract 和相关 canonical 文�
 
 ### 3.3 Prompt 更新规则
 
-通常 Task 执行过程中不需要修改 `prompt.md`。
-
 只有以下内容发生变化时才更新：
 
-- Issue / Task 路径发生变化；
-- 预期 Worker 类型发生实质变化；
-- bootstrap 前置步骤发生变化；
-- 原 Prompt 本身存在错误或与更高 authority 漂移。
+- Issue / Task 路径变化；
+- 预期 Worker/client 或 eligible environment 实质变化；
+- bootstrap 前置步骤变化；
+- 原 Prompt 本身错误或与更高 authority 漂移。
 
 claim、block、review、done、Evidence 变化不触发 Prompt 更新。
 
@@ -178,7 +186,7 @@ research
 
 - `implementation`：产生 candidate commit / PR，不自动等于 runtime claim 已验证。
 - `verification`：针对确定 Candidate SHA 验证一个或一组稳定 Claims。
-- `combined`：普通工程任务可在一个 Task 内完成 Web implementation + 标准 Actions verification。
+- `combined`：普通工程任务可在一个 Task 内完成 Codex implementation + 标准 Actions verification。
 - `research`：需要 Hypothesis、Success Criteria、真实 Evidence、Gate Decision。
 
 始终保持：
@@ -204,10 +212,10 @@ portable integration
 普通 x64 / generic ARM64 regression
 ```
 
-默认使用一个 `combined` Task：
+默认一个 `combined` Task：
 
 ```text
-Web Worker implementation
+Codex Worker implementation
 → Candidate SHA
 → GitHub Actions Jobs
 → Verification Result
@@ -218,13 +226,13 @@ Web Worker implementation
 
 ### 5.2 何时拆独立 Verification Task
 
-出现以下任一情况时，优先把 Verification 拆成独立 Task：
+出现以下任一情况时，优先拆独立 Verification Task：
 
 - Verification 有独立 Evidence Authority，例如 Ubuntu ARM64 Target Runner、Real TV、真实 Jellyfin TV；
-- Verification 生命周期明显晚于 Implementation，例如目标设备暂不可用；
+- Verification 生命周期明显晚于 Implementation；
 - 验证成本、风险或持续时间需要独立调度与重试；
 - 验证结论需要单独 PASS / CONDITIONAL PASS / FAIL / BLOCKED；
-- Research Gate 需要把“候选实现已完成”和“关键 claim 已证明”独立追踪；
+- Research Gate 需要独立追踪“候选实现已完成”和“关键 Claim 已证明”；
 - Verification 可能由不同 Worker/Manual operator 执行；
 - 同一候选实现需要多轮 target proof，而 Implementation 不应反复 reopen。
 
@@ -233,7 +241,7 @@ Web Worker implementation
 ```text
 Implementation Task
 → Candidate SHA
-→ done/review as implementation result
+→ accepted implementation result
 
 Verification Task
 → references Candidate SHA
@@ -245,32 +253,25 @@ Parent Goal / Research Gate
 → Coordinator 汇总两者后决定
 ```
 
-`Implementation Task = done` 只表示实现交付已接受，不表示 Parent Goal 或 Research Gate 已通过。
+`Implementation Task = done` 不表示 Parent Goal 或 Research Gate 已通过。
 
 ### 5.3 不按环境拆 Task
 
 不要因为需要：
 
 ```text
+Cloud Codex
 x64
 ARM64
 Ubuntu phone
 TV
 ```
 
-就机械创建四个业务 Task。
+就机械创建多个相同业务 Task。
 
-如果它们验证的是同一组 Claims，可以属于同一个 Verification Task，并映射为多个 Job：
+如果它们验证的是同一组 Claims，可以属于同一个 Verification Task，并映射为多个 Job。
 
-```text
-Verification Task: playback concurrency safety
-
-Job A → GitHub-hosted x64
-Job B → GitHub-hosted ARM64
-Job C → Ubuntu ARM64 Target Runner（仅 target-specific claim）
-```
-
-只有当 Claim、生命周期、Owner、Success Criteria 或 Evidence Authority 真正不同，才拆成新的 Task。
+只有当 Scope、Claim、生命周期、Owner、Success Criteria 或 Evidence Authority 真正不同，才拆新的 Task。
 
 ## 6. Task 与 Job 的边界
 
@@ -284,8 +285,6 @@ Job
 = 没有独立业务 owner
 = 不 claim Issue
 ```
-
-一个 Verification Task 可以拥有 0..N 个 Jobs。
 
 Job 应由 Claim 推导：
 
@@ -315,6 +314,7 @@ Parent Goal / Research Item
 Goal / Context
 Base / Candidate commit
 Task decomposition decision
+Preferred Worker / eligible environments
 Claims to verify
 Required capabilities
 Verification Job Matrix
@@ -333,19 +333,35 @@ Deliverables
 
 Worker 不静默改变 Success Criteria。
 
-## 8. Web-first
+Routing/client 改变而 Scope/Claims 不变时仍要保证 `task.md` / `prompt.md` 与实际 eligible env 一致；正在执行的 Task 先回 `status:draft` 再更新/republish。
 
-`env:web-gpt` 表示独立 Web Worker Session。
+## 8. Codex-first Worker routing
 
-Web Worker 可以写代码、测试、文档、workflow、commit/PR，并读取 Actions run/job/log/artifact 完成真实验证闭环。
+普通仓库代码 Task 先问：
 
-先问：
+> Codex Cloud + GitHub Actions 是否已经能够完成并产生有效 Evidence？
 
-> Web Worker + GitHub Actions 是否已经能够完成并产生有效 Evidence？
+默认：
+
+```text
+env:cloud
+→ Codex Cloud Worker
+→ code / tests / PR / Actions orchestration
+```
+
+只有具体 capability 要求时切换：
+
+```text
+env:wsl          → local Linux interactive
+env:windows      → Windows / ADB
+env:ubuntu-arm64 → target-phone interactive recovery/debug
+env:manual-tv    → physical TV/manual Evidence
+env:web-gpt      → GitHub-only lightweight fallback / Coordinator explicit choice
+```
+
+Worker environment 不等于 Runner/Target。
 
 ## 9. GitHub Actions = 统一自动验证平面
-
-优先：
 
 ```text
 portable x64 build/test/lint
@@ -360,7 +376,7 @@ phone-specific ARM64/runtime/resource proof
 
 Runner 不是 Worker，不 claim Issue。
 
-当前仓库尚未建立 `.github/workflows/`；等第一个 Rust workspace/真实测试落地时再创建有实际意义的 CI。
+不要因为 Worker 是 Codex Cloud 就在 Cloud shell 中代替 required Actions Evidence。
 
 ## 10. 大量重复 / 长时间任务
 
@@ -370,33 +386,37 @@ Runner 不是 Worker，不 claim Issue。
 GitHub-hosted matrix / sharding / repeated jobs
 ```
 
-Cloud 资源有限，不作为 Runner，也不作为普通 long-running 默认后端。
+Cloud 不作为 Runner。
 
-如果 claim 要求同一进程连续运行，不能用分片伪装连续 soak；此时按 claim 选择真实足够环境，并视其生命周期决定是否拆独立 Verification Task。
+如果 Claim 要求同一进程连续运行，不能用分片伪装连续 soak；此时按 Claim 选择真实环境，并视其生命周期决定是否拆独立 Verification Task。
 
-## 11. 外部 Worker
+## 11. Worker 环境
+
+### Codex Cloud — 默认通用代码 Worker
+
+普通 repository implementation / fix / refactor / test/workflow authoring / PR integration。
 
 ### WSL
 
-Actions 失败后需要交互式 Linux debug、反复加日志、启动本地进程时使用。
+需要本地 Linux-specific 交互 debug、反复加日志、启动本地进程时使用。
 
 ### Windows
 
 ADB、Android host、手机重启/恢复/部署协调。
 
-### Cloud
-
-不部署 Runner。只用于 Cloud-specific 复现、长期交互 state、Tailscale remote orchestration 等 Actions 不适合的场景。
-
 ### Ubuntu ARM64 Codex
 
 只有 Target Runner 无法表达的交互式 target debug、设备恢复、现场诊断时使用。
+
+### Web Worker
+
+GitHub-only 轻量 Task、无需 coding workspace 的执行，或 Coordinator 明确指定。
 
 ### Real TV / Manual
 
 最终 audible autoplay、遥控器、TV UX、Jellyfin Android TV。
 
-## 12. Claim
+## 12. Claim / Attempt
 
 一个 Task 任一时刻只允许一个 active owner；Research Item 可以拆多个 Task 并行。
 
@@ -406,12 +426,13 @@ Worker：
 2. 确认 Task kind、Required Capabilities / Execution Plane；
 3. 确认无 active owner；
 4. claim + `status:in-progress`；每次成功 claim 开始新的 `Attempt N`；
-5. 读取 `AGENTS.md` / Issue / `task.md`；如果存在 `prompt.md`，先用它完成会话 bootstrap；
-6. 只执行当前 Scope；
-7. 正常结束时按 `issue-lifecycle-protocol.md` 评论 `[EXECUTION REPORT]`；阻塞时评论 `[BLOCKER REPORT]`；
-8. 正常结束 → Issue `status:review`；阻塞 → `status:blocked`；
-9. 释放 active execution ownership；
-10. 停止，不自动开始下一项。
+5. 读取 `AGENTS.md` / Issue / 全部 relevant comments / `task.md` / `prompt.md`；
+6. 如果前一 Attempt 已有 durable branch/PR/Evidence，优先复用/rebase/继续，不因 Worker 切换而重建 Task；
+7. 只执行当前 Scope；
+8. 正常结束评论 `[EXECUTION REPORT]`；阻塞评论 `[BLOCKER REPORT]`；
+9. 正常结束 → `status:review`；阻塞 → `status:blocked`；
+10. 释放 active execution ownership；
+11. 停止，不自动开始下一项。
 
 GitHub Actions Job 不参与 claim。
 
@@ -425,7 +446,7 @@ Worker 不能自行 `status:done` 或关闭 Issue。只有 Coordinator Review �
 Role
 Task / Claim
 Attempt
-Orchestrator
+Worker / Orchestrator
 Execution Plane
 Executor / Runner class
 Runner image / labels
@@ -444,26 +465,26 @@ Result
 
 不得把：
 
-- Web 静态分析当 runtime PASS；
+- Codex/Web 静态分析当 runtime PASS；
 - GitHub-hosted generic ARM64 当目标手机；
 - Cloud host 当手机热环境/家庭 LAN；
 - 模拟器当真实 TV。
 
 ## 14. 推荐启动方式
 
-### Web Worker
+### Codex Cloud（默认）
 
-给新会话优先只提供：
+```text
+$task-worker Execute Issue #<issue> using `docs/tasks/<issue>-<slug>/prompt.md`.
+```
 
-> 读取 `AGENTS.md` 和 `docs/tasks/<issue>-<slug>/prompt.md`，执行当前 Task。
+Skill 不可见时按 `docs/tasks/handoffs/cloud.md` fallback。
 
-`prompt.md` 再导航到 Issue / `task.md`。如果 Prompt 与 Task Contract 冲突，以 `task.md` 和更高 authority 为准。
+### 其他环境
 
-### 外部 Worker
+使用对应 `docs/tasks/handoffs/<env>.md` 的独立复制块。
 
-同样优先使用对应 Task Package 的 `prompt.md`，避免用户重复粘贴整套背景。
-
-如果某个旧 Task 尚无 `prompt.md`，Worker 仍可以直接读取 `AGENTS.md` + Issue + `task.md` 执行；Prompt 是标准 bootstrap 入口，不是新的业务 authority。
+`prompt.md` 只导航到 Issue / `task.md`。如果 Prompt 与 Task Contract 冲突，以 `task.md` 和更高 authority 为准。
 
 ## 15. Task Publication Gate
 
@@ -482,40 +503,29 @@ docs/tasks/<issue>-<slug>/task.md
 docs/tasks/<issue>-<slug>/prompt.md
 ```
 
-4. 更新 Issue，使其明确链接：
-   - `task.md`；
-   - `prompt.md`；
-   - base commit；
-   - Parent Goal / Research Item（如适用）；
-5. 确认 eligible environment / Required Capabilities / Success Criteria / Evidence Contract 已冻结到可执行状态。
+4. 更新 Issue，使其明确链接 task/prompt/base/Parent Goal；
+5. 确认 preferred Worker、eligible environment、Required Capabilities、Success Criteria、Evidence Contract、hard dependency 已冻结到可执行状态。
 
-此阶段只能称为：
-
-```text
-materialized / draft
-```
-
-不能告诉用户或 Worker “任务已发布”。
+此阶段只能称为 `materialized / draft`。
 
 ### 15.2 Phase B — Read-back Verify
 
-**必须重新从 GitHub 读取，而不是只相信刚才的写操作返回值。**
-
-至少重新确认：
+必须重新从 GitHub 读取，至少确认：
 
 ```text
 Issue exists and is open
-Issue number is the expected real number
-Issue is still unclaimed
+Issue number correct
+Issue is unclaimed
 Issue links task.md + prompt.md + base commit
 
-task.md exists on the intended branch/main
-prompt.md exists on the intended branch/main
+task.md exists
+prompt.md exists
 prompt.md points to the same Issue and task.md
 
-eligible env / Required Capabilities are correct
-Success Criteria / Evidence Contract are present
-no Secret/token was written into Issue/task/prompt
+preferred worker / eligible env / Required Capabilities correct
+hard dependencies satisfied or explicitly none
+Success Criteria / Evidence Contract present
+no Secret/token persisted
 ```
 
 任一项失败：
@@ -526,102 +536,77 @@ keep status:draft
 → read back again
 ```
 
-不得跳过。
-
 ### 15.3 Publish — 最后才切 status:ready
 
-只有 Phase B 全部通过后，才允许：
+只有 Phase B 全部通过后：
 
 1. 设置正确的 `env:*` eligibility；
-2. 将 Issue 从 `status:draft` 切换为 `status:ready`；
-3. 保持无 active owner，等待 Worker claim。
+2. Issue → `status:ready`；
+3. 保持无 active owner。
 
-`status:ready` 是**发布动作的最后一步**，不是创建 Issue 时的默认状态。
+`status:ready` 是发布动作的最后步骤之一。
 
 ### 15.4 Post-publish Queue Verification
-
-切到 `status:ready` 后，还要再次验证 Worker 真能看到它。
 
 Coordinator 必须使用与目标 Worker 等价的队列查询，例如：
 
 ```text
+status:ready + env:cloud
 status:ready + env:ubuntu-arm64
 ```
 
-或对应环境查询，并确认：
+确认：
 
 ```text
-expected Issue appears exactly as a claimable task
+expected Issue appears as claimable
 status = ready
 eligible env matches
 no active owner
-linked task.md / prompt.md still resolve
+linked task.md / prompt.md resolve
 ```
 
-如果目标队列查询找不到该 Task：
-
-```text
-publication = FAILED
-```
-
-应立即修复；必要时退回 `status:draft`。不能让用户拿着 Prompt 去执行一个 GitHub 队列中不可见的 Task。
+查询失败则 `publication = FAILED`，修复或退回 draft。
 
 ### 15.5 Coordinator Completion Rule
 
-只有完成上述全部步骤后，Coordinator 才允许使用：
-
-```text
-“任务已创建”
-“任务已发布”
-“现在可以让 <environment> Worker 领取”
-```
-
-这样的完成表述。
-
-发布完成的最小可验证条件是：
+只有以下全部 PASS 后才能称“已发布 / 可以领取”：
 
 ```text
 Issue read-back PASS
-+
-task.md read-back PASS
-+
-prompt.md read-back PASS
-+
-ready labels/state read-back PASS
-+
-target worker queue search PASS
++ task.md read-back PASS
++ prompt.md read-back PASS
++ ready labels/state read-back PASS
++ target worker queue search PASS
 ```
 
-### 15.6 Publication Handoff — 发布后必须给出下游执行入口
+### 15.6 Publication Handoff
 
-当 15.5 的发布证明全部 PASS 后，Coordinator 还必须在当前聊天中向用户给出一个**可直接复制到下游 Worker 新会话**的入口提示词。
+发布证明 PASS 后必须给用户环境对应的可复制入口。
 
-最小 handoff 信息：
+最小信息：
 
 ```text
-Task: <real task title>
+Task: <real title>
 Issue: #<real issue number>
 Worker: <real expected worker>
 Environment: env:<real environment>
 Prompt: docs/tasks/<real-issue>-<real-slug>/prompt.md
 ```
 
-并给出一条可直接复制执行的入口，例如：
+Codex 环境默认使用：
 
 ```text
-读取 `AGENTS.md` 和 `docs/tasks/<real-issue>-<real-slug>/prompt.md`，执行当前 Task。
+$task-worker Execute Issue #<real> using `docs/tasks/<real>-<slug>/prompt.md`.
 ```
 
 要求：
 
-- 所有 Issue、Worker、Environment、路径必须来自**发布后的 GitHub read-back**，不得保留模板 placeholder；
-- 入口提示词必须指向已通过 read-back 的真实 `prompt.md`；
-- 如果 Task 有特殊但不改变 Scope 的启动前置条件，可在入口后补一条简短提醒；
-- 不要重新把完整 `task.md` 粘进聊天；下游 Worker 应从仓库读取 Task Contract；
-- 如果 Post-publish Queue Verification 失败，不得给出下游执行入口；
-- 如果一次发布多个独立 Task，每个 Task 分别给出自己的下游入口，避免用户猜测哪个 Prompt 对应哪个 Worker。
+- 所有值来自发布后的 GitHub read-back；
+- 一个 environment 一个独立复制块；
+- 不重新粘完整 `task.md`；
+- queue verification 失败时不输出入口。
 
-因此完整发布闭环是：
+完整发布闭环：
 
 ```text
 materialize
@@ -637,9 +622,7 @@ materialize
 
 ## 16. Issue Feedback / Review / Iteration / Closure
 
-完整规范：
-
-- `issue-lifecycle-protocol.md`
+完整规范：`issue-lifecycle-protocol.md`。
 
 核心闭环：
 
@@ -688,7 +671,7 @@ Coordinator 必须把 Review 决定评论到 Issue，不能只在聊天中说“
 
 ### 16.3 同一 Contract 优先反复 Attempt
 
-如果只是 bug、测试失败、Evidence 不足、漏实现或同一 Claim 需要重测：
+如果只是 bug、测试失败、Evidence 不足、漏实现、integration/rebase 或同一 Claim 重测：
 
 ```text
 task.md unchanged
@@ -700,11 +683,27 @@ prompt.md unchanged
 → Attempt N+1
 ```
 
-不要机械创建新 Issue。
+不要机械创建新 Issue，也不要因为 Worker 从 Web 切到 Codex 就复制业务 Task。
 
-如果 Scope / Claims / Success Criteria / Evidence Authority / architecture 前提本身改变，则先修订 canonical docs / `task.md`，重新走 read-back / ready / queue verification，再发布下一轮入口。
+如果 Scope / Claims / Success Criteria / Evidence Authority / architecture 或 eligible routing 本身改变，则先回 `status:draft`，修订相关 docs / task / prompt，重新走 Publication Gate。
 
-### 16.4 Close Gate
+### 16.4 卡死 Worker Recovery
+
+如果 Worker session 卡死但 GitHub 已存在 branch/PR/run：
+
+```text
+Coordinator reads durable GitHub state
+→ records recovery Review / correction
+→ releases stale owner
+→ preserves candidate/PR/evidence
+→ if routing/bootstrap changes: status:draft + republish
+→ otherwise status:ready
+→ next Attempt continues same Issue
+```
+
+不能依赖旧聊天猜测，也不能因为卡死从零重建。
+
+### 16.5 Close Gate
 
 Worker 不得自行 `status:done` 或关闭 Issue。
 

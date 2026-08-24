@@ -2,18 +2,25 @@
 
 ## 1. 目的
 
-本文件定义 Web Media Gateway 的自动执行与验证后端。
+本文件定义 Web Media Gateway 的 Worker / 自动执行 / Verification 后端分工。
 
-核心目标不是“给每个环境都装 Runner”，而是让 Web Worker 尽可能通过 GitHub + GitHub Actions 完成真实 build/test、通用 ARM64 验证和目标设备验证，同时避免浪费 Cloud 与 Ubuntu 手机等稀缺资源。
+核心目标不是“给每个环境都装 Runner”，也不是让某个聊天客户端承担所有执行，而是：
+
+- **Codex-first** 完成普通仓库实现、修复、重构、测试和 CI authoring；
+- **GitHub Actions** 作为统一自动执行总线；
+- GitHub-hosted Runner 承担 portable verification；
+- Ubuntu ARM64 self-hosted Runner 只承担 phone-specific target proof；
+- Web Coordinator 负责 publication / Review / Gate；
+- 真实电视保留 Manual Verification。
 
 默认原则：
 
-> **Actions is the execution bus; GitHub-hosted first; target self-hosted only for target proof.**
+> **Codex-first for repository work; Actions is the execution bus; GitHub-hosted first; target self-hosted only for target proof.**
 
 ```text
 Web Coordinator
       ↓
-Web Worker
+Codex Worker (default repository executor)
       ↓
 Candidate commit / PR
       ↓
@@ -30,8 +37,10 @@ GitHub Actions
       ↓
 Run / Job / Artifact / Metrics
       ↓
-Web Worker / Coordinator Review
+Codex Worker / Web Coordinator Review
 ```
+
+Web Worker 仍可处理 GitHub-only 轻量 Task 或 Coordinator 明确指定的执行，但不再是普通代码实现的默认首选。
 
 Cloud **不部署 self-hosted Runner**。真实电视等无法合理 Runner 化的最终物理交互继续走 Manual Verification。
 
@@ -39,13 +48,14 @@ Cloud **不部署 self-hosted Runner**。真实电视等无法合理 Runner 化�
 
 ---
 
-## 2. Runner 不是 Agent
-
-必须区分：
+## 2. Worker / Orchestrator / Runner / Target 必须分开
 
 ```text
-Agent / Orchestrator
-= 决定做什么、修改什么、如何解释结果
+Worker / Agent
+= claim Issue、修改仓库、组织当前 Task
+
+Orchestrator
+= 发起/解释自动化执行
 
 GitHub Actions
 = 自动执行与验证调度平面
@@ -57,30 +67,37 @@ Target
 = claim 实际需要证明的对象
 ```
 
-例如：
+普通 Codex-first 例子：
 
 ```text
-Orchestrator    = web-gpt
+Worker          = cloud-codex
+Orchestrator    = codex-cloud
 Execution plane = github-actions
 Runner          = github-hosted-x64
 Target          = runner itself
 ```
 
+通用 ARM64：
+
 ```text
-Orchestrator    = web-gpt
+Worker          = cloud-codex
+Orchestrator    = codex-cloud
 Execution plane = github-actions
 Runner          = github-hosted-arm64
 Target          = generic Linux ARM64 environment
 ```
 
+目标手机：
+
 ```text
-Orchestrator    = web-gpt
+Worker          = cloud-codex
+Orchestrator    = codex-cloud
 Execution plane = github-actions
-Runner          = ubuntu-arm64-phone
+Runner          = ubuntu-arm64-self-hosted
 Target          = ubuntu-arm64-phone
 ```
 
-Runner 不 claim Issue，也不成为 Task owner。Issue owner 仍然是 Web Worker 或明确的外部 Worker；Runner 只是它使用的执行能力。
+Runner 不 claim Issue，也不成为 Task owner。Issue owner 是 Codex Worker、Web Worker、Manual verifier 或 Task 明确指定的外部 Worker。
 
 ---
 
@@ -89,8 +106,6 @@ Runner 不 claim Issue，也不成为 Task owner。Issue owner 仍然是 Web Wor
 ### Tier 1 — GitHub-hosted Runner
 
 默认、最先使用。
-
-GitHub-hosted Runner 同时承担：
 
 ```text
 x64 portable verification
@@ -113,15 +128,14 @@ ARM64 portable verification
 优势：
 
 - 无自建机器维护成本；
-- 资源通常优于当前 Cloud 小机器；
 - 环境相对干净；
 - 与 commit / PR 自然绑定；
 - x64 和 ARM64 都可以用于通用验证；
-- 最适合 Web Worker 的快速迭代闭环。
+- 不把 Codex workspace 的偶然本地状态误当最终 Evidence。
 
 限制：
 
-- generic ARM64 runner 仍不等于目标 Ubuntu 手机；
+- generic ARM64 runner 不等于目标 Ubuntu 手机；
 - 不代表家庭 LAN；
 - 不代表目标 FFmpeg/Chromium/Jellyfin 安装组合；
 - 不代表手机温度、真实 RSS/吞吐或 chroot 特性；
@@ -129,13 +143,13 @@ ARM64 portable verification
 
 默认规则：
 
-> 只要 claim 不依赖目标手机/电视的具体环境，就先用 GitHub-hosted Runner。
+> 只要 Claim 不依赖目标手机/电视的具体环境，就先用 GitHub-hosted Runner。
 
 ### Tier 2 — Ubuntu ARM64 Target Self-hosted Runner
 
 Ubuntu ARM64 手机 Runner 是高价值、受限的 **Target Proof** 后端。
 
-建议 labels：
+基础 labels：
 
 ```text
 self-hosted
@@ -155,7 +169,7 @@ jellyfin-runtime
 lan-target
 ```
 
-它只用于 claim 本身依赖目标设备真实性的任务，例如：
+它只用于 Claim 本身依赖目标设备真实性的任务，例如：
 
 - Gateway 在目标 Ubuntu/chroot 环境是否可运行；
 - 目标设备上的 FFmpeg / Chromium / Jellyfin 兼容性；
@@ -167,51 +181,52 @@ lan-target
 
 **通用 ARM64 compile/test 优先 GitHub-hosted ARM64 Runner，不占用手机 Runner。**
 
-禁止把普通可移植单元测试批量丢给手机 Runner。
-
 原则：
 
 > **Generic ARM64 proof stays hosted; phone runner is reserved for phone-specific proof.**
 
 ---
 
-## 4. Cloud 的定位
+## 4. Codex Cloud 的定位
 
-Cloud 不加入 Runner 池。
+Codex Cloud 是默认的 **generic repository Worker / Orchestrator**，但不是 Runner。
 
-原因：
+适合：
 
-- 当前 Cloud 资源有限；
-- 普通 x64/ARM64 build/test 使用 GitHub-hosted Runner 更合适；
-- 把低资源 Cloud 常驻成 Runner会增加维护和状态污染，却没有形成明显验证优势。
-
-Cloud 只保留为低优先级 **External Worker / Remote Orchestrator**，适用于 GitHub Actions 不适合表达的场景，例如：
-
-- 需要长期保持交互式 shell/state；
-- 需要经 Tailscale 做明确授权的远程设备操作；
-- 需要人工持续观察而不是一次 Actions job；
-- 特定网络复现必须来自该 Cloud 主机。
+- 普通 repository implementation / fix / refactor；
+- 创建/维护 tests、workflows、PR；
+- 处理已有 candidate PR 的 rebase/integration；
+- 调度并读取 GitHub Actions；
+- 需要 coding workspace 的持续迭代。
 
 因此：
 
 ```text
-Cloud
+Codex Cloud
+= default generic repository Worker
+
+Codex Cloud
 != default verification backend
 != self-hosted runner
+!= target phone
 ```
+
+Cloud 本身资源有限不是问题，因为重 build/test/benchmark 默认由 GitHub-hosted Runner 执行，而不是在 Cloud shell 中承担最终 Verification。
+
+如果 Claim 需要 Cloud-specific 网络/长期交互 state，Task 可以明确把 Cloud host 本身作为 execution host；但必须记录真实 execution plane，不能和 Actions Evidence 混写。
 
 ---
 
 ## 5. 长时间 / 大量重复验证
 
-不要因为存在 `long-running` 就自动使用 Cloud。
+不要因为 Worker 是 Codex Cloud，就把 long-running workload 留在 Cloud。
 
 优先：
 
 1. GitHub-hosted Runner；
 2. 使用 matrix / shard / repeated jobs 拆分大量 race、benchmark、regression；
 3. 每个 job 保存明确 artifact / summary，最终聚合；
-4. 如果 claim 必须连续运行超过 hosted job 能承载的窗口，再单独评审执行后端。
+4. 如果 Claim 必须连续运行超过 hosted job 能承载的窗口，再按真实 Target/Execution Plane 评审。
 
 例如：
 
@@ -221,21 +236,15 @@ Cloud
 → aggregate result
 ```
 
-而不是：
+如果研究问题要求“同一个进程连续运行 N 小时”，不能用分片伪装连续 soak。
 
-```text
-→ 小 Cloud 单机硬跑
-```
-
-如果研究问题本身要求“同一个进程连续运行 N 小时”，不能用分片结果伪装连续 soak；此时应根据 claim 选择真正足够的环境，并把限制写入 Verification Task。
-
-目标设备连续 soak 如果本身就是 R003/R001 的 target claim，则使用 Ubuntu ARM64 Target Runner。
+目标设备连续 soak 如果本身就是 R003 等 target Claim，则使用 Ubuntu ARM64 Target Runner。
 
 ---
 
-## 6. 默认 Runner 路由
+## 6. 默认 Verification Runner 路由
 
-Coordinator / Web Worker 对 Verification Claim 按以下顺序路由：
+Coordinator / Codex Worker 对 Verification Claim 按以下顺序路由：
 
 ```text
 Claim
@@ -254,67 +263,79 @@ Claim
       └── No  → GitHub-hosted x64 Runner
 ```
 
-如果任务需要大量重复：
+大量重复：
 
 ```text
 → GitHub-hosted matrix/sharding first
 ```
 
-只有自动化失败且需要人工交互式诊断时，才进入：
+需要特定交互能力时改变 **Worker environment**，不是随意改变最终 Evidence Authority：
 
 ```text
-WSL interactive debug
-Windows / ADB debug
-Cloud external worker (rare)
-Ubuntu ARM64 Codex (target interactive debug)
+generic repository coding
+→ Codex Cloud
+
+local Linux-specific interactive debug
+→ Codex / WSL
+
+Windows / ADB
+→ Codex / Windows
+
+Ubuntu ARM64 target recovery / interactive diagnosis
+→ Codex on target
+
+physical TV
+→ Manual verifier
 ```
 
 因此：
 
 ```text
+Codex = default repository problem-solving Worker
 Runner = automatic execution backend
-Codex = interactive problem-solving fallback
+Target = evidence object
 ```
 
 ---
 
-## 7. Web Worker 的默认开发闭环
+## 7. Codex Worker 的默认开发闭环
 
 普通开发：
 
 ```text
-Web Worker
-→ read Issue / task.md
+Codex Worker
+→ read Issue / comments / task.md / current main
+→ reuse existing Candidate/PR when present
 → modify code / tests
 → candidate commit / PR
 → Actions on GitHub-hosted x64/ARM64 runner
 → read status / logs / artifact
-→ fix
-→ rerun
-→ verification PASS
+→ fix / rerun
+→ [EXECUTION REPORT]
 → Coordinator Review
 ```
 
 目标验证：
 
 ```text
-Web Worker
+Codex Worker
 → candidate commit
-→ Actions target workflow
+→ trusted Actions target workflow
 → Ubuntu ARM64 Target Runner
 → target Evidence / metrics
-→ Web Worker review
+→ Worker report
+→ Coordinator Review
 ```
 
-这样 Web Worker 即使自身没有本地 shell，也可以完成绝大多数 implementation + runtime verification 闭环。
+Web Worker 可以执行 GitHub-only 轻量 Task，但不是默认代码路径。
+
+如果上一 Worker session 卡死但 GitHub 已存在 Candidate/PR/Evidence，新 Worker 必须先复用/评估这些 durable 结果，不要从聊天或空分支重新开始。
 
 ---
 
 ## 8. Workflow 分层
 
 第一个 Rust workspace / 实际测试落地后，优先建立可复用 workflow。
-
-建议逻辑能力：
 
 ```text
 portable-ci
@@ -344,7 +365,7 @@ Workflow 不应把站点 Secret、Vault、账号资料作为普通 CI 输入。
 
 ## 9. Candidate SHA 是验证对象
 
-Verification 必须明确验证哪个 commit。
+Verification 必须明确验证哪个 commit：
 
 ```text
 Candidate commit: <sha>
@@ -353,6 +374,8 @@ Candidate commit: <sha>
 Actions run、artifact、metrics 和 Research Evidence 都必须能回指 Candidate SHA。
 
 实现发生变化后，之前 Evidence 不自动证明新 commit。
+
+Worker 切换同样不改变这个原则：旧 Candidate Evidence 可以保留，但 rebase/fix 产生的新 Candidate 必须重新跑 required Verification。
 
 ---
 
@@ -453,6 +476,8 @@ Ubuntu ARM64 Target Runner unavailable
 
 如果必须临时使用 Ubuntu ARM64 Codex 交互执行同样验证，应记录真实 execution plane，不能伪装成 Actions Evidence。
 
+Codex Cloud 不可用时可以按 capability 路由 Web/WSL/Windows，但不能因为 Worker 切换而降低 required Verification。
+
 ---
 
 ## 13. Evidence Contract
@@ -461,6 +486,7 @@ Runner 产生的 Evidence 至少包含：
 
 ```text
 Role: verification
+Worker:
 Orchestrator:
 Execution plane: github-actions
 Runner class: github-hosted-x64 | github-hosted-arm64 | ubuntu-arm64-self-hosted
@@ -493,7 +519,7 @@ Result: PASS | CONDITIONAL PASS | FAIL | BLOCKED
 
 ```text
 contract / test authoring
-→ Web Worker
+→ Codex Cloud Worker
 
 automated concurrency suite
 → GitHub-hosted x64
@@ -505,14 +531,14 @@ large repeated race
 → GitHub-hosted sharded matrix
 
 interactive race debugging
-→ WSL
+→ WSL when needed
 ```
 
 ### R001
 
 ```text
-implementation / proxy / tests
-→ Web Worker
+implementation / proxy / tests / PR integration
+→ Codex Cloud Worker
 
 portable MP4/HLS integration
 → GitHub-hosted
@@ -521,14 +547,14 @@ generic ARM64 compatibility
 → GitHub-hosted ARM64
 
 target media-path / target FFmpeg / device metrics
-→ Ubuntu ARM64 Target Runner
+→ Ubuntu ARM64 Target Runner when the Claim belongs to a target Task
 ```
 
 ### R003
 
 ```text
 metrics scripts / harness
-→ Web Worker
+→ Codex Cloud Worker
 
 portable harness checks
 → GitHub-hosted
@@ -540,15 +566,13 @@ CPU / RSS / temperature / target throughput
 → Ubuntu ARM64 Target Runner
 ```
 
-R002 最终 TV autoplay/遥控体验仍保留 Manual TV Gate。
+R002 probe implementation defaults Codex Cloud；最终 TV autoplay/遥控体验仍保留 Manual TV Gate。
 
 ---
 
 ## 15. 实施顺序
 
-当前仓库尚无可运行 Rust workspace，也尚无 `.github/workflows/` 或 self-hosted Runner。
-
-按以下顺序落地：
+基础执行能力按以下逻辑形成：
 
 ```text
 1. Contract / first runnable code
@@ -560,7 +584,7 @@ R002 最终 TV autoplay/遥控体验仍保留 Manual TV Gate。
 7. 根据真实缺口再决定是否需要其他执行后端
 ```
 
-**Cloud Runner 不在计划内。**
+**Cloud Runner 不在计划内。** Codex Cloud 是 Worker，不是 Runner。
 
 ---
 
@@ -570,7 +594,7 @@ R002 最终 TV autoplay/遥控体验仍保留 Manual TV Gate。
 
 ```text
 大多数代码和测试编写
-→ Web Worker
+→ Codex Cloud Worker
 
 普通 x64 runtime verification
 → GitHub-hosted x64
@@ -586,8 +610,11 @@ R002 最终 TV autoplay/遥控体验仍保留 Manual TV Gate。
 
 最终物理 TV UX
 → Manual
+
+Task publication / recovery / Review / final Gate
+→ Web Coordinator
 ```
 
 最终目标：
 
-> **让 Web 通过 GitHub Actions 调度尽可能多的真实执行能力；只有“设备本身”是证据对象时才占用自建 Target Runner。**
+> **让 Codex 专注仓库实现，让 GitHub Actions 提供可审计真实执行，让 Web Coordinator 管理生命周期；只有“设备本身”是证据对象时才占用自建 Target Runner。**

@@ -40,6 +40,54 @@ Resolve from the explicit request and repository state:
 
 If a required value cannot be resolved, stop before publication rather than inventing it.
 
+## Default Worker / client routing
+
+Current project policy is **Codex-first for repository execution**.
+
+Select Worker/client before Runner:
+
+```text
+ordinary repository implementation / bug fix / refactor / test or CI authoring
+→ Codex Cloud Worker
+→ env:cloud
+
+GitHub-only lightweight execution where a coding workspace is unnecessary,
+or Coordinator explicitly chooses Web Worker
+→ Web Worker
+→ env:web-gpt
+
+local Linux interactive diagnosis
+→ Codex / WSL
+→ env:wsl
+
+Windows / ADB / Android-host work
+→ Codex / Windows
+→ env:windows
+
+interactive target-phone installation / recovery / diagnosis
+→ Codex on Ubuntu ARM64 target
+→ env:ubuntu-arm64
+
+physical TV / remote / audible UX Evidence
+→ manual verifier
+→ env:manual-tv
+```
+
+Important separation:
+
+```text
+Worker / client
+!= GitHub Actions
+!= Runner
+!= Target
+```
+
+Even when the Worker is Codex Cloud, portable build/test defaults to GitHub-hosted Actions; phone-specific proof uses the trusted Ubuntu ARM64 Target Runner; real TV proof remains Manual.
+
+Do not use `env:cloud` merely because a Task contains long-running verification. The Worker may be Codex Cloud while the actual verification runs on the Runner/Target required by the Claims.
+
+If the explicit Task capability requires a different environment, capability wins over the default. Do not route Windows/ADB, target-phone interactive work, or physical TV work through generic Cloud just to satisfy Codex-first.
+
 ## Dependency rule
 
 Do not confuse sequencing preference with execution dependency.
@@ -97,9 +145,10 @@ If Issues, labels, repository files, or required Issue comments/state cannot be 
 
 - Read the current intended branch and HEAD.
 - Search open and closed Issues for the same Task / Goal.
-- Reuse/update an existing Task when appropriate; a failed Attempt is not a reason to create a duplicate Issue.
+- Reuse/update an existing Task when appropriate; a failed/stalled Attempt is not a reason to create a duplicate Issue.
 - Confirm Task-vs-Job decomposition before materializing.
 - Identify and classify each dependency as hard / soft / integration overlap.
+- Resolve the Worker/client using the Codex-first routing rule unless an explicit capability requires another environment.
 - If no unresolved hard dependency exists, do not leave the Task draft merely because an earlier Research/Task is unfinished.
 - Confirm every eligible `env:*` has a dedicated profile under `docs/tasks/handoffs/`.
 
@@ -124,6 +173,7 @@ The Issue must link:
 - real `prompt.md`;
 - actual base commit;
 - Parent Goal / Research Item when applicable;
+- preferred Worker/client;
 - eligible environment(s) / Required Capabilities;
 - any unresolved hard dependency or explicit statement that hard dependencies are `none` when dependency analysis matters.
 
@@ -146,7 +196,7 @@ prompt.md points to same Issue/task.md
 prompt/task do not store stale live status
 
 no task-specific placeholders remain
-eligible env / Required Capabilities are correct
+preferred worker / eligible env / Required Capabilities are correct
 hard dependencies are either satisfied or explicitly none
 Success Criteria / Evidence Contract are present
 no secret/token was persisted
@@ -178,6 +228,7 @@ If required labels cannot safely be created/applied, keep the Task draft and rep
 For every eligible environment, use a query equivalent to that Worker's real queue, for example:
 
 ```text
+status:ready + env:cloud
 status:ready + env:web-gpt
 status:ready + env:ubuntu-arm64
 ```
@@ -193,11 +244,11 @@ Task Contract is shared; launch syntax is not.
 Select handoff profile by real environment:
 
 ```text
+env:cloud         → docs/tasks/handoffs/cloud.md
 env:web-gpt       → docs/tasks/handoffs/web-gpt.md
 env:ubuntu-arm64  → docs/tasks/handoffs/ubuntu-arm64.md
 env:wsl           → docs/tasks/handoffs/wsl.md
 env:windows       → docs/tasks/handoffs/windows.md
-env:cloud         → docs/tasks/handoffs/cloud.md
 env:manual-tv     → docs/tasks/handoffs/manual-tv.md
 ```
 
@@ -208,6 +259,7 @@ Rules:
 - do not combine different clients into one prompt;
 - replace all Issue/path/environment placeholders from **post-publish GitHub read-back**;
 - never paste the full `task.md` into handoff;
+- generic Codex-first repository implementation normally emits the `env:cloud` `$task-worker` entry first;
 - `env:web-gpt` must use the Web ChatGPT + GitHub connector profile and must **not** require `$task-worker`;
 - Codex environments use their own profile and normally invoke `$task-worker`;
 - manual TV uses the manual verification profile, not a fake Codex/Actions command.
@@ -222,14 +274,14 @@ Environment: env:<real environment>
 Prompt: docs/tasks/<real-issue>-<real-slug>/prompt.md
 ```
 
-## Republish after bootstrap/Contract change
+## Republish after bootstrap/Contract/routing change
 
-If Scope, Claims, Success Criteria, decomposition, Evidence Authority, architecture/security premise, dependency classification, or task-specific bootstrap changes materially:
+If Scope, Claims, Success Criteria, decomposition, Evidence Authority, architecture/security premise, dependency classification, **eligible Worker/environment routing**, or task-specific bootstrap changes materially:
 
 ```text
 status:draft when required to make the package non-claimable
-→ update canonical docs when required
-→ update task.md for Contract/dependency changes
+→ update canonical/process docs when required
+→ update task.md for Contract/dependency/routing changes
 → update prompt.md for bootstrap changes
 → read-back verify
 → status:ready + eligible env
