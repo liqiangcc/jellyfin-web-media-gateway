@@ -4,7 +4,7 @@
 
 本项目从网页 GPT、GitHub Actions、Cloud、WSL、Windows、Ubuntu ARM64 手机和真实电视等环境开发与验证。
 
-协同模型不把任务永久绑定到某个环境，而是先定义工作与证据，再选择成本最低、能力足够的执行方式。
+协同模型不把任务永久绑定到某个环境，而是先定义 Goal、Task、Claim 和 Evidence，再选择成本最低、能力足够的执行方式。
 
 默认原则：
 
@@ -130,12 +130,13 @@ Web GPT
 
 1. 读取 canonical docs、Research Matrix、Issue、PR、CI/Evidence；
 2. 决定当前最高优先级 Goal / Gate；
-3. 拆分 Implementation / Verification 工作；
+3. 先决定 Task 边界与 Implementation / Verification 是否需要分离；
 4. 定义 Scope、Claims、Success Criteria、Evidence Requirements；
 5. 优先安排 Web Worker；
-6. 为 Verification 选择 GitHub-hosted x64 / ARM64、Target Runner 或 Manual；
-7. 只有自动化能力不足时才路由外部 Codex；
-8. Review candidate / Evidence 并决定 Gate。
+6. 将 Verification Claims 映射为 Jobs；
+7. 为每个 Job 选择 GitHub-hosted x64 / ARM64、Target Runner 或 Manual；
+8. 只有自动化能力不足时才路由外部 Codex；
+9. Review candidate / Evidence 并决定 Parent Goal / Gate。
 
 ### 4.2 Web Worker
 
@@ -191,6 +192,7 @@ Input:
 - Success / failure criteria
 
 Output:
+- Jobs
 - Execution Plane / Runner / Target
 - Run / job / logs / artifact
 - metrics
@@ -205,13 +207,122 @@ Implementation Result
 != Coordinator Gate Decision
 ```
 
-普通工程任务可以一个 Issue 内完成 `Web implementation + Actions verification`；目标设备/关键 Research 的 target verification 必须可独立追踪。
+逻辑分离不等于必须拆两个 Issue。
 
 ---
 
-## 6. 默认调度算法
+## 6. Task 拆分与 Job 拆分必须分开
 
-### 6.1 Implementation
+### 6.1 层级
+
+```text
+Goal / Research Item
+        ↓
+Task
+        ↓
+Claims
+        ↓
+Verification Jobs
+        ↓
+Runner / Target
+```
+
+含义：
+
+```text
+Task
+= 做什么 / 证明什么
+= 有 Scope、Owner、Success Criteria、Review 生命周期
+
+Job
+= 在哪里 / 用什么命令验证某个 Claim 切片
+= 没有业务 Owner
+= 不 claim Issue
+```
+
+### 6.2 默认 combined
+
+普通工程工作优先保持一个 `combined` Task：
+
+```text
+Web Worker implementation
+→ Candidate SHA
+→ standard GitHub Actions Jobs
+→ Verification Result
+→ Coordinator Review
+```
+
+例如 fmt、clippy、unit、contract、portable integration、普通 x64 / generic ARM64 regression，一般不需要单独 Verification Issue。
+
+### 6.3 何时拆独立 Verification Task
+
+满足以下任一条件时优先拆：
+
+- Verification 使用独立 Evidence Authority，例如 Ubuntu ARM64 Target Runner、Real TV；
+- Verification 生命周期、Owner 或调度时间与 Implementation 明显不同；
+- Target 暂不可用但 Implementation 可以先完成；
+- 关键 Research Gate 要独立追踪“实现完成”和“claim 已证明”；
+- Verification 成本/风险高，需要独立重试或多轮 target proof；
+- Verification 的 PASS / FAIL / BLOCKED 本身是重要交付结果。
+
+此时：
+
+```text
+Implementation Task
+→ Candidate SHA
+
+Verification Task
+→ Candidate SHA + Claims
+→ Jobs / Target / Evidence
+
+Parent Goal / Research Gate
+→ Coordinator 汇总结果
+```
+
+Implementation Task 完成只表示候选实现已接受，不代表 Parent Goal / Gate 已通过。
+
+### 6.4 不按环境拆 Task
+
+禁止：
+
+```text
+x64 Task
+ARM64 Task
+Phone Task
+TV Task
+```
+
+仅仅因为存在不同环境就拆业务 Task。
+
+正确做法：如果它们服务同一个稳定 Claim 集合，则在一个 Verification Task 中建立多个 Jobs：
+
+```text
+Verification Task
+├── J1 → GitHub-hosted x64
+├── J2 → GitHub-hosted ARM64
+├── J3 → Ubuntu ARM64 Target Runner
+└── J4 → Manual TV（如 Claim 需要）
+```
+
+只有 Claim、Success Criteria、Owner、生命周期或 Evidence Authority 真正不同才拆新的 Task。
+
+---
+
+## 7. 默认调度算法
+
+### 7.1 先决定 Task 边界
+
+```text
+Verification 只是标准、快速 CI？
+├── Yes → combined Task
+└── No
+     ↓
+是否存在独立 Evidence Authority / lifecycle / owner / gate result？
+├── Yes → Implementation Task + Verification Task
+└── No  → combined / research Task
+```
+
+### 7.2 Implementation 路由
 
 ```text
 Web Worker 能否完成？
@@ -223,9 +334,15 @@ Web Worker 能否完成？
      └── target interactive debug/recovery → Ubuntu ARM64 Codex
 ```
 
-### 6.2 Verification
+### 7.3 Verification 先生成 Jobs，再选 Runner
 
 ```text
+Claim
+↓
+Required Capabilities
+↓
+Job
+↓
 Claim 是否依赖目标设备本身？
 ├── Yes
 │    ├── Ubuntu phone target → Ubuntu ARM64 self-hosted Runner
@@ -238,7 +355,7 @@ Claim 是否依赖目标设备本身？
 └── No  → GitHub-hosted x64 Runner
 ```
 
-### 6.3 大量重复 / 长时验证
+### 7.4 大量重复 / 长时验证
 
 优先使用 GitHub-hosted：
 
@@ -250,11 +367,11 @@ Claim 是否依赖目标设备本身？
 
 Cloud 不因为“可以长期运行”就自动获得优先级；它资源有限且不作为 Runner。
 
-如果 claim 要求**同一个进程连续运行**超过 GitHub-hosted job 可承载窗口，不能用分片伪装连续 soak。此时单独评审实际执行环境。
+如果 claim 要求**同一个进程连续运行**超过 GitHub-hosted job 可承载窗口，不能用分片伪装连续 soak。此时单独评审实际执行环境，并视生命周期决定是否拆独立 Verification Task。
 
 ---
 
-## 7. Capability Vocabulary
+## 8. Capability Vocabulary
 
 Task 用 capability 描述要求。
 
@@ -301,9 +418,9 @@ manual-observation
 
 ---
 
-## 8. Environment / Backend Profiles
+## 9. Environment / Backend Profiles
 
-### 8.1 总览
+### 9.1 总览
 
 | Environment / Backend | 定位 | 最大优势 | 核心限制 | 权威 Evidence |
 |---|---|---|---|---|
@@ -316,11 +433,11 @@ manual-observation
 | Cloud | Optional External Worker | 远程/Tailscale/状态保持 | 资源有限，不做 Runner | cloud-specific/remote execution |
 | Real TV / Manual | Final UX Proof | 真实 TV 行为 | 人工、高成本 | TV UX/browser behavior |
 
-### 8.2 Web Worker
+### 9.2 Web Worker
 
 优先承担绝大多数 implementation、test authoring、CI authoring、Review 和 Evidence synthesis。
 
-### 8.3 GitHub-hosted x64 / ARM64
+### 9.3 GitHub-hosted x64 / ARM64
 
 GitHub Actions 是默认 automated verification plane。
 
@@ -337,7 +454,7 @@ artifact generation
 
 GitHub-hosted ARM64 只能证明 generic ARM64 软件行为，不能证明目标 Ubuntu 手机的 chroot、温度、网络、FFmpeg/Chromium 安装或设备资源。
 
-### 8.4 Ubuntu ARM64 Target Runner
+### 9.4 Ubuntu ARM64 Target Runner
 
 只用于 target-bound claim：
 
@@ -349,15 +466,15 @@ GitHub-hosted ARM64 只能证明 generic ARM64 软件行为，不能证明目标
 
 通用 ARM64 测试不要占用手机 Runner。
 
-### 8.5 WSL
+### 9.5 WSL
 
 只有自动化失败后需要交互式 Linux 调试、加日志、本地进程/文件操作时使用。
 
-### 8.6 Windows
+### 9.6 Windows
 
 负责 ADB、Android/Termux/Magisk 状态、设备重启/恢复/部署协调。
 
-### 8.7 Cloud
+### 9.7 Cloud
 
 Cloud **不部署 GitHub Runner**。
 
@@ -370,13 +487,13 @@ Cloud **不部署 GitHub Runner**。
 
 不用于普通 build/test，不作为默认 long-running backend。
 
-### 8.8 Real TV
+### 9.8 Real TV
 
 最终证明 audible autoplay、遥控器、TV 焦点/恢复、Jellyfin Android TV。
 
 ---
 
-## 9. Actions / Runner 执行架构
+## 10. Actions / Runner 执行架构
 
 详细规则见：
 
@@ -404,22 +521,19 @@ Self-hosted Target Runner 必须遵守 `security.md`：低权限、Vault/生产 
 
 ---
 
-## 10. 典型路由
+## 11. 典型路由
 
 ### R007
 
 ```text
-contract / test authoring
+Implementation Task
+→ contract / test authoring
 → Web Worker
 
-portable concurrency suite
-→ GitHub-hosted x64
-
-generic ARM64 regression
-→ GitHub-hosted ARM64（需要时）
-
-large repeated race
-→ GitHub-hosted matrix/sharding
+Verification Task or combined verification
+→ J1 portable concurrency suite → GitHub-hosted x64
+→ J2 generic ARM64 regression（需要时）→ GitHub-hosted ARM64
+→ J3 large repeated race → GitHub-hosted matrix/sharding
 
 interactive failure debug
 → WSL
@@ -428,48 +542,46 @@ interactive failure debug
 ### R001
 
 ```text
-implementation / test source / proxy logic
+Implementation
 → Web Worker
 
-portable MP4/HLS integration
-→ GitHub-hosted x64
-
-generic ARM64 compatibility
-→ GitHub-hosted ARM64
-
-target media path / FFmpeg / resource
-→ Ubuntu ARM64 Target Runner
+Verification Claims
+→ portable MP4/HLS → GitHub-hosted x64
+→ generic ARM64 compatibility → GitHub-hosted ARM64
+→ target media path / FFmpeg / resource → Ubuntu ARM64 Target Runner
 ```
+
+如果 target media-path 的生命周期与实现明显不同，应拆独立 Verification Task；不要按 x64/ARM64/phone 三个环境机械拆三个 Task。
 
 ### R003
 
 ```text
-metrics harness / scripts
-→ Web Worker
+Implementation
+→ metrics harness / scripts → Web Worker
 
-portable/generic ARM64 harness checks
-→ GitHub-hosted x64/ARM64
-
-CPU / RSS / temperature / target throughput
-→ Ubuntu ARM64 Target Runner
+Verification Task
+→ harness checks → GitHub-hosted x64/ARM64 Jobs
+→ CPU/RSS/temperature/target throughput → Ubuntu ARM64 Target Job
 ```
+
+R003 最终 Gate 依赖 Target Evidence，因此 target verification 应可独立追踪。
 
 ### R002
 
 ```text
-Display implementation
-→ Web Worker
+Implementation
+→ Display implementation → Web Worker
 
-automated browser/unit checks
-→ GitHub-hosted
+portable automated checks
+→ GitHub-hosted Job
 
-final audible autoplay / remote UX
-→ Real TV / Manual
+independent Verification Task
+→ final audible autoplay / remote UX → Real TV / Manual
 ```
 
 ---
 
-## 11. Issue 与 task.md
+## 12. Issue 与 task.md
 
 ### Issue = 动态状态 authority
 
@@ -478,6 +590,7 @@ status
 active owner / claim
 branch
 candidate commit / PR
+linked implementation / verification task
 verification status
 blocker
 review state
@@ -490,10 +603,13 @@ result summary
 
 ```text
 Task kind
+Parent Goal / Research Item
 Goal / Context
+Task decomposition decision
 Base / candidate commit
 Claims to verify
 Required capabilities
+Verification Job Matrix
 Execution Plane
 Runner class / image / labels
 Target / Trust gate
@@ -510,28 +626,30 @@ Deliverables
 
 ---
 
-## 12. Claim、分支与并行
+## 13. Claim、分支与并行
 
 一个 Task 任一时刻只有一个 active owner；Research Item 可拆多个 Task 并行。
 
 领取前：
 
 1. 查询 ready Task；
-2. 确认 Required Capabilities 与执行路径；
+2. 确认 Task kind / Scope / Required Capabilities；
 3. 确认无 active owner；
 4. claim + `status:in-progress`；
 5. 再开始写入。
 
-Verification 必须标识 candidate SHA。
+Verification 必须标识 candidate SHA。GitHub Actions Job 不 claim Issue。
 
 ---
 
-## 13. Evidence Contract
+## 14. Evidence Contract
 
 runtime / Research Evidence 至少记录：
 
 ```text
 Role
+Task / Claim
+Job ID
 Orchestrator
 Execution Plane
 Executor / Runner class
@@ -559,7 +677,7 @@ Result
 
 ---
 
-## 14. Tailscale 与远程执行
+## 15. Tailscale 与远程执行
 
 Tailscale 是管理/执行通道，不是默认媒体路径。
 
@@ -572,17 +690,20 @@ Cloud/Windows/其他 Worker 只有当前 Task 明确授权时才能经 Tailscale
 
 ---
 
-## 15. 推荐日常闭环
+## 16. 推荐日常闭环
 
 ```text
 Web Coordinator
 → Goal / Claims / Success Criteria
+→ 决定 combined 还是 Implementation + Verification 分离
 
 Implementation
 → Web Worker first
 → Candidate commit
 
-Verification
+Verification Task / inline verification
+→ Claims
+→ Jobs
 → GitHub-hosted x64 first
 → GitHub-hosted ARM64 when generic ARM64 matters
 → Ubuntu ARM64 Target Runner only when phone-specific proof matters
@@ -594,9 +715,10 @@ Interactive diagnosis only when needed
 Evidence
 → GitHub
 → Web Coordinator Review
-→ accept / revise / blocked
+→ Task Result
+→ Parent Goal / Research Gate Decision
 ```
 
 最终目标：
 
-> **尽可能让工作留在 Web，并让 GitHub 自带计算资源承担通用验证；自建 Runner 只为 GitHub 无法提供的目标设备真实性服务。**
+> **先按工作和 Claim 拆 Task，再按 capability 拆 Job；尽可能让工作留在 Web，并让 GitHub 自带计算资源承担通用验证，自建 Runner 只为 GitHub 无法提供的目标设备真实性服务。**
