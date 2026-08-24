@@ -136,6 +136,41 @@ Test Source
 - Display 看不到 Cookie/Authorization 等上游 Secret。
 - 基础资源数据已记录，不存在明显持续内存增长或 Direct Proxy 立即违背低功耗目标的证据。
 
+### R001 当前实测状态（2026-08-24）
+
+R001 在 Issue #3 / Attempt 1 的媒体路径范围内已经取得 **PASS** 证据；详细记录见 `docs/research/r001-media-path.md`。
+
+当前已被真实执行验证的最小链路是：
+
+```text
+public media input
+→ SiteAdapterRegistry
+→ generic-direct
+→ SourceLocator
+→ ResolvedMedia
+→ scoped short-lived Media Gateway capability
+→ Media Gateway
+→ Web Display
+```
+
+已证明：
+
+- 公开 MP4 经 Gateway 在真实 Chromium 中完成 metadata、play、pause、seek；浏览器媒体请求实际使用 Range；
+- 公开 MP4 的 `Range: bytes=0-1023` 经 Gateway 返回 206、精确 1024 字节和匹配的 `Content-Range`；
+- 公开 HLS 已完成 master → rewritten variant → rewritten segment 的真实网络 smoke，relative/query-bearing URI 会先按上游 playlist 解析，再换成新的 scoped capability；
+- deterministic fixture 覆盖 missing segment、interrupted segment、403/404、redirect、private redirect、Range unsupported、invalid/expired/cross-binding capability 等失败；
+- protected upstream secret 只由服务端注入；浏览器可见请求没有 Cookie/Authorization，proof artifact 中也没有 fixture secret；
+- `/stream?url=...` 不存在，capability replay 需匹配 session/item/revision/resource 绑定，redirect 每跳重新过 EgressPolicy；
+- 100 次 abort/reconnect 后 `active_streams` 回到 0，capability 数量保持有界，媒体字节不作为完整内存对象保留。
+
+边界说明：
+
+- R001 的真实浏览器播放证明以 MP4 为主；HLS 在本 Task 中证明的是具体 HTTP manifest/variant/segment 路径，**不声称 Chromium-native HLS 已验证**；
+- DASH、remux、transcoding 尚未由 R001 实现/证明；
+- R003 的 ARM64 CPU/RSS/temperature 与长期 30/60 分钟稳定性仍是后续独立证据，不由这次 100-cycle cleanup 代替；
+- 本 PASS 不代表 R002 TV autoplay、R003、Jellyfin、真实站点、Native Site Panel 或完整 R008 已通过；
+- `session_id`、`item_id/item_revision` 在 R001 中仅作为 media capability 的 opaque binding identity；R001 不定义 Playback command CAS、telemetry revision、media refresh、display generation、handoff generation/authority，这些仍由 R007 独占。
+
 ## Phase 0A-2：PlaybackSession + Control Shell
 
 目标：证明 Gateway 自己持有播放状态并能被 Control 操作，同时闭合 R007 的核心并发契约。
