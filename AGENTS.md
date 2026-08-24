@@ -1,6 +1,6 @@
 # Codex / Agent Working Rules
 
-本文件定义在本仓库工作的长期 Agent 约束。它不是一次性任务提示词；阶段性任务入口位于 `docs/codex/`。
+本文件定义在本仓库工作的长期 Agent 约束。阶段性执行契约位于 `docs/tasks/`，外部 Codex 阶段入口位于 `docs/codex/`。
 
 ## 1. 开始任何任务前
 
@@ -13,9 +13,9 @@
 5. `docs/technical-feasibility-validation.md` — EVIDENCE / FEASIBILITY GATES
 6. `docs/mvp-plan.md` — WHEN
 7. `docs/security.md` — SECURITY INVARIANTS
-8. 与当前任务直接相关的专题文档 / ADR
+8. 当前 Task / Research Item 直接相关的专题文档 / ADR
 
-不要从旧聊天、README 摘要或已有代码猜测新的架构事实；发生冲突时按 `docs/README.md` 的权威层级处理。
+不要从旧聊天、README 摘要或旧代码猜测新的架构事实；发生冲突时按 `docs/README.md` 的权威层级处理。
 
 ## 2. 当前架构不变量
 
@@ -32,33 +32,31 @@
 - Jellyfin 故障不得阻塞 Web Display。
 - MVP 面向可信 LAN / 单用户；这不等于可以关闭 Origin/CSRF、SSRF、Secret、token 等安全边界。
 
-如果实现需要破坏以上任一不变量，先停止当前实现路径，记录证据并按设计变更流程修改文档；不要在代码里偷偷引入例外。
+如果实现需要破坏任一不变量，停止当前实现路径，保留证据并走设计变更流程；不要在代码里偷偷引入例外。
 
 ## 3. 风险验证优先于扩大实现
 
 当前阶段采用 risk-driven feasibility validation。
 
-只把真实实验、测试或可复现证据当作技术可行性结论。禁止把以下表述当作 PASS：
-
-- “理论上支持”
-- “应该可行”
-- “看起来没问题”
-- “预计不会有问题”
-
-研究结果使用：
+研究结果只使用：
 
 - `PASS`
 - `CONDITIONAL PASS`
 - `FAIL`
 - `BLOCKED`
 
-尚未执行的实验不得标记为通过。
+禁止把以下内容当作 PASS：
 
-实验失败是有效结果。优先 `Change / Defer / Drop` 可选能力，而不是为了让 Demo 成功绕过架构或安全边界。
+- “理论上支持”
+- “应该可行”
+- “看起来没问题”
+- “预计不会有问题”
+
+实验失败是有效结果。优先 `Change / Defer / Drop` 可选能力，而不是为了 Demo 绕过架构或安全边界。
 
 ## 4. 当前 P0 Gate
 
-以 `docs/technical-feasibility-validation.md` 与 `docs/mvp-plan.md` 为准。当前优先级是：
+以 `docs/technical-feasibility-validation.md` 与 `docs/mvp-plan.md` 为准：
 
 ```text
 R007 Playback concurrency contract closure
@@ -78,16 +76,16 @@ R007 Playback concurrency contract closure
 ## 5. 实现与实验规则
 
 - PoC 可以小，但必须真实验证目标风险。
-- 不为了 PoC 临时让 Core 直接调用具体站点或 yt-dlp。
+- 不为了 PoC 让 Core 直接调用具体站点或 yt-dlp。
 - 不为了 PoC 关闭 SSRF、允许任意私网访问、下发 Cookie/Authorization 或建立开放代理。
-- FFmpeg、yt-dlp、Chromium 等子进程必须使用 argv/参数数组，禁止 shell 字符串拼接。
-- 实验代码与正式代码边界要清楚；未经验证的 PoC 不自动升级为产品实现。
-- 新增具体站点的主要 diff 应位于 `plugins/<site>/`；如果需要修改 PlaybackCoordinator/DisplayAdapter/Control 中的站点业务分支，先做架构评审。
-- 运行时第三方插件、动态 `.so`、插件市场、完整 Native Site Panel、完整 Jellyfin handoff 都不是首批 Core 实现前置条件。
+- FFmpeg、yt-dlp、Chromium 等子进程使用 argv/structured API，禁止 shell 字符串拼接。
+- 实验代码与正式代码边界清楚；未经验证的 PoC 不自动升级为产品实现。
+- 新增具体站点的主要 diff 应位于 `plugins/<site>/`；如果需要在 PlaybackCoordinator/DisplayAdapter/Control 中加入具体站点业务分支，先做架构评审。
+- 运行时第三方插件、动态 `.so`、插件市场、完整 Native Site Panel、完整 Jellyfin handoff 都不是首批 Core 前置条件。
 
 ## 6. 并发与状态规则
 
-实现/修改 Playback 时必须覆盖：
+实现/修改 Playback 必须覆盖：
 
 - `request_id` 幂等；
 - command revision/CAS；
@@ -101,7 +99,7 @@ R007 Playback concurrency contract closure
 
 ## 7. 测试要求
 
-修改代码时，至少运行与改动对应的测试。优先维护：
+优先维护：
 
 - SiteAdapter conformance tests；
 - ResolvedMedia schema / Secret boundary tests；
@@ -110,13 +108,21 @@ R007 Playback concurrency contract closure
 - Display generation / handoff rollback tests；
 - EgressPolicy / SSRF tests；
 - Web Display 基线测试；
-- 与当前 Research Item 对应的可复现实验。
+- 当前 Research Item 对应的可复现实验。
+
+测试必须区分：
+
+```text
+Implementation Result
+!= Verification Result
+!= Coordinator Gate Decision
+```
 
 不能运行的测试必须明确说明原因；不得把“未运行”写成“通过”。
 
 ## 8. 设计变更流程
 
-真实证据推翻当前假设时，按以下顺序检查并更新：
+真实证据推翻当前假设时：
 
 ```text
 Evidence
@@ -130,158 +136,261 @@ Evidence
 → 必要时 ADR
 ```
 
-不要只修改一个专题文档或代码，让 canonical 文档继续漂移。
+不要只修改 PoC/专题文档，让 canonical 文档继续漂移。
 
 ## 9. Git 工作方式
 
 - 一个清晰研究/实现单元一个聚焦提交。
 - 不把多个不相关 Spike 塞进一个巨大 commit。
-- 提交信息说明意图，而不是只写 `update` / `fix`。
+- 提交信息说明意图，不只写 `update` / `fix`。
 - 不重写用户已有历史，不 force push，除非任务明确要求。
-- 提交前检查当前 diff 是否包含 Secret、账号信息、私有 Cookie、Token、完整敏感 URL 或实验产生的大文件。
+- 提交前检查 Secret、账号信息、Cookie、Token、完整敏感 URL、大型实验文件。
+- Verification 必须明确所验证的 candidate commit SHA。
 
 ## 10. 多环境协同
 
 本项目采用：
 
-> **Web-first，Capability-driven fallback。**
+> **Web-first，Automation-second，Cloud-for-duration，Local-for-debug，Target-for-proof，Manual-for-UX。**
 
-网页 GPT 明确分成两种会话：
+完整规则见 `docs/development-environments.md`；本节定义 Agent 必须遵守的最小调度不变量。
+
+### 10.1 网页两种会话
 
 ```text
 Web Coordinator Session
 = 长生命周期、项目全局控制面
 
 Web Worker Session
-= 短生命周期、单 Task、env:web-gpt 执行者
+= 短生命周期、单 Task 执行者
 ```
 
-### 10.1 Web Coordinator
+Web Coordinator 负责优先级、拆 Task、定义 Claims / Success Criteria / Evidence、Review 和 Gate Decision。
 
-Web Coordinator 负责：
+Web Worker 是默认最高优先级 Implementation Worker。一个已经定义为独立 Task 的实现工作默认交给独立 Worker Session，避免 Coordinator 被局部实现上下文吞噬。
 
-- 读取仓库、Issue、PR、Research Matrix 和 canonical docs 的全局状态；
-- 决定当前最高优先级工作；
-- 拆分 Issue / Task；
-- 定义 Scope、Success Criteria 和 Evidence Requirements；
-- 判断 Web Worker 是否能够产生有效结果；
-- 对缺少网页能力的任务进行环境路由；
-- Review Worker 提交和 Evidence；
-- 决定 `done / ready / blocked` 和下一任务；
-- 根据已经接受的 Evidence 更新 Gate / canonical docs。
+### 10.2 Web Worker 不等于“没有 runtime 能力”
 
-Coordinator 可以执行协调本身所需的 GitHub 写操作，但一个已经形成独立 Task 的实现工作默认交给单独 Worker Session，避免项目全局会话被局部实现上下文吞噬。
+Web Worker 自身没有任意本地进程，但可以调度或消费真实执行后端的 Evidence。
 
-### 10.2 Web Worker 是默认最高优先级执行者
-
-只要 Web Worker 能完整完成任务并提供该 Task 要求的有效证据，就优先使用 `env:web-gpt`。
-
-不要使用错误规则：
+默认工程闭环：
 
 ```text
-“这是执行任务，所以必须交给 Codex”
+Web Worker
+→ implementation / tests / commit / PR
+→ GitHub Actions
+→ Web Worker review run/job/log/artifact
+→ fix if needed
+→ Coordinator Review
 ```
 
-正确规则是：
+因此不要使用错误规则：
 
 ```text
-Web Worker 能否提供有效结果？
-  ├── Yes → Web Worker 优先
-  └── No  → 按缺失 capability 路由
+“需要 build/test，所以必须交给 WSL/Codex”
 ```
 
-Web Worker 可以：
+先判断 GitHub Actions 是否可以产生有效自动化 Evidence。
 
-- 修改代码；
-- 修改文档；
-- 分析仓库；
-- 创建 commit / PR；
-- 完成 GitHub 工具真实支持范围内的执行任务。
+### 10.3 GitHub Actions 是默认 Automated Verification Plane
 
-Web Worker 不能把没有真实运行过的编译、自动化测试、本地进程或设备行为标记为 PASS。
+适合：
 
-### 10.3 外部 Worker 是能力扩展
+- build；
+- test；
+- fmt；
+- clippy；
+- contract/concurrency/security suite；
+- 短中时长 integration/regression；
+- artifact/log 采集。
 
-只有任务需要网页环境缺失的能力时，才路由到：
+Evidence 必须记录实际 runner OS/arch、workflow/run/job 和 commit SHA。
 
-- WSL：Rust 编译、测试、lint、本地并发/安全测试；
-- Windows：ADB、Android host、手机生命周期和部署协调；
-- Ubuntu ARM64：目标架构运行、CPU/RSS/温度/长时间稳定性；
-- Cloud：长时间构建、自动化执行、独立复现；
-- Real TV / manual：audible autoplay、遥控器、真实 TV UX、Jellyfin Android TV。
+GitHub-hosted x86 runner 不得冒充 ARM64、手机热环境、家庭 LAN 或真实 TV。
 
-能够通过 Tailscale 远程访问目标设备，不代表执行 target 发生变化；Evidence 必须分别记录 Executor 和 Target。
+仓库尚未建立 `.github/workflows/`；第一个 Rust workspace/真实自动化测试落地时建立有实际内容的 CI，不为了流程形式提前创建空 workflow。
 
-### 10.4 Issue 与 task.md 的职责
+### 10.4 Cloud 是长时间执行优先后端
 
-GitHub Issue 是动态状态 authority，负责：
+需要长时间、无人值守、重复运行时，Cloud 优先于 WSL：
+
+- 6h/24h soak；
+- 大量 repeated race；
+- benchmark matrix；
+- failure injection；
+- 长时间内存/稳定性观察；
+- 持续自动化复现。
+
+Cloud host 本身不能证明手机温度、家庭 LAN 或真实 TV。如果 Cloud 通过 Tailscale 在目标设备执行，Evidence 必须记录真实 Execution host / Target。
+
+### 10.5 Local 环境用于交互式能力
+
+- WSL：interactive Linux debug、反复加日志、启动本地进程、快速 failure investigation。
+- Windows：ADB、Android host、手机重启/恢复/部署协调。
+
+不要因为 WSL 能运行 `cargo test` 就默认把所有测试路由到 WSL；能自动化的先 Actions。
+
+### 10.6 Target 环境只用于 target proof
+
+- Ubuntu ARM64：ARM64 compatibility、Gateway/FFmpeg/Chromium/Jellyfin target runtime、CPU/RSS/temperature/throughput、目标稳定性。
+- Real TV / Manual：audible autoplay、遥控器、TV UX、Jellyfin Android TV。
+
+尽量把普通开发、测试编写、portable verification 留在 Web/Actions/Cloud/WSL，只把必须的最后 Proof 放到目标设备。
+
+### 10.7 Implementation / Verification 逻辑分离
+
+Task 可定义为：
+
+```text
+implementation | verification | combined | research
+```
+
+- Implementation 输出 candidate commit / PR。
+- Verification 对确定 candidate SHA 验证 Claims。
+- 普通工程任务可用 combined：Web 实现 + Actions 自动验证，不强制拆两个 Issue。
+- ARM64/TV/资源/关键 Research 必须能独立追踪 target verification。
+
+### 10.8 Capability-driven routing
+
+Task 用 Required Capabilities 描述需要，而不是静态写“属于某环境”。
+
+常用 capability：
+
+```text
+github-read-write
+repository-static-analysis
+code-authoring
+automated-build
+automated-test
+rust-build
+rust-test
+long-running
+interactive-linux-debug
+adb
+arm64-runtime
+device-metrics
+thermal-metrics
+lan-access
+tv-browser
+remote-control
+jellyfin-tv
+manual-observation
+```
+
+默认决策：
+
+```text
+Web implementation?
+→ Actions automated verification?
+→ Cloud long-running?
+→ WSL/Windows interactive capability?
+→ ARM64/TV target proof?
+```
+
+### 10.9 Orchestrator / Executor / Target 必须分开记录
+
+例如 Web Worker读取 Actions：
+
+```text
+Orchestrator = web-gpt
+Executor = github-actions
+Execution host = github runner
+Target = runner
+```
+
+Cloud 远程在手机执行：
+
+```text
+Orchestrator = cloud-codex
+Executor / Execution host = ubuntu-arm64-phone
+Target = ubuntu-arm64-phone
+```
+
+“谁发起”不能替代“实际在哪里运行”。
+
+### 10.10 Issue 与 task.md
+
+GitHub Issue 是动态状态 authority：
 
 ```text
 status
-assignee / active owner
-claimed environment / claimed at
-active branch
-PR / commit
+active owner / claim
+branch
+candidate commit / PR
+verification status
 blocker
 review state
 result summary
 ```
 
-`docs/tasks/<issue>-<slug>/task.md` 是稳定执行契约，负责：
+`docs/tasks/<issue>-<slug>/task.md` 是稳定执行契约：
 
 ```text
+Task kind
 Goal / Context
-Preferred executor
+Base / candidate commit
+Claims to verify
+Preferred execution path
 Eligible environments
 Required capabilities
-Base commit
-Preconditions
-In Scope / Out of Scope
+Scope
 Architecture Invariants
-Commands / Tests
+Implementation Requirements
+Verification Plan
 Success Criteria
-Evidence Requirements
+Evidence Contract
 Failure / Blocked Rules
 Deliverables
 ```
 
-`task.md` 不重复维护实时 status、claim、active branch 或最终 result。执行 Worker 不为了 claim/review/done 修改任务契约。
+`task.md` 不重复维护实时 status/owner/result。
 
-### 10.5 Worker 协议
+### 10.11 Worker 协议
 
-当任务由 GitHub Issue 派发时：
+1. 读取 `AGENTS.md`、Issue、`task.md`；
+2. 确认当前执行路径满足 Required Capabilities；
+3. 确认 Issue `status:ready` 且无 active owner；
+4. claim + `status:in-progress`；
+5. 只执行 Scope；
+6. 提交 candidate implementation 或 Evidence；
+7. 记录真实 Orchestrator/Executor/Target、测试与未验证范围；
+8. Issue → `status:review`；
+9. 停止，不自动开始下一项。
 
-1. 读取 `AGENTS.md`、Issue 和 `docs/tasks/<issue>-<slug>/task.md`；
-2. 确认当前环境满足 Required Capabilities；
-3. 检查 Issue 仍为 `status:ready` 且无 active owner；
-4. claim 后切换为 `status:in-progress`；
-5. 只执行当前 Scope；
-6. 提交 commit / PR / Evidence；
-7. 在 Issue 中记录结果摘要和未验证范围；
-8. 切换为 `status:review`；
-9. 停止，不自动领取下一任务。
+大型 Research Item 可以拆多个 Task 并行，但每个 Task 只有一个 active owner；最终 Research Gate 由 Web Coordinator 汇总已接受 Evidence 决定。
 
-`env:web-gpt` 专指 Web Worker 执行资格，不代表 Web Coordinator 正在承担该 Task。
+### 10.12 Evidence 最小字段
 
-同一具体 Task 任一时刻只能有一个 active owner。大型 Research Item 可以拆成多个独立 Task 并行，但整个 Research Gate 的最终结论由 Web Coordinator 根据已接受 Evidence 汇总。
+runtime / Research Evidence 至少记录：
 
-没有匹配的 ready Issue 时 Worker 停止，不自行从 backlog 推断新任务。无法完成时，不降低 Success Criteria；记录缺失 capability / blocker，并转 `status:blocked` 或释放回 `status:ready`。
+```text
+Role: implementation | verification
+Orchestrator
+Executor
+Execution host
+Target host/device
+OS / architecture
+Relevant versions
+Network path
+Candidate / base commit
+Workflow / run / job (if Actions)
+Commands / steps
+Metrics / artifact / raw evidence
+Result
+```
 
-环境职责、会话模型、任务交接模板、Git 并发规则与 Tailscale 安全要求见：
-
-- `docs/development-environments.md`
-- `docs/tasks/README.md`
-
-网页分析、文档推理或模拟输出不能替代真实运行 Evidence。WSL/Cloud 结果不能冒充 Ubuntu ARM64 或真实电视结果。
+网页静态分析不能冒充 runtime PASS；Actions/Cloud/WSL 不能冒充 ARM64/TV target Evidence。
 
 ## 11. 阶段任务入口
 
-当前外部 Codex 可直接执行的阶段任务入口：
+优先使用 GitHub Issue + `docs/tasks/<issue>-<slug>/task.md`。
+
+外部 Codex 的阶段性技术预研入口：
 
 - `docs/codex/technical-feasibility.md`
 
-当 Web Coordinator 判断当前最高优先级任务需要外部运行能力时，可以使用该入口或创建更聚焦的 Issue + `task.md`。
+只有 Web + Actions/Cloud 无法满足当前 Task Required Capabilities，或者明确需要交互式/目标环境时，才路由到相应外部 Worker。
 
-新外部 Codex 会话推荐指令：
+推荐外部 Worker 指令：
 
-> 读取 `AGENTS.md`，然后按照对应 GitHub Issue / `docs/tasks/<issue>-<slug>/task.md` 执行当前 Scope；如果本轮明确使用阶段任务入口，则读取 `docs/codex/technical-feasibility.md`。完成后提交结果并停止，不自动开始下一项。
+> 读取 `AGENTS.md`、对应 GitHub Issue 和 `docs/tasks/<issue>-<slug>/task.md`；确认当前环境提供缺失 Required Capabilities 后 claim，只执行当前 Scope，记录真实 Executor/Target Evidence，提交后转 `status:review` 并停止。
