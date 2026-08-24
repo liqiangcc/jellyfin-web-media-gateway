@@ -35,9 +35,55 @@ Resolve from the explicit request and repository state:
 - Required Capabilities;
 - Task decomposition decision;
 - Success Criteria / Claims / Evidence Contract;
-- base commit from the actual target branch.
+- base commit from the actual target branch;
+- **hard dependencies**, if any.
 
 If a required value cannot be resolved, stop before publication rather than inventing it.
+
+## Dependency rule
+
+Do not confuse sequencing preference with execution dependency.
+
+Classify every claimed dependency before using it to block publication:
+
+```text
+Hard dependency
+= without the upstream result, this Task cannot be correctly implemented or verified
+
+Soft ordering
+= preferred sequence / Research order / review order, but this Task can execute independently
+
+Integration overlap
+= shared files, Cargo/workspace metadata, eventual rebase/merge, or a likely future interface reconciliation
+```
+
+Publication policy:
+
+```text
+hard dependency unresolved
+→ keep status:draft / status:blocked as appropriate
+
+soft ordering only
+→ do NOT block publication
+
+integration overlap only
+→ do NOT block publication; record rebase/integration risk
+
+no hard dependency
+→ publish as soon as Publication Gate is otherwise PASS
+```
+
+Rules:
+
+- Research ID order or arrows in planning docs do not automatically create a hard dependency unless the canonical text explicitly makes one necessary for correctness;
+- shared files or probable merge conflicts are integration work, not a business Task dependency;
+- “another Task may change an interface later” is not enough to block publication unless the current Task actually needs that undecided result to execute correctly;
+- when Tasks run in parallel, freeze authority boundaries in `task.md` so one Task cannot silently redefine the other's domain;
+- if later Evidence truly invalidates a parallel Task assumption, use `BLOCK`, `REVISE`, or Contract revision then—do not preemptively serialize all work.
+
+Default principle:
+
+> **No hard dependency → publish early and run in parallel.**
 
 ## GitHub capability
 
@@ -53,6 +99,8 @@ If Issues, labels, repository files, or required Issue comments/state cannot be 
 - Search open and closed Issues for the same Task / Goal.
 - Reuse/update an existing Task when appropriate; a failed Attempt is not a reason to create a duplicate Issue.
 - Confirm Task-vs-Job decomposition before materializing.
+- Identify and classify each dependency as hard / soft / integration overlap.
+- If no unresolved hard dependency exists, do not leave the Task draft merely because an earlier Research/Task is unfinished.
 - Confirm every eligible `env:*` has a dedicated profile under `docs/tasks/handoffs/`.
 
 If an environment has no stable handoff profile, keep the Task draft and add the profile first rather than inventing an ad-hoc launch command.
@@ -76,7 +124,8 @@ The Issue must link:
 - real `prompt.md`;
 - actual base commit;
 - Parent Goal / Research Item when applicable;
-- eligible environment(s) / Required Capabilities.
+- eligible environment(s) / Required Capabilities;
+- any unresolved hard dependency or explicit statement that hard dependencies are `none` when dependency analysis matters.
 
 Do not persist registration tokens, Cookies, PATs, SSH private keys, or other long-lived secrets.
 
@@ -98,6 +147,7 @@ prompt/task do not store stale live status
 
 no task-specific placeholders remain
 eligible env / Required Capabilities are correct
+hard dependencies are either satisfied or explicitly none
 Success Criteria / Evidence Contract are present
 no secret/token was persisted
 ```
@@ -114,7 +164,7 @@ Do not announce publication.
 
 ### 4. Publish last
 
-Only after read-back passes:
+Only after read-back passes and no unresolved hard dependency remains:
 
 - preserve unrelated labels;
 - set all intended eligible `env:*` labels;
@@ -174,12 +224,12 @@ Prompt: docs/tasks/<real-issue>-<real-slug>/prompt.md
 
 ## Republish after bootstrap/Contract change
 
-If Scope, Claims, Success Criteria, decomposition, Evidence Authority, architecture/security premise, or the task-specific bootstrap changes materially:
+If Scope, Claims, Success Criteria, decomposition, Evidence Authority, architecture/security premise, dependency classification, or task-specific bootstrap changes materially:
 
 ```text
 status:draft when required to make the package non-claimable
 → update canonical docs when required
-→ update task.md for Contract changes
+→ update task.md for Contract/dependency changes
 → update prompt.md for bootstrap changes
 → read-back verify
 → status:ready + eligible env
@@ -197,6 +247,7 @@ Do not say “published”, “ready”, or “Worker can execute” unless all 
 Issue read-back PASS
 + task.md read-back PASS
 + prompt.md read-back PASS
++ no unresolved hard dependency
 + ready/env state read-back PASS
 + every required target worker queue search PASS
 + environment-specific downstream handoff emitted for every eligible env
