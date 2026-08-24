@@ -1,10 +1,19 @@
 # 执行任务目录
 
-本目录保存由网页 GPT + GitHub MCP 派发给具体 Codex 环境的版本化任务契约。
+本目录保存由 Web Coordinator 为独立 Worker 会话准备的版本化执行契约。
 
-## 目录规则
+Worker 可以是：
 
-每个 GitHub Issue 使用独立目录：
+- Web Worker（默认最高优先级）；
+- WSL Codex；
+- Windows Codex；
+- Ubuntu ARM64 Codex；
+- Cloud Codex；
+- 真实电视 / manual worker。
+
+## 1. 目录规则
+
+需要版本化执行契约的 GitHub Issue 使用独立目录：
 
 ```text
 docs/tasks/<issue-number>-<slug>/task.md
@@ -16,62 +25,167 @@ docs/tasks/<issue-number>-<slug>/task.md
 docs/tasks/12-r007-playback-concurrency/task.md
 ```
 
-Issue 用于状态、assignee、讨论、依赖和 PR/commit 链接；`task.md` 用于 Goal、Scope、环境、测试、Evidence 和完成条件。
+`task.md` 是执行契约，不是实时状态文件。
 
-## Issue 标签
+## 2. 状态所有权
 
-网页 GPT/MCP 至少设置一个状态标签和一个或多个可执行环境标签：
+### GitHub Issue = 实时状态 authority
+
+以下动态信息只在 Issue 中维护：
+
+```text
+status
+assignee / active owner
+claimed environment
+claimed at
+active branch
+PR / commit
+blocker
+review state
+result summary
+```
+
+状态标签：
 
 ```text
 status:draft | status:ready | status:in-progress | status:blocked | status:review | status:done
+```
+
+环境标签：
+
+```text
 env:web-gpt | env:windows | env:wsl | env:ubuntu-arm64 | env:cloud | env:manual-tv
 ```
 
-多个 `env:*` 表示这些环境都具备领取资格，不表示默认并行执行。
+`env:web-gpt` 表示独立 **Web Worker Session** 的执行资格，不表示 Web Coordinator 正在执行该 Task。
 
-## 生命周期
+### task.md = 稳定执行契约
 
-```text
-网页 GPT/MCP 创建 Issue
-→ 从 task.template.md 创建 task.md
-→ task.md 提交到 main，Issue 链接路径和 base commit
-→ 标记 eligible env:* + status:ready
-→ 匹配环境自行查询任务队列
-→ 一个环境 claim：assignee + status:in-progress
-→ Codex 执行并提交结果
-→ status:review
-→ 网页 GPT/MCP 验收
-→ status:done 或退回 status:ready
-```
+`task.md` 只保存：
 
-同一 Issue 不允许多个 Codex 同时成为 active owner。需要拆分并行工作时，建立独立子 Issue 和独立任务目录。
+- Goal；
+- Context / Why；
+- Preferred executor；
+- Eligible environments；
+- Required capabilities；
+- Base commit；
+- Preconditions；
+- In Scope / Out of Scope；
+- Architecture Invariants；
+- Commands / Tests；
+- Success Criteria；
+- Evidence Requirements；
+- Failure / Blocked Handling；
+- Deliverables。
 
-## 自助领取
+不再重复保存 status、claim owner、claim time、active branch 和最终实时结果。
 
-每个环境只查询同时匹配 `status:ready` 与自身 `env:*` 的 Issue。网页 GPT + GitHub MCP 也是 `env:web-gpt` 执行环境，可以领取文档、Issue/PR、仓库分析、Review 和其工具能够完成的轻量修改。领取成功后再拉取/创建任务分支和开始写入性工作。
-
-如果两个环境同时尝试领取，以最先成功设置 assignee 和 `status:in-progress` 的环境为 owner；另一环境必须停止。没有匹配任务时不自行从 backlog 推断工作。
-
-## Codex 使用方式
-
-推荐指令：
-
-> 读取 `AGENTS.md` 和 `docs/tasks/<issue>-<slug>/task.md`，只执行任务 Scope，提交结果和 Evidence 后停止。
-
-Codex 不自行扩大 Scope、不自动开始下一项、不自行关闭 Issue。
-
-推荐的自动领取指令：
-
-> 读取 `AGENTS.md`，查询匹配当前环境且标记为 `status:ready` 的 Issue；领取最高优先级任务后读取对应 `task.md`，只执行其 Scope，提交结果并转为 `status:review` 后停止。
-
-## 完成后的文件
-
-任务完成后保留 `task.md`，并填写 Result、Evidence 和最终 commit/PR，作为可审计历史。大型原始日志、Secret、Cookie、Token、账号信息和临时媒体 URL 不得写入任务目录。
-
-如果任务只产生运行证据，详细结果优先写入：
+如果任务完成后需要长期保存研究结论，写入：
 
 ```text
 docs/research/<research-id>-<topic>.md
 ```
 
-`task.md` 只链接该 Evidence，不重复维护两份结论。
+普通工程结果由 Issue + PR/commit 保存。
+
+## 3. Web-first 生命周期
+
+```text
+Web Coordinator
+→ 创建/整理 Issue
+→ 判断 Required Capabilities
+→ 从 task.template.md 创建 task.md
+→ task.md 提交到 main
+→ Issue 链接 task.md + base commit
+→ 标记 status:ready + eligible env:*
+```
+
+调度时先判断：
+
+```text
+Web Worker 能否产生完整有效结果？
+  ├── 能 → env:web-gpt 优先
+  └── 不能 → 路由到具备缺失 capability 的外部 Worker
+```
+
+然后：
+
+```text
+Worker claim Issue
+→ assignee + claimed environment + status:in-progress
+→ 读取 AGENTS.md + task.md
+→ 只执行 Scope
+→ commit / PR / Evidence
+→ Issue 记录结果摘要
+→ status:review
+→ Worker 停止
+→ Web Coordinator Review
+→ status:done / ready / blocked
+```
+
+同一 Task 任一时刻只允许一个 active owner。
+
+## 4. Web Coordinator 与 Web Worker
+
+两种网页会话必须区分：
+
+```text
+Web Coordinator Session
+= 长生命周期、项目全局状态、调度、Review、Gate 决策
+
+Web Worker Session
+= 短生命周期、单 Task、env:web-gpt 执行者
+```
+
+Coordinator 不应因为网页也能执行，就把所有实现长期堆在同一会话中。
+
+Web Worker 完成当前 Task 后停止，不自行选择下一项。
+
+## 5. 自助领取
+
+每个 Worker 只查询同时匹配：
+
+```text
+status:ready + env:<current-environment>
+```
+
+多个 `env:*` 表示多个环境都具备执行资格，不表示并行执行。
+
+领取成功前不得进行写入性工作。
+
+如果两个 Worker 同时尝试领取，以最先成功设置 active owner 和 `status:in-progress` 的 Worker 为准；另一方停止。
+
+没有匹配任务时不自行从 backlog 扩大工作范围。
+
+## 6. 推荐 Worker 指令
+
+### Web Worker
+
+> 读取 `AGENTS.md`、对应 GitHub Issue 和 `docs/tasks/<issue>-<slug>/task.md`；确认并 claim `env:web-gpt` 任务，只执行当前 Scope，提交修改和当前网页环境能够真实提供的 Evidence，把 Issue 转为 `status:review` 后停止，不开始下一项。
+
+### 外部 Codex Worker
+
+> 读取 `AGENTS.md`、对应 GitHub Issue 和 `docs/tasks/<issue>-<slug>/task.md`；确认当前环境满足 Required Capabilities 并 claim 任务，只执行当前 Scope，提交真实测试/Evidence，把 Issue 转为 `status:review` 后停止，不开始下一项。
+
+## 7. Evidence
+
+任务包不能预先宣称实验 PASS。
+
+需要运行时或设备 Evidence 时，Worker 必须记录实际：
+
+```text
+Executor
+Execution host
+Target host/device
+OS / architecture
+Relevant versions
+Network path
+Base commit
+Commands / steps
+Raw evidence location
+Result
+```
+
+网页源码分析不能冒充 runtime PASS；WSL、Cloud、模拟器或手机浏览器也不能冒充目标 ARM64 / 真实电视 Evidence。
+
+大型日志、Secret、Cookie、Token、账号数据和临时媒体 URL 不得写入任务目录。
