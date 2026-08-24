@@ -10,6 +10,32 @@ permissions:
   contents: read
 
 jobs:
+  r002-bind:
+    name: R002 J1 bind configuration and regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Bind configuration and affected regression tests
+        run: cargo test --workspace --all-targets
+
+  r002-workflow-contract:
+    name: R002 J2 trusted workflow contract validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Validate target workflow statically
+        run: node scripts/validate-r002-target-deployment.mjs
+
   deterministic:
     name: R007 deterministic x64
     runs-on: ubuntu-latest
