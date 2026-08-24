@@ -51,7 +51,7 @@ jobs:
       - name: Validate trusted target workflow
         run: python3 scripts/r003/harness.py validate-workflow --path .github/workflows/r003-target-resource.yml
       - name: Validate failure cleanup and schema controls
-        run: python3 -m unittest scripts/r003/test_harness.py HarnessTests.test_failure_cleanup_terminates_process_group HarnessTests.test_scenario_and_workflow_contract
+        run: python3 -m unittest scripts/r003/test_harness.py
       - name: Confirm target workflow is manual-only
         run: |
           ! grep -q '^  pull_request:' .github/workflows/r003-target-resource.yml
