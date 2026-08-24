@@ -97,6 +97,7 @@ pub struct PlaybackSession {
     active_display: DisplayAuthority,
     handoff: Option<HandoffTransition>,
     next_transition_id: u64,
+    next_display_generation: u64,
     request_records: HashMap<String, RequestRecord>,
 }
 
@@ -123,6 +124,7 @@ impl PlaybackSession {
             },
             handoff: None,
             next_transition_id: 1,
+            next_display_generation: 2,
             request_records: HashMap::new(),
         }
     }
@@ -234,6 +236,12 @@ impl PlaybackSession {
                     });
                 }
 
+                let candidate_generation = self.next_display_generation;
+                self.next_display_generation = self
+                    .next_display_generation
+                    .checked_add(1)
+                    .expect("display generation overflow");
+
                 let ticket = HandoffTicket {
                     transition_id: self.next_transition_id,
                     item_id: self.current_item.item_id.clone(),
@@ -241,11 +249,7 @@ impl PlaybackSession {
                     from_display_id: self.active_display.display_id.clone(),
                     from_generation: self.active_display.generation,
                     target_display_id: target_display_id.clone(),
-                    candidate_generation: self
-                        .active_display
-                        .generation
-                        .checked_add(1)
-                        .expect("display generation overflow"),
+                    candidate_generation,
                 };
                 self.next_transition_id = self
                     .next_transition_id
