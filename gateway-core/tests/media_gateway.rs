@@ -188,7 +188,7 @@ fn resource(url: &str, protocol: StreamProtocol) -> UpstreamResource {
         protocol,
         public_headers: HeaderMap::new(),
         secret_headers: HeaderMap::new(),
-        egress_scope: EgressScope::FixtureLoopback,
+        egress_scope: EgressScope::ConfiguredLocalService("test-fixture".into()),
     }
 }
 
@@ -206,6 +206,9 @@ async fn wait_active_zero(service: &GatewayService) {
 async fn range_and_capability_binding_are_enforced_before_upstream() {
     let (fixture, stats) = spawn_fixture().await;
     let service = GatewayService::new(64);
+    service
+        .configure_local_service("test-fixture", Url::parse(&fixture).unwrap())
+        .unwrap();
     let binding = Binding::new("s1", "i1", 7, "video");
     let path = service.issue_path(
         binding,
@@ -270,6 +273,9 @@ async fn range_and_capability_binding_are_enforced_before_upstream() {
 async fn expired_secret_redirect_and_failure_boundaries_are_deterministic() {
     let (fixture, stats) = spawn_fixture().await;
     let service = GatewayService::new(64);
+    service
+        .configure_local_service("test-fixture", Url::parse(&fixture).unwrap())
+        .unwrap();
     let base = spawn_gateway(service.clone()).await;
     let client = reqwest::Client::new();
 
@@ -390,6 +396,9 @@ async fn expired_secret_redirect_and_failure_boundaries_are_deterministic() {
 async fn hls_manifest_query_segment_and_interruption_have_concrete_results() {
     let (fixture, _stats) = spawn_fixture().await;
     let service = GatewayService::new(128);
+    service
+        .configure_local_service("test-fixture", Url::parse(&fixture).unwrap())
+        .unwrap();
     let base = spawn_gateway(service.clone()).await;
     let client = reqwest::Client::new();
     let path = service.issue_path(
@@ -458,6 +467,9 @@ async fn hls_manifest_query_segment_and_interruption_have_concrete_results() {
 async fn repeated_cleanup_is_bounded() {
     let (fixture, _stats) = spawn_fixture().await;
     let service = GatewayService::new(32);
+    service
+        .configure_local_service("test-fixture", Url::parse(&fixture).unwrap())
+        .unwrap();
     let base = spawn_gateway(service.clone()).await;
     let client = reqwest::Client::new();
     let path = service.issue_path(
