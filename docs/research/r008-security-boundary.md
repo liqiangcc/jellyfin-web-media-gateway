@@ -25,7 +25,8 @@ those absent components.
 | Target workflow | Static test covers all repository workflows containing `self-hosted`; target workflow remains manual-only and contents-read |
 | Playback freshness | Accepted R007 suite rerun by J1; R008 does not add another authority |
 | Browser Worker / Native Site Panel | `NOT IMPLEMENTED / DEFERRED TO R006`; no runtime PASS claimed |
-| Production Control/API HTTP boundary | `NOT YET INSTANTIATED`; the R001 proof routes are not called a production API |
+| Current probe HTTP boundary | Implemented Host syntax, same-origin Origin/CSRF guard for mutations, JSON Content-Type enforcement, 32 KiB body limit, request-id validation, bounded diagnostics, and media-capability token boundary |
+| Future production Control/API HTTP boundary | Not instantiated beyond the R002 probe; broader Gateway identity/auth remains deferred |
 
 ## Claim mapping
 
@@ -40,15 +41,18 @@ those absent components.
 | C7 | J1 reruns accepted R007 Playback tests, including stale item/media/display generation and handoff ABA cases. Accepted authority: Issue #2 Attempt 2 candidate `0cad62b08c190400def900e9b142edd1a0afd900`, run `32729228923`. |
 | C8 | J3 statically checks final repository target workflows. Accepted low-privilege target facts remain Issue #1 final accepted candidate `6e9027a5a28c04f5aee1a713e5a7d9363f13222e`, target run `32727443950`; R008 does not rerun phone jobs. |
 | C9 | J3 records the deferred classification only. Canonical Browser Worker requirements remain in `docs/security.md`; no runtime implementation or security PASS is asserted. |
-| C10 | J1/J2 verify the currently instantiated proof surface and token-bound media routes. A production Control/API Host/Origin/CSRF/content-type/size contract is explicitly not yet instantiated and remains future verification scope. |
+| C10 | J1/J2 verify the current `/control`, `/display`, and `/api/v1/display-probe/*` surface: valid Host is required, mismatched Origin is rejected, mutations require same-origin Origin plus `application/json`, request bodies are capped at 32 KiB, probe request IDs are bounded/validated, telemetry is bounded and redacted, and media URLs retain R001 short-lived capability binding. Broader Gateway identity/auth is not part of this trusted-LAN probe and remains future scope. |
 
 ## Architecture impact
 
 The implementation centralizes public-web and configured-local-service
 decisions in Core policy, keeps private integration targets deployment-owned,
 and preserves `ResolvedMedia.public_headers` as a public-only surface. The
-new capabilities do not read Vault, expose credentials to Display, or alter
-Playback authority. No canonical product/security scope is changed.
+HTTP surface guard makes the current probe's browser mutations same-origin and
+JSON-only with a bounded body, while the Display still receives only its
+scoped media capability URL. The new capabilities do not read Vault, expose
+credentials to Display, or alter Playback authority. No canonical product or
+security scope is changed.
 
 ## Accepted upstream evidence used
 

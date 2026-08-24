@@ -1,10 +1,11 @@
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::header::{
     ACCEPT_RANGES, AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG,
-    IF_RANGE, LAST_MODIFIED, RANGE,
+    HOST, IF_RANGE, LAST_MODIFIED, ORIGIN, RANGE,
 };
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -25,6 +26,7 @@ pub use security::{EgressPolicy, EgressPolicyError, EgressScope};
 
 const MAX_MANIFEST_BYTES: usize = 512 * 1024;
 const MAX_REDIRECTS: usize = 5;
+const MAX_HTTP_BODY_BYTES: usize = 32 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Binding {
@@ -351,10 +353,31 @@ fn sanitize_optional(value: Option<String>, max: usize) -> Option<String> {
 }
 
 fn sanitize_text(value: &str, max: usize) -> String {
-    let value = value
-        .replace("Bearer ", "Bearer [redacted] ")
-        .replace("Cookie", "[redacted-header]");
-    value
+    let mut output = String::new();
+    let mut redact_next = false;
+    for token in value.split_whitespace() {
+        if redact_next {
+            output.push_str("[redacted]");
+            redact_next = false;
+        } else if token.eq_ignore_ascii_case("bearer")
+            || token.eq_ignore_ascii_case("basic")
+            || token.eq_ignore_ascii_case("cookie:")
+        {
+            output.push_str(if token.eq_ignore_ascii_case("cookie:") {
+                "[redacted-header]"
+            } else {
+                token
+            });
+            redact_next = true;
+        } else if token.eq_ignore_ascii_case("cookie") {
+            output.push_str("[redacted-header]");
+            redact_next = true;
+        } else {
+            output.push_str(token);
+        }
+        output.push(' ');
+    }
+    output
         .chars()
         .filter(|character| !character.is_control())
         .take(max)
@@ -486,7 +509,91 @@ impl GatewayService {
                 get(fixture_handler).head(fixture_handler),
             )
             .route("/healthz", get(|| async { "ok" }))
+            .layer(DefaultBodyLimit::max(MAX_HTTP_BODY_BYTES))
+            .layer(middleware::from_fn(http_surface_guard))
             .with_state(self.state.clone())
+    }
+}
+
+async fn http_surface_guard(request: Request, next: Next) -> Response {
+    let headers = request.headers();
+    let Some(host) = headers.get(HOST).and_then(|value| value.to_str().ok()) else {
+        return (StatusCode::BAD_REQUEST, "invalid_host").into_response();
+    };
+    if parse_host_authority(host).is_none() {
+        return (StatusCode::BAD_REQUEST, "invalid_host").into_response();
+    }
+
+    if let Some(origin) = headers.get(ORIGIN).and_then(|value| value.to_str().ok())
+        && !origin_matches_host(origin, host)
+    {
+        return (StatusCode::FORBIDDEN, "origin_mismatch").into_response();
+    }
+
+    if matches!(
+        request.method(),
+        &Method::POST | &Method::PUT | &Method::PATCH | &Method::DELETE
+    ) {
+        let is_json = headers
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                value.split(';').next().is_some_and(|media_type| {
+                    media_type.trim().eq_ignore_ascii_case("application/json")
+                })
+            });
+        if !is_json {
+            return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "content_type_required").into_response();
+        }
+        let Some(origin) = headers.get(ORIGIN).and_then(|value| value.to_str().ok()) else {
+            return (StatusCode::FORBIDDEN, "origin_required").into_response();
+        };
+        if !origin_matches_host(origin, host) {
+            return (StatusCode::FORBIDDEN, "origin_mismatch").into_response();
+        }
+    }
+
+    next.run(request).await
+}
+
+fn parse_host_authority(value: &str) -> Option<(String, Option<u16>)> {
+    if value.trim() != value || value.is_empty() || value.contains(['/', '?', '#', '@']) {
+        return None;
+    }
+    let parsed = Url::parse(&format!("http://{value}")).ok()?;
+    if parsed.path() != "/" || parsed.query().is_some() || parsed.fragment().is_some() {
+        return None;
+    }
+    Some((parsed.host_str()?.to_ascii_lowercase(), parsed.port()))
+}
+
+fn origin_matches_host(origin: &str, host: &str) -> bool {
+    let Ok(parsed) = Url::parse(origin) else {
+        return false;
+    };
+    if !matches!(parsed.scheme(), "http" | "https")
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return false;
+    }
+    let Some((host_name, host_port)) = parse_host_authority(host) else {
+        return false;
+    };
+    let Some(origin_name) = parsed.host_str() else {
+        return false;
+    };
+    if !host_name.eq_ignore_ascii_case(origin_name) {
+        return false;
+    }
+    match (host_port, parsed.port()) {
+        (Some(host_port), Some(origin_port)) => host_port == origin_port,
+        (Some(host_port), None) => parsed.port_or_known_default() == Some(host_port),
+        (None, Some(origin_port)) => origin_port == 80 || origin_port == 443,
+        (None, None) => true,
     }
 }
 
