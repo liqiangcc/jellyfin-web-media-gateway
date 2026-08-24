@@ -1,6 +1,6 @@
 # Session Bootstrap — R001 Media Path Proof
 
-你正在查看 `liqiangcc/jellyfin-web-media-gateway` 的 R001 Task Package。
+你正在执行 `liqiangcc/jellyfin-web-media-gateway` 的 R001 Task。
 
 本文件只是 Task 内部 bootstrap / navigation 入口，不是 Task Contract，也不保存实时 Task 状态。
 
@@ -13,12 +13,13 @@ Expected worker: web
 Expected environment label: env:web-gpt
 Downstream handoff profile: docs/tasks/handoffs/web-gpt.md
 Research Item: R001
-Publication dependency: R007 Issue #2 Final Acceptance
+Hard publication dependencies: none
+Parallel sibling: Issue #2 / R007
 ```
 
 ## Expected Client
 
-本 Task 的计划执行客户端是 **Web ChatGPT Worker + GitHub connector**。
+本 Task 的下游执行客户端是 **Web ChatGPT Worker + GitHub connector**。
 
 不要求 repo-scoped `$task-worker` Skill，也不要使用 Web 搜索替代 GitHub。
 
@@ -31,28 +32,37 @@ status:draft
 → 停止，不 claim、不实现、不自行发布
 
 status:ready + env:web-gpt + no active owner
-→ 再检查 R007 publication dependency 已由 Coordinator 在发布时确认
 → 可以 claim，并开始新的 Attempt N
 
 其他状态
 → 按 docs/tasks/issue-lifecycle-protocol.md 停止或交回 Coordinator
 ```
 
-Worker 不得因为看到本 prompt 就自行把 draft 改成 ready。
+Worker 不得因为看到本 prompt 就自行改变发布状态。
 
-## Publication Dependency Reminder
+## Parallel R007 Boundary
 
-R001 在规划阶段可以存在，但正式发布前 Coordinator 必须先确认：
+Issue #2 / R007 可以与本 Task 同时执行。
 
-- Issue #2 / R007 已 `[FINAL ACCEPTANCE]`；
-- R007 接受的代码和 `docs/implementation-contracts.md` 已读回；
-- Issue #3 / `task.md` 的 Publication base 已刷新；
-- R001 没有绕过 R007 的 stale media/callback authority 语义；
-- Publication Gate 已重新执行。
+必须保持职责分离：
 
-如果 Issue #3 已经是 `status:ready`，Worker 仍应从 GitHub 读取当前 Issue/body/task.md，而不是根据本文件猜测 R007 状态。
+```text
+R001
+→ Source / ResolvedMedia / Media Gateway / media capability / Web media consumption
 
-## Start Protocol after Publication
+R007
+→ Playback command CAS / telemetry revision / item refresh freshness / display generation / handoff authority
+```
+
+因此：
+
+- 不等待 R007 完成才开始 R001；
+- 不在 R001 中实现/重定义 R007 的 Playback 并发状态机；
+- media capability 中的 session/item identity 可以来自确定性的测试上下文；
+- 如果两个 candidate 同时修改 root Cargo/workspace metadata，正常 branch/rebase/merge，不把文件冲突当业务依赖；
+- 只有新的具体 R007 Evidence 真正推翻 R001 假设时，才交回 Coordinator 评审是否需要 Contract revision。
+
+## Start Protocol
 
 1. 必须实际使用 GitHub 读取当前仓库和 Issue，不根据聊天背景猜测状态。
 2. 读取并遵守：
@@ -96,13 +106,14 @@ HLS 必须形成明确 manifest/segment/result，不得保持“理论支持”�
 Range / seek semantics
 Secret stays server-side
 /stream is not an arbitrary open proxy
-capability expiry/session/item binding
+capability expiry/session/item/resource binding
 bounded streaming cleanup
 Jellyfin not required
 ```
 
 不要进入：
 
+- R007 Playback command/revision/handoff implementation；
 - R002 TV audible autoplay / physical UX；
 - R003 target-phone CPU/RSS/temperature acceptance；
 - Jellyfin；
