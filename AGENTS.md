@@ -380,6 +380,44 @@ canonical docs
 
 Issue 是实时状态 authority，但不能通过评论静默改写 canonical architecture 或 Task Contract。
 
+### 10.1 Task Publication Gate
+
+Coordinator 发布独立 Worker Task 必须执行：
+
+```text
+status:draft
+→ materialize Issue + task.md + prompt.md
+→ read-back verify from GitHub
+→ set status:ready + eligible env
+→ read-back/search target worker queue
+→ only then announce published
+```
+
+硬性规则：
+
+- create/update 工具返回成功只说明写操作成功，不等于 Task 已发布；
+- `status:ready` 必须是发布流程的最后写入步骤之一，不在 Issue 刚创建时提前设置；
+- 在切 `status:ready` 前，必须重新读取 Issue、`task.md`、`prompt.md`，确认真实存在且互相引用正确；
+- 切 `status:ready` 后，必须使用与目标 Worker 等价的队列查询（例如 `status:ready + env:ubuntu-arm64`）确认目标 Task 实际可见、无 active owner；
+- 如果读回或队列查询失败，任务发布失败，保持/退回 `status:draft`，修复后重新验证；
+- 在完整 read-back PASS 前，不得告诉用户“任务已创建 / 已发布 / 可以领取”。
+
+最小发布证明：
+
+```text
+Issue read-back PASS
++ task.md read-back PASS
++ prompt.md read-back PASS
++ ready/env state read-back PASS
++ target worker queue search PASS
+```
+
+详细检查见 `docs/tasks/README.md` 的 `Task Publication Gate`。
+
+原则：
+
+> **Plan is not execution. Write success is not publication. Publication requires independent read-back from GitHub.**
+
 ## 11. Worker 协议
 
 1. 读取 `AGENTS.md`；如果 Task Package 有 `prompt.md`，先用它完成 bootstrap；
