@@ -1,0 +1,86 @@
+name: target-runner-smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: "Explicit trusted candidate commit to verify"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: target-runner-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Ubuntu ARM64 target runner smoke
+    runs-on: [self-hosted, linux, ARM64, ubuntu-arm64, target-device]
+    timeout-minutes: 5
+    steps:
+      - name: Verify target runner boundary
+        shell: bash --noprofile --norc -euo pipefail {0}
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          if [[ ! "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "candidate_sha must be a 40-character hexadecimal commit SHA"
+            exit 1
+          fi
+
+          echo "candidate_sha=$CANDIDATE_SHA"
+          echo "runner_name=$RUNNER_NAME"
+          echo "runner_os=$RUNNER_OS"
+          echo "runner_arch=$RUNNER_ARCH"
+          uname -a
+          uname -m
+          id
+          id -u
+          pwd
+          echo "github_workspace=$GITHUB_WORKSPACE"
+          echo "runner_temp=$RUNNER_TEMP"
+
+          if [[ "$(id -u)" -eq 0 ]]; then
+            echo "target job must not run as root"
+            exit 1
+          fi
+
+          case "$GITHUB_WORKSPACE" in
+            /var/lib/web-media-gateway|/var/lib/web-media-gateway/*)
+              echo "runner workspace overlaps Gateway production state"
+              exit 1
+              ;;
+          esac
+
+          temp_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/infra-001.XXXXXX")"
+          trap 'rm -rf -- "$temp_dir"' EXIT
+          printf '%s\n' smoke >"$temp_dir/probe"
+          test "$(cat "$temp_dir/probe")" = smoke
+          rm -f -- "$temp_dir/probe"
+          rmdir -- "$temp_dir"
+          trap - EXIT
+          echo "temporary workspace create/cleanup: PASS"
+
+          if command -v sudo >/dev/null 2>&1; then
+            if sudo -n true >/dev/null 2>&1; then
+              echo "runner user has passwordless sudo"
+              exit 1
+            fi
+            echo "passwordless sudo: PASS"
+          else
+            echo "sudo not installed: PASS"
+          fi
+
+          vault=/var/lib/web-media-gateway/vault
+          if [[ -e "$vault" ]]; then
+            if [[ -r "$vault" || -x "$vault" ]]; then
+              echo "runner user can access the production Vault path"
+              exit 1
+            fi
+            echo "production Vault path exists and is inaccessible: PASS"
+          else
+            echo "production Vault path: N/A (not present on target)"
+          fi
