@@ -14,24 +14,27 @@
 
 1. 控制设备通过浏览器完成操作，无需安装专用控制 App。
 2. Control 以“播放、继续看、下一集、换显示端、登录后继续”等用户意图为中心，而不是管理后台式 UI。
-3. 网关统一维护网页媒体播放任务、媒体生命周期和当前显示端。
-4. 至少支持浏览器直接显示；Jellyfin 作为首批外部 Display Adapter 支持电视播放。
-5. 使用一个容易记忆的根 URL 作为统一入口，并允许用户选择显示或控制角色。
-6. 根入口无操作时默认进入电视显示模式，降低电视端遥控器操作成本。
-7. 来源网站登录状态只保存在 Ubuntu 手机，并按站点隔离。
-8. 播放时按需触发站点登录，同时提供独立的站点账号管理入口。
-9. 支持将非 DRM 网页媒体转换为受控、可播放的媒体源。
-10. 支持连续内容的上一集、下一集与自动下一集，不依赖前端猜 URL。
-11. 优先转发或重新封装原始媒体，不默认重新编码。
-12. 支持独立字幕，并允许当前显示端选择字幕轨道。
-13. 本地流量走局域网，不依赖公网或 Tailscale 中继。
-14. 显示端通过统一 Display Adapter 抽象接入，避免核心播放模型依赖 Jellyfin。
+3. Control 对用户呈现统一体验，但 Playback、Source/Site Browser、Site Session、Display 四个控制域保持独立状态所有权。
+4. 网关统一维护网页媒体播放任务、媒体生命周期和当前显示端。
+5. 至少支持浏览器直接显示；Jellyfin 作为首批外部 Display Adapter 支持电视播放。
+6. 使用一个容易记忆的根 URL 作为统一入口，并允许用户选择显示或控制角色。
+7. 根入口无操作时默认进入电视显示模式，降低电视端遥控器操作成本。
+8. 来源网站登录状态只保存在 Ubuntu 手机，并按站点隔离。
+9. 播放时按需触发站点登录，同时提供独立的站点账号管理入口。
+10. 允许 Control 内按需呈现来源站点原生能力，作为兼容性兜底，而不是要求 Gateway 重写所有站点功能。
+11. 支持将非 DRM 网页媒体转换为受控、可播放的媒体源。
+12. 支持连续内容的上一集、下一集与自动下一集，不依赖前端猜 URL。
+13. 优先转发或重新封装原始媒体，不默认重新编码。
+14. 支持独立字幕，并允许当前显示端选择字幕轨道。
+15. 本地流量走局域网，不依赖公网或 Tailscale 中继。
+16. 显示端通过统一 Display Adapter 抽象接入，避免核心播放模型依赖 Jellyfin。
 
 ## 3. 非目标
 
 - 绕过 DRM、付费授权、区域限制或网站访问控制。
-- 把任意交互网页完整转换成低延迟远程桌面。
+- 把任意交互网页完整转换成低延迟远程桌面用于内容播放。
 - 重新实现 Jellyfin 的媒体库、用户和客户端生态。
+- 重新实现每个视频网站的全部原生 UI 与账号功能。
 - 为每个视频网站永久承诺兼容性。
 - 将服务作为公网开放代理或多租户 SaaS。
 - 首个版本实现同一播放任务的多端同步播放。
@@ -39,6 +42,7 @@
 - MVP 实现 Gateway 用户账号、RBAC、家庭成员权限或多租户身份体系。
 - MVP 实现同一站点多个活动账号。
 - 保存来源网站账号密码。
+- 把站点原生播放器当作 Gateway 全局播放状态源。
 
 ## 4. 核心用户故事
 
@@ -100,6 +104,14 @@
 
 如果下一集需要重新登录，系统进入可恢复的 `ActionRequired` 状态；登录完成后自动继续下一集。
 
+### US-13 同一 Control 内使用站点原生能力
+
+用户在观看 Bilibili、YouTube 或其他受支持站点内容时，可以在同一个 `/control` 页面展开 Native Site Panel，继续使用站点原生搜索、选集、收藏、历史、清晰度、弹幕或其他站点专有能力。
+
+用户不需要在 Gateway 遥控页与另一个独立站点管理页之间频繁切换。
+
+Native Site Panel 的存在不改变 Gateway 的播放 authority：如果用户在原生面板选择第 8 集，站点浏览域输出新的 `SourceContext`，Gateway 重新 Resolver 并切换当前 Playback Item；原生站点播放器本身不直接接管电视或覆盖 `PlaybackSession`。
+
 ## 5. 功能需求
 
 ### FR-01 Unified Entry Router
@@ -132,6 +144,35 @@
 - 用户可见文案描述“正在切换到客厅电视”“登录成功，正在继续”等用户动作，不要求理解内部状态机。
 - 技术诊断细节可以提供二级入口，但不占据主控制界面。
 
+### FR-02B Control Experience Layer
+
+- `/control` 对用户呈现一个统一体验，但内部不得把 Playback、Source/Site Browser、Site Session、Display 四个领域合并为同一个状态对象。
+- Control Experience Layer 只聚合领域状态形成 `ControlView` 或语义等价 ViewModel。
+- `ControlView` 不作为业务 authority 或第二套持久化状态库。
+- UI 操作必须转换为明确 Intent，至少区分 `PlaybackIntent` 与 `SiteIntent`。
+- 同一个用户动作不得同时通过模拟站点播放器按钮和调用 Gateway Playback API 修改同一语义状态。
+
+### FR-02C Native Site Panel
+
+- 当前来源站点支持时，Control 可以在同一页面展示可折叠 Native Site Panel。
+- Native Site Panel 由服务器端 `Site Browser Worker` 持有实际来源站点页面与登录上下文，不依赖普通跨站 iframe 作为通用实现。
+- Control 只能获得受控的远程画面/输入能力，不获得来源站点原始 Cookie、localStorage 或 profile。
+- Native Site Panel 可以提供搜索、选集、收藏、历史、清晰度、弹幕和其他站点专有操作。
+- Native Site Panel 故障不得停止已经在 Display 上播放的已解析媒体；Universal Remote 仍应可用。
+- Display 故障不得阻止 Native Site Panel 继续浏览和选择内容。
+
+### FR-02D SourceContext 与站点原生操作同步
+
+站点原生操作按语义分类：
+
+1. `Source-changing`：选集、选择新视频、搜索结果进入播放等，必须输出新的 `SourceContext` / source locator，再经 Resolver 更新 Playback Item。
+2. `PlaybackPreference-mappable`：清晰度、音轨、字幕等只有在站点 Adapter 能稳定映射时，才可以提升为 Gateway 通用 PlaybackPreference。
+3. `Site-only`：收藏、评论、页面布局、弹幕开关等默认只影响 Site Browser Domain。
+
+- 站点原生播放器的 pause/seek 不得自动覆盖远端 Display 的 pause/seek。
+- 原生页面关闭弹幕不得被解释为远端 Display 弹幕已关闭；未来远端弹幕能力需要单独 Gateway 设计。
+- Native Site Panel 的能力应先作为兼容性兜底，只有经过验证的高频共性能力才提升为 Universal Control。
+
 ### FR-03 Playback Session
 
 - Gateway 是网页媒体播放任务的权威状态源。
@@ -139,6 +180,7 @@
 - 同一任务任一时刻默认最多一个活动显示端。
 - 页面刷新、adapter 重连或 Jellyfin 状态变化不得覆盖 Gateway 已确认的会话状态，必须通过状态协调流程合并。
 - 手机和 Windows 可同时打开 Control；mutation 由 Gateway 串行化或使用 revision/CAS，前端不维护独立真状态。
+- Site Browser Worker 的内部播放器状态不得直接覆盖 PlaybackSession。
 - 临时任务服务重启后可以丢失；站点会话必须独立持久化。
 
 ### FR-03A Playback Context
@@ -158,6 +200,24 @@ PlaybackContext
 - 切换下一集属于 Playback Item Transition，不属于 Display Handoff。
 - MVP `autoplay_policy` 至少支持 `off | next`。
 - 可在接近结束时预取下一集元数据，但短期媒体 URL 在实际切换时刷新或重新解析。
+
+### FR-03B SourceContext
+
+站点浏览域使用稳定 `SourceContext` 描述当前用户选择的来源内容：
+
+```text
+SourceContext
+├── site_id
+├── source_locator
+├── title
+├── collection_metadata
+├── episode_metadata
+└── site_metadata
+```
+
+- SourceContext 不包含 Display 私有信息。
+- SourceContext 变化必须经过 Resolver 才能成为新的 ResolvedMedia / Playback Item。
+- Control 不直接解析站点 DOM 来生成媒体 URL。
 
 ### FR-04 Display Adapter
 
@@ -211,6 +271,7 @@ Display Adapter 是显示能力的统一边界。至少抽象：枚举/注册显
 - 支持短期签名 URL、必要请求头及服务器端 Cookie 注入。
 - 输出与显示端无关的标准 `ResolvedMedia`。
 - 可识别连续内容时同时提供稳定的上一集/下一集来源 locator 或等价导航上下文。
+- 能接收 SourceContext / source locator 作为解析入口。
 - 检测 DRM 或不支持的保护方式并拒绝处理。
 
 ### FR-10 字幕
@@ -229,20 +290,21 @@ Display Adapter 是显示能力的统一边界。至少抽象：枚举/注册显
 - Gateway 不保存来源网站密码、验证码输入或二维码画面。
 - MVP 每站点最多一个活动 `SiteAccount`，但数据模型保留独立 account id 以支持未来多账号。
 
-### FR-11A 交互登录浏览器
+### FR-11A Site Browser Worker
 
-- Control 能启动服务端隔离浏览器并显示其远程画面，接受键鼠和触摸输入。
-- 支持用户在控制设备上完成验证码、扫码和二次认证，不要求操作 Ubuntu 手机屏幕。
-- 登录状态按站点隔离保存在服务端；控制设备不得获得原始 Cookie、localStorage 或浏览器 profile。
-- 登录完成或超时后停止浏览器进程，避免长期占用手机内存和 CPU。
-- 远程登录通道使用短期一次性连接能力，并记录不含凭据的审计事件。
+- `Site Browser Worker` 使用服务端隔离 Chromium/Playwright 和站点持久 profile。
+- 至少支持 `Auth Mode`；后续支持 `Native Control Mode`。
+- Control 可以显示受控远程画面并转发键鼠/触摸输入，但不得下载原始 profile 或会话材料。
+- Auth Mode 与 Native Control Mode 复用同一 Session Vault 边界。
+- worker 按需启动、限制并发、设置空闲超时和总时长上限。
+- Native Control Mode 不得把服务端浏览器内部播放器状态写成 Gateway PlaybackSession 真状态。
 
 ### FR-11B 站点账号管理
 
 - `/control/sites` 提供站点账号管理。
 - 站点状态至少允许 `unknown | checking | valid | expired | login_required | error` 或语义等价状态。
 - UI 展示脱敏账号标签、最近验证时间和失效原因，不展示 Cookie 或 Token。
-- 主动“登录”与播放驱动登录复用同一 Auth Browser Worker 和 Session Vault 流程。
+- 主动“登录”与播放驱动登录复用同一 Site Browser Worker Auth Mode 和 Session Vault 流程。
 - “重新登录”优先保留旧会话，新会话验证成功后原子替换；取消/失败时尽可能不破坏旧会话。
 - “退出登录”属于破坏性操作，需明确确认，并清理/失效对应站点会话材料。
 
@@ -262,11 +324,14 @@ Display Adapter 是显示能力的统一边界。至少抽象：枚举/注册显
 - 单用户场景下不因网关产生持续视频重新编码。
 - 默认最多一个重型解析任务，防止手机过热。
 - 空闲入口页和 Display 等待页不得持续产生高频轮询或视频解码负载。
+- Site Browser Worker 按需运行；Native Site Panel 关闭/空闲后应允许释放 Chromium 资源。
 
 ### 可用性
 
 - Jellyfin 故障不得影响 Web Display、Resolver 或 Session Vault。
 - 单个 Display Adapter 故障不得破坏其他 adapter 的注册与播放能力。
+- Site Browser Worker 故障不得无必要地停止已经在 Display 上播放的媒体。
+- Display 故障不得阻止 Site Browser Worker 继续浏览和选择内容。
 - 登录完成后应自动恢复原播放意图；用户不应重复输入相同 URL。
 - 重新登录失败时不应无必要地删除仍可用的旧 SiteSession。
 - 根入口自动跳转失败时必须保留可点击的模式选择。
@@ -278,6 +343,7 @@ Display Adapter 是显示能力的统一边界。至少抽象：枚举/注册显
 - 暂不实现 Gateway 用户认证与 RBAC，也不得把 `SiteAccount` 当成 Gateway 用户身份。
 - Gateway 默认不直接暴露公网。
 - same-origin、Origin/CSRF 防护、SSRF、防开放代理和短期媒体能力仍属于 MVP 安全要求。
+- Site Browser Worker 的远程画面/输入通道不得直接暴露为通用公网远程桌面。
 
 ### 兼容性
 
@@ -285,6 +351,7 @@ Display Adapter 是显示能力的统一边界。至少抽象：枚举/注册显
 - Web Display：当前主流 Chromium 浏览器。
 - TV Web Display：布局测试覆盖 1280×720、1920×1080 和 3840×2160 viewport。
 - 首批外部电视显示端：Jellyfin Android TV 官方客户端。
+- Native Site Panel 不以普通 iframe 能成功加载所有站点为前提。
 
 ## 7. Core MVP 验收标准
 
@@ -295,9 +362,10 @@ Display Adapter 是显示能力的统一边界。至少抽象：枚举/注册显
 5. 专用 Display 页面在 TV profile 下铺满 viewport；Fullscreen API 不可用时仍能正常播放。
 6. 仅打开 `/control` 不会自动注册为新的显示端。
 7. Control 在已有播放任务时优先恢复“正在播放”视图。
-8. 视频在可直接播放或 remux 的情况下不进行重新编码。
-9. 至少支持一个外挂字幕轨道。
-10. 私网 URL、redirect 到私网和超限资源会被拒绝。
+8. ControlView 不作为第二份 PlaybackSession 状态源。
+9. 视频在可直接播放或 remux 的情况下不进行重新编码。
+10. 至少支持一个外挂字幕轨道。
+11. 私网 URL、redirect 到私网和超限资源会被拒绝。
 
 ## 8. Site Auth / Control 验收标准
 
@@ -310,7 +378,18 @@ Display Adapter 是显示能力的统一边界。至少抽象：枚举/注册显
 7. 如果存在下一集，Control 能触发下一集；自动下一集时保持当前 active display。
 8. 下一集需要认证时，完成登录后可自动继续。
 
-## 9. Jellyfin Adapter 验收标准
+## 9. Unified Control / Native Site 验收标准
+
+1. `/control` 可以同时呈现 Universal Remote 和可折叠 Native Site Panel，而不要求跳转到另一个独立产品页面。
+2. Native Site Panel 使用 Site Browser Worker，而不是依赖站点允许 iframe。
+3. Native Site Panel 展开、关闭或崩溃不改变当前 PlaybackSession 的播放状态。
+4. 用户在 Native Site Panel 选择新的剧集/视频后，系统得到新的 SourceContext 并通过 Resolver 执行 Playback Item Transition。
+5. Native Site Player 的 pause/seek 不会被错误同步成远端 Display pause/seek。
+6. 清晰度等能力只有在 Adapter 明确支持映射时才成为 Gateway PlaybackPreference。
+7. Site-only 设置不会伪造远端 Display 状态。
+8. Control 刷新后可以重新聚合 Playback、Source、SiteSession、Display 状态。
+
+## 10. Jellyfin Adapter 验收标准
 
 1. 启用 Jellyfin Adapter 后，可发现至少一个在线 Jellyfin 客户端。
 2. 同一个 `PlaybackSession` 可从 Web Display handoff 到 Jellyfin Android TV。
