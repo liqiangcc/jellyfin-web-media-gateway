@@ -45,9 +45,9 @@ The first proposed Google sample MP4 returned HTTP 403 from the GitHub-hosted ru
 
 ## Browser proof
 
-Verified implementation candidate: `e60a73c6cd332f7656e6efe930e35193d8e4a932`
+Verified executable candidate: `217859a9f620be8f8874cab8a21b10ccd2b2bc6c`
 
-GitHub Actions run: `32729848482`
+GitHub Actions run: `32730313377`
 
 Execution plane:
 
@@ -63,12 +63,17 @@ Observed MP4 browser result:
 - duration: `60.095011s`
 - readyState: `4`
 - play advanced currentTime beyond `0.5s`
-- pause held at `0.508824s`
+- pause held at `0.512104s`
 - seek target: `33.05225605s`
 - observed seek position: `33.052256s`
 - browser `/stream/` request used `Range: bytes=0-`
 
 The browser proof also played a deterministic protected MP4 fixture through the Gateway. Browser-visible Gateway requests contained no Authorization header and no Cookie, and the fixture secret did not appear in the browser evidence or server artifact. Final browser metrics showed `active_streams=0`.
+
+Accepted browser evidence artifact for the executable candidate:
+
+- artifact id: `9521162868`
+- digest: `sha256:db91c9d766fa439b54e088233d47b87d072ec236e1ef83251dd3d716758419db`
 
 ## HTTP/Range and capability behavior
 
@@ -91,6 +96,8 @@ Deterministic tests and public smoke establish:
 
 R001 HLS result is **PASS for the HTTP manifest/variant/segment Gateway path**, with these concrete behaviors:
 
+- a deterministic HLS entry redirect is followed only after redirect-target egress revalidation;
+- redirect query material remains server-side and is not exposed in the rewritten browser-facing manifest;
 - master playlist passes through Gateway capability;
 - ordinary relative URI lines are rewritten;
 - `URI="..."` attributes are rewritten;
@@ -126,12 +133,17 @@ This is the R001 bounded abort/reconnect proof. It is not a substitute for R003 
 
 ## Jobs
 
-Required R001 jobs on run `32729848482`:
+Required R001 jobs on run `32730313377`:
 
-- J1 deterministic x64: fmt, clippy with warnings denied, workspace unit/contract tests — PASS
-- J2 Chromium MP4 play/pause/seek + protected secret boundary — PASS
-- J3 public MP4 Range + public HLS master/variant/segment smoke — PASS
-- J4 bounded abort/reconnect cleanup 100x — PASS
+- J1 deterministic x64 / job `97440836359`: fmt, clippy with warnings denied, workspace unit/contract tests — PASS
+- J2 Chromium MP4 play/pause/seek + protected secret boundary / job `97440836345` — PASS
+- J3 public MP4 Range + public HLS master/variant/segment smoke / job `97440836280` — PASS
+- J4 bounded abort/reconnect cleanup 100x / job `97440836004` — PASS
+
+Accepted public-smoke evidence artifact for the executable candidate:
+
+- artifact id: `9521139065`
+- digest: `sha256:1664866deb1cd10b06a54aeacfefeae1b141a05c0af69dd5506f436354f50574`
 
 The workflow uses read-only repository contents permission for accepted verification runs.
 
