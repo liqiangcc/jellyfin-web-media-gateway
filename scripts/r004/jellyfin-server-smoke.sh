@@ -70,7 +70,8 @@ post_until_ready 'Startup/Configuration' \
   --header 'Content-Type: application/json' \
   --data '{"UICulture":"en-US","MetadataCountryCode":"US","PreferredMetadataLanguage":"en"}'
 post_until_ready 'Startup/User' \
-  --data-urlencode "Name=$user_name" --data-urlencode "Password=$user_password" >/dev/null
+  --header 'Content-Type: application/json' \
+  --data "{\"Name\":\"$user_name\",\"Password\":\"$user_password\"}"
 post_until_ready 'Startup/Complete'
 
 auth_json="$work_dir/auth.json"
