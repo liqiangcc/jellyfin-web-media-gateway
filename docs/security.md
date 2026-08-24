@@ -2,236 +2,285 @@
 
 ## 1. MVP 信任模型
 
-首个 MVP 面向可信家庭 LAN / 单用户使用。
+首个 MVP 面向可信家庭 LAN / 单用户。
 
-当前阶段明确不实现：
+明确不实现：
 
 - Gateway 用户账号；
 - RBAC；
-- 家庭成员权限体系；
+- 家庭成员权限；
 - `/control` 登录页；
-- 管理员二次认证。
+- 公网开放服务。
 
-这不代表 Gateway 可以无边界暴露。MVP 仍要求：
+仍必须满足：
 
 - 默认不直接暴露公网；
-- same-origin、Origin/CSRF 防护；
+- Origin/CSRF/Host/Content-Type/大小校验；
 - SSRF 与开放代理防护；
-- Display 注册和媒体能力使用不可预测的短期 token / session id；
-- 来源站点 Cookie、Token、profile 只保存在服务器。
+- Display/媒体能力使用不可预测短期 token；
+- 来源网站 Secret 只保存在服务器安全边界。
 
-未来如果需要多用户或不可信网络访问，Gateway Identity 必须独立设计，不能复用 `SiteAccount` 作为 Gateway 用户身份。
+一旦部署环境变为不可信网络，必须重新设计 Gateway Identity/Authorization，不能复用 `SiteAccount`。
 
 ## 2. 保护目标
 
-- 来源网站 Cookie、账号会话和必要 Token。
-- Session Vault 中的 Chromium profile、localStorage 与站点会话材料。
-- 播放任务、Display Instance 和临时媒体能力。
-- Jellyfin Adapter 启用时使用的 API Key 与设备控制权限。
-- 手机内网访问能力及外接 SSD 数据。
-- 防止网关成为 SSRF 工具、开放代理或未授权媒体中继。
-- 防止显示端冒充、Token 重放和跨任务媒体 URL 复用。
+- SiteAccount / SiteSession 中的 Cookie、Token、localStorage、profile。
+- `vault/` 中的持久会话材料。
+- PlaybackSession / PlaybackItem / DisplayInstance。
+- 临时媒体签名和上游访问 capability。
+- Jellyfin API Key。
+- Ubuntu 手机、内网和外接 SSD。
+- Site Plugin 与 Site Browser Worker 不得越过各自 scope。
 
-## 3. 主要威胁
+## 3. Session Vault
 
-### SSRF 与 DNS Rebinding
+推荐：
 
-攻击者可能提交指向 localhost、局域网设备、Android 调试端口、云元数据或重绑定域名的 URL。
+```text
+/var/lib/web-media-gateway/
+├── gateway.sqlite
+├── vault/
+│   ├── accounts/
+│   └── browser-profiles/
+└── runtime/
+```
 
-控制：
+规则：
 
-- 默认只允许 HTTPS，站点适配器显式例外。
-- URL 解析、DNS 解析、连接前和每次 redirect 都校验目标。
-- 禁止 loopback、private、link-local、multicast、unspecified 和保留地址。
-- 连接固定到已验证地址，并校验证书主机名。
+- `vault/` 是 Site Session/Profile 唯一安全所有者。
+- Control、Display、Site Plugin 不允许直接读取 Vault 文件。
+- 结构化 Secret（Cookie/token/export）必须静态加密。
+- browser profile 使用最小权限，禁止通过 Web/API 下载。
+- Chromium 运行需要 profile 时由 Vault 受限 materialize/attach；临时副本进入 `runtime/` 并在 worker 退出后清理。
+- 不把“所有 profile 都是单个加密 blob”作为实现前提；可以使用受限目录/加密文件系统等部署手段。
 
-### SiteSession / Cookie 泄露
+## 4. Scoped Site Access
 
-控制：
+Site Plugin 不获得原始 Vault 访问权。
 
-- Cookie 仅注入到被授权站点及允许的子域。
-- redirect 后重新执行站点授权判断。
-- 不把 Cookie 写入 M3U、浏览器媒体 URL、Jellyfin URL、错误文本或遥测。
-- 会话按站点隔离并静态加密。
-- Display Adapter 不允许直接读取 Session Vault。
-- Control 的 `/control/sites` 只能显示脱敏账号元数据，不返回 Cookie、localStorage、Token 或 profile 文件。
+```text
+SiteAccessCapability
+├── site_id
+├── account_ref?
+├── allowed_hosts
+├── expiry
+└── capability_id
+```
 
-### 网站密码与交互登录数据泄露
+插件发需要登录态的上游请求时，通过 `ScopedSiteHttpClient` 或等价受控能力；基础设施负责注入 Cookie/Authorization。
 
-Gateway 不设计为密码管理器。
+必须保证：
 
-控制：
+- Bilibili plugin 不能读取 YouTube session。
+- capability 过期后不能继续访问。
+- redirect 后重新检查 host/scope。
+- Secret 不写入插件日志/错误/Control。
 
-- 不持久化网站密码。
-- 登录表单内容、验证码、键盘输入、二维码画面和远程帧不写日志、不录屏。
-- Auth Browser Worker 仅在需要时启动，完成/超时后关闭。
-- 持久化的是网站完成认证后的必要会话材料，而不是用户输入的密码。
+未来进程插件通过 capability IPC，也不得直接传完整 Cookie jar。
 
-### 站点重新登录误删旧会话
+## 5. Central EgressPolicy
 
-如果“重新登录”一开始就覆盖或删除旧会话，新登录失败会造成不必要的账号失效。
+所有站点网络访问由 Core 中央策略控制。
 
-控制：
+### `public_web`
+
+禁止：
+
+- loopback；
+- private；
+- link-local；
+- cloud metadata；
+- multicast/unspecified/reserved。
+
+DNS 解析、连接前和每次 redirect 都重新校验。
+
+### `configured_local_service`
+
+只用于 Gateway 明确配置的内部集成，例如 Jellyfin。
+
+- 地址来自管理员/部署配置，不来自任意用户 URL。
+- 不允许 Site Plugin 自己声明私网例外。
+
+Site Browser Worker 默认使用 public web 或更窄的站点 allowlist。
+
+## 6. Site Plugin Threat Model
+
+Site Plugin 属于高变化、高风险边缘代码。
+
+安全不变量：
+
+- 不读取其他站点 Session。
+- 不直接读取 Vault。
+- 不自行控制 `active_display`。
+- 不绕过 Media Gateway 给 Display 下发上游 Secret。
+- 不绕过 EgressPolicy。
+- 不能通过错误输出泄露 Cookie、Token、完整敏感 URL。
+- timeout/cancel 后必须停止继续操作。
+- 插件输出 `ResolvedMedia` / `SourceLocator` 必须经过 Core schema validation。
+
+MVP 编译期插件仍需要 contract test；未来进程插件再增加：
+
+- crash isolation；
+- resource limit；
+- protocol version；
+- health check；
+- restart/circuit breaker。
+
+## 7. Site Browser Worker Threat Model
+
+Site Browser Worker 是通用 Chromium runtime，不理解站点业务。
+
+必须：
+
+- 使用非 root worker；
+- 按站点隔离 profile；
+- 限制 CPU/内存/进程数/执行时间；
+- 远程画面/输入端口不直接暴露公网；
+- 使用短期一次性控制 token；
+- 不允许 Control 下载 profile/Cookie DB；
+- 禁止浏览器打开服务器本地文件或任意内网地址；
+- 登录输入、二维码、远程帧不日志、不录屏。
+
+Browser Worker 只提供通用 browser event；具体站点 DOM/API 解释在 Site Plugin 中。
+
+## 8. Site Account / 登录
+
+Gateway 不保存网站密码。
+
+允许持久化：
+
+- Cookie；
+- localStorage；
+- 必要 Token；
+- profile；
+- 脱敏账号元数据。
+
+禁止持久化/记录：
+
+- 密码；
+- 验证码输入；
+- 登录表单内容；
+- 二维码画面。
+
+重新登录：
 
 ```text
 保留旧 SiteSession
-→ 创建新临时登录会话
-→ 验证新会话
-→ 成功后原子替换 active session
+→ 创建新临时会话
+→ Site Plugin 验证新会话
+→ 原子替换 active session
 → 清理旧会话
 ```
 
-新登录失败或取消时，尽可能保持旧会话。
+失败/取消时尽可能保留旧会话。
 
-“退出登录”与“重新登录”语义分开；退出登录属于显式破坏性操作，需要确认。
+## 9. ResolvedMedia / Media Gateway Secret Boundary
 
-### SiteAccount 与 Gateway Identity 混淆
+`ResolvedMedia.public_headers` 不允许包含 Cookie/Authorization/bearer token。
 
-MVP 没有 Gateway 身份体系。来源网站账号不能被用来判断谁有权控制 Gateway。
+敏感认证使用：
 
-控制：
+```text
+upstream_access_ref
+```
 
-- `SiteAccount` 只代表来源网站会话。
-- Bilibili / YouTube 等账号元数据不产生 Gateway 权限。
-- PageRole、DisplayProfile、User-Agent、站点账号标签也都不是身份凭据。
-- 未来 Gateway Identity 必须使用独立模型和凭据。
+由 Media Gateway 在上游请求阶段通过 scoped capability 注入。
 
-### 临时媒体能力泄露
+临时媒体 URL 必须绑定：
 
-浏览器和 Jellyfin 都需要访问 Gateway 暴露的媒体入口，但这些入口不能退化为长期 bearer URL 或开放代理。
+- PlaybackSession；
+- PlaybackItem；
+- resource；
+- HTTP method；
+- expiry。
 
-控制：
+禁止提供：
 
-- `/stream` 使用短期签名 Token，绑定 `PlaybackSession`、允许方法和资源类型。
-- Token 设置明确过期时间；刷新只能由仍有效的播放任务触发。
-- 不允许通过一个任务的 Token 请求其他任务、其他源站或任意 Header。
-- 日志、Referer、错误页和前端遥测不得记录完整签名 URL。
-- 对异常重放、并发拉流和来源切换记录不含 Secret 的审计事件。
+- 任意目标代理；
+- 任意 Header；
+- CONNECT；
+- 无限期 token。
 
-### Web Display 冒充与控制劫持
+日志/Referer/错误页不得记录完整签名 URL。
 
-MVP 是可信 LAN，但仍不能让任意页面自报一个 display id 后获取其他任务媒体。
+## 10. Display Security
 
-控制：
-
-- Display Instance ID 由服务器生成且不可预测。
-- display 注册与后续 WebSocket/媒体能力绑定到同一浏览器会话或短期 display token。
-- `/control` 页面仅打开时不自动注册 Display。
-- `/display` 访问本身不直接得到任意历史媒体 Token；媒体能力只针对当前任务签发。
+- Display ID 由服务器生成、不可预测。
+- `/control` 仅打开不自动注册 Display。
+- `/display` 访问本身不能获得历史任务媒体能力。
 - WebSocket 校验 Origin。
-- display 断线后进入 grace period，超过后标记离线。
+- Display callback 绑定 session/item/display_generation。
+- 旧 generation 不得改变当前 active display 状态。
+- Display Adapter 不读取 Vault。
+- Jellyfin API Key 只由 JellyfinDisplayAdapter 使用。
 
-### 入口角色混淆
+## 11. Command / Replay Safety
 
-`/` 提供 Display / Control 选择并在超时后默认进入 TV Display。这是 UX 路由，不是安全认证。
+所有 Playback command 携带 `request_id`，可选 `expected_session_revision`。
 
-控制：
+- 重复 `request_id` 不应重复执行破坏性命令。
+- revision 冲突返回 `REVISION_CONFLICT`。
+- 旧 item revision / display generation 的异步事件丢弃或仅记录诊断。
 
-- `preferred_role`、`DisplayProfile`、viewport、User-Agent 和 localStorage 均视为不可信 UI 输入。
-- 根入口自动跳转只能指向 Gateway 自身固定路径。
-- Control 与 Display 使用不同前端职责，Control 不因为切换 role 就获得 Session Vault 原始内容。
+## 12. Command Injection / Process Isolation
 
-### Display Handoff 竞态
+- yt-dlp、FFmpeg、Chromium 子进程全部使用参数数组，禁止 shell 字符串拼接。
+- 输入 URL、标题、字幕语言、文件名不能成为可执行参数前缀。
+- Resolver/插件/FFmpeg/Browser Worker 使用最小权限。
+- 临时目录独立，完成后清理。
+- 不暴露 Android Root、ADB socket 或整个宿主文件系统。
 
-并发 handoff、重复请求或旧 adapter 延迟回报可能导致两个显示端同时认为自己是活动端。
+## 13. DRM / 合规
 
-控制：
-
-- `active_display` 只由 Gateway 的 Playback Coordinator 提交。
-- 每次 handoff 使用单调递增 generation / revision 或等价 CAS。
-- adapter 回报携带 session 与 revision；旧 revision 不得覆盖新状态。
-- B 未确认可播放前不得静默停止 A。
-
-### 交互登录通道
-
-服务端浏览器持有真实来源网站账号上下文，远程画面与输入通道属于敏感管理通道，即使 MVP 不实现 Gateway 登录也必须限制暴露范围。
-
-控制：
-
-- 只从可信 LAN 的 Control 流程启动，不直接暴露远程浏览器端口。
-- 每次登录使用短期、一次性连接 token。
-- 校验 Origin；远程通道不得直接暴露公网。
-- 每个站点使用独立非 root worker、profile 目录和网络允许列表。
-- 禁止控制设备下载 profile、读取 Cookie 数据库、打开服务器本地文件或访问任意内网地址。
-- 进程退出后清理临时显示、共享内存与一次性 token；持久 profile 进入 Session Vault 加密保存。
-
-### 开放代理与盗链
-
-控制：
-
-- `/stream` 不提供任意目标、任意 Header 或通用 CONNECT。
-- 限制并发、字节数、持续时间和目标主机。
-- 所有 adapter 必须使用 Gateway 生成的任务绑定媒体 URL。
-- 如果 Jellyfin Adapter 需要较长拉流时间，使用可刷新能力而不是无限期 Token。
-
-### Jellyfin Adapter 权限扩大
-
-Jellyfin 是可选 adapter。
-
-控制：
-
-- 使用专用、最小权限 Jellyfin 用户或 API Key。
-- Jellyfin Key 只由 `JellyfinDisplayAdapter` 读取，不暴露给浏览器和 Resolver。
-- Jellyfin Adapter 被禁用或故障时，相关凭据不可被其他 adapter 接管使用。
-- Kodi/ADB 等额外控制接口不属于 MVP，默认关闭。
-
-### 命令注入
-
-yt-dlp 和 FFmpeg 必须使用参数数组调用，禁止拼接 Shell 命令。输入 URL、文件名、字幕语言和标题不得成为可执行参数前缀。
-
-## 4. DRM 与合规边界
-
-- 检测到 DRM 时返回 `DRM_UNSUPPORTED`。
+- DRM 返回明确 `DRM_UNSUPPORTED`。
 - 不提供 DRM 解密、授权绕过或受保护画面捕获。
+- Native Site Panel 远程画面只用于 Control 操作，不作为绕过 DRM 的媒体播放路径。
 - 用户必须有权访问和播放目标内容。
-- 站点适配器应遵守适用条款、请求频率和版权要求。
-- Web Display 与 Jellyfin Display 的存在不改变上述边界。
 
-## 5. 网络边界
+## 14. Web Secure Context
 
-- 默认只监听 loopback，由受信任反向代理暴露到 LAN。
-- 不直接暴露公网。
-- 远程管理如未来需要，可使用 Tailscale 并重新评审 Gateway Identity 需求。
-- 本地媒体流使用 LAN。
-- Host、Origin、Content-Type 和请求大小全部校验。
-- Adapter 对外连接不得绕过核心 SSRF 策略。
-- `/` 的自动角色跳转只能指向 same-origin 固定路径。
+基本播放必须支持可信 LAN HTTP；因此：
 
-## 6. 日志与隐私
+- Service Worker / installable PWA 不属于 Core 成功前提。
+- Screen Wake Lock 不属于 Core 成功前提。
+- Fullscreen 被拒绝时仍保持 viewport 沉浸播放。
 
-允许记录：规范化站点 host、不可逆任务 ID、adapter 类型、display 匿名 ID、handoff revision、站点账号状态变化和稳定错误码。
+提供 LAN HTTPS 时再启用 secure-context 增强能力。
 
-禁止记录或必须清除：
+长期推荐 HTTPS，但首个 media-path PoC 不因证书体系阻塞。
 
-- Cookie
-- Authorization
-- API Key
-- 临时媒体签名
-- 网站密码
-- 验证码输入
-- 登录表单内容
-- 完整浏览器 profile
-- 完整字幕
-- 远程登录画面
+## 15. 日志与隐私
 
-账号标签若写入日志必须脱敏或使用内部不可逆 account id。
+允许记录：
 
-## 7. 子进程隔离
+- site/plugin/adapter id；
+- 不可逆任务/account id；
+- session/item revision；
+- command 类型；
+- handoff 阶段；
+- worker 生命周期；
+- 稳定错误码。
 
-- Resolver 与 FFmpeg 以非 root 用户运行。
-- 限制 CPU、内存、进程数、打开文件数和执行时间。
-- 临时目录独立，完成后删除。
-- 不把 Android Root、ADB socket 或整个 Ubuntu 文件系统暴露给解析 worker。
-- Auth Browser Worker、Resolver、媒体处理与 Display Adapter 尽量使用不同权限边界。
+禁止记录：
 
-## 8. 安全不变量
+- Cookie；
+- Authorization；
+- API Key；
+- 临时媒体签名；
+- 网站密码/验证码；
+- browser profile 内容；
+- 远程登录画面；
+- 完整敏感 URL query。
 
-1. SiteAccount 不等于 Gateway 用户身份。
-2. Gateway 不保存来源网站密码。
-3. Display Adapter 不读取 Session Vault 原始凭据。
-4. Display Adapter 不自行决定全局 `active_display`。
-5. 媒体 Token 不允许变成任意目标代理能力。
-6. 重新登录成功前不无必要地销毁旧 SiteSession。
-7. 退出登录明确清理对应站点会话材料。
-8. PageRole、DisplayProfile、分辨率和站点账号标签都不是可信身份信号。
-9. Gateway 不直接暴露公网是当前 MVP 信任模型的一部分；一旦改变该条件必须重新设计认证边界。
+## 16. 安全测试最低集
+
+1. private/loopback/metadata URL 拒绝。
+2. public URL redirect 到 private 被拒绝。
+3. configured Jellyfin local service 只允许配置目标。
+4. plugin cross-site session access 被拒绝。
+5. plugin timeout/cancel。
+6. ResolvedMedia Secret header schema rejection。
+7. Media token 跨 session/item 重放失败。
+8. 旧 display generation callback 不生效。
+9. 重新登录失败保留旧会话。
+10. Browser Worker 不能下载 profile/访问本地文件。
