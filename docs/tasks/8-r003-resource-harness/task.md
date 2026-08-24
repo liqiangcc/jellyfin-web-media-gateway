@@ -7,14 +7,14 @@ GitHub Issue: #8
 Parent Goal / Research Item: R003 / P0 Ubuntu ARM64 Resource Baseline
 Task / Research ID: R003-PREP
 Task kind: implementation
-Planning base commit: 2f3ec8dd279b62d7f2e6c1f73ecb7f1a37f0c649
+Planning / integration base commit: 2b0a1a0ea95753ff416e41759b7c33823be1b9e0
 Session bootstrap prompt: docs/tasks/8-r003-resource-harness/prompt.md
-Downstream handoff profile: docs/tasks/handoffs/web-gpt.md
-Preferred worker: web
-Eligible worker environments after publication: env:web-gpt
+Downstream handoff profile: docs/tasks/handoffs/cloud.md
+Preferred worker: cloud
+Eligible worker environments after publication: env:cloud
 Required capabilities: github-read-write, repository-static-analysis, code-authoring, automated-build, automated-test, workflow-authoring, metrics-harness-authoring
 Linked verification task: Issue #9 / R003-TARGET
-Hard publication dependency: stable reusable R001 Media Gateway candidate/interface from Issue #3, accepted or explicitly approved by Coordinator for downstream target-harness integration
+Hard publication dependency: satisfied — Issue #3 / R001 Final Acceptance; accepted Candidate 42c92db2a380895ec3909cdc9afa847478150eb0, merged to main as 2b0a1a0ea95753ff416e41759b7c33823be1b9e0
 Infrastructure state: Issue #1 / INFRA-001 ACCEPTED; Ubuntu ARM64 Target Runner exists
 ```
 
@@ -66,17 +66,33 @@ Decision reason: target-runner workflow definitions must become trusted reposito
 
 ## Hard Dependency
 
-R003-PREP may be planned now but must not be published until Coordinator identifies a stable R001 candidate/interface sufficient to answer:
+The R001 publication dependency is satisfied by Issue #3 Final Acceptance:
 
-- how to build/start the test Gateway instance;
-- how to bind a deterministic media source;
-- how to drive Direct Proxy traffic without inventing a second media stack;
-- which process/PID and ports belong to the test instance;
-- how to stop/cleanup safely.
+```text
+Accepted R001 Candidate: 42c92db2a380895ec3909cdc9afa847478150eb0
+Merged main commit:        2b0a1a0ea95753ff416e41759b7c33823be1b9e0
+```
 
-R001 Final Acceptance is sufficient, but not strictly required: Coordinator may explicitly approve a specific candidate SHA for downstream R003 harness work before final closure.
+This accepted path/interface is sufficient to define how to build/start the Gateway test instance, bind deterministic media, drive Direct Proxy traffic, identify the test process/ports and clean up. Normal integration with newer `main` is allowed; if later changes invalidate these assumptions, the Worker must report the concrete interface conflict rather than redefining R001/R007 contracts.
 
-An open PR alone is not sufficient authority.
+## Worker Routing Decision
+
+```text
+Harness / workflow implementation / repository integration
+→ cloud-codex
+→ env:cloud
+
+Portable harness/workflow verification
+→ GitHub Actions
+→ GitHub-hosted x64 (required), hosted ARM64 optional
+
+Phone-specific metrics proof after #8 acceptance
+→ Issue #9 orchestration
+→ GitHub Actions
+→ Ubuntu ARM64 self-hosted Target Runner
+```
+
+Codex Cloud is the Worker/orchestrator, not the Target Runner. Issue #8 must not execute unreviewed heavy target workloads on the phone.
 
 ## Work Role
 
@@ -184,7 +200,7 @@ Issue #8 does not need to execute a heavy phone benchmark. The target workflow m
 
 ## Success Criteria
 
-1. A specific Coordinator-approved R001 candidate/interface is the integration base.
+1. The accepted Coordinator-approved R001 candidate/interface is the integration base.
 2. Metrics harness produces raw samples + reviewable summary for required metric categories.
 3. 5/30/60 continuous-checkpoint support exists and cannot be faked by sharded unrelated jobs.
 4. Scenario start/stop/cancel cleanup is deterministic and tested.
@@ -222,9 +238,9 @@ No Secret or sensitive production path content may enter artifacts.
 
 BLOCKED when:
 
-- no stable R001 media path/interface is approved for integration;
-- current R001 architecture cannot be exercised on target without redefining R001/R007 contracts;
-- target workflow security constraints cannot be satisfied without unsafe privilege/PR execution.
+- the accepted R001 media path/interface proves insufficient and proceeding would require redefining R001/R007 contracts;
+- target workflow security constraints cannot be satisfied without unsafe privilege/PR execution;
+- a required repository/Actions capability for harness construction is unavailable.
 
 FAIL when the harness/workflow itself cannot reproducibly measure and cleanup the required scenarios within the frozen boundaries.
 
