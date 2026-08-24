@@ -50,6 +50,29 @@ MVP 默认倒计时为 5 秒，并保留配置能力。显式入口始终可用�
 
 空闲 Display 可以显示设备名称、连接状态以及控制入口/二维码，便于手机扫码后进入控制模式。
 
+## Control 与站点账号
+
+Control 的定位是 `PlaybackSession` 的遥控器和异常恢复入口，而不是后台管理页。正在播放时优先显示当前内容、进度、暂停/跳转、上一集/下一集、字幕和显示端；空闲时才突出 URL 输入和继续观看。
+
+来源网站登录采用两条并行路径：
+
+```text
+播放驱动
+URL → Resolver → SITE_AUTH_REQUIRED
+    → 登录该站点后继续
+    → 登录成功
+    → 自动 retry 原播放意图
+
+主动管理
+/control/sites
+    → 查看站点登录状态
+    → 登录 / 重新登录 / 退出登录
+```
+
+MVP 假设可信 LAN、单用户使用，暂不实现 Gateway 用户账号、RBAC 或家庭权限体系；当前“认证”设计聚焦来源网站会话。每个站点 MVP 最多一个活动账号，但 `SiteAccount` 模型保留以后多账号扩展能力。Gateway 不保存网站密码，只保存完成认证后必要的 Cookie、localStorage、Token 或加密 profile。
+
+连续内容使用独立 `PlaybackContext` 表示上一集、下一集、队列和自动下一集；Control 不通过修改 URL 或猜集号实现“下一集”。
+
 ## 播放会话与单显示端模型
 
 Gateway 是播放任务的权威状态源。每个 `PlaybackSession` 任一时刻只有一个 `active_display`，显示端由统一的 `DisplayAdapter` 抽象表示。
@@ -81,11 +104,13 @@ Jellyfin 保留其擅长的用户、设备、客户端兼容、媒体库和 Jell
 - Gateway 拥有网页播放任务、媒体生命周期、`active_display` 和跨显示端 handoff。
 - Display Adapter 可插拔；Web 与 Jellyfin 是首批实现，未来可扩展其他显示端。
 - `/` 是统一的人机入口，`/display` 与 `/control` 是稳定的确定性入口。
-- 页面角色与 Display Profile 分离，不以分辨率推断控制权限或页面角色。
-- Jellyfin 上游可持续升级，不维护大型私有分支。
+- 页面角色与 Display Profile 分离，不以分辨率推断页面角色。
+- Control 围绕“播放这个、继续看、下一集、在电视看、登录后继续”等用户意图设计，不暴露内部组件名。
+- 站点登录按需触发，同时提供 `/control/sites` 主动账号管理。
+- MVP 暂不实现 Gateway 用户认证；部署边界保持可信 LAN / 单用户。
 - 网站账号、Cookie 和解析逻辑只存在于服务器。
 - 登录时按需启动服务端浏览器，控制设备只远程操作其画面；完成后关闭浏览器进程并保留隔离会话。
-- 上游 Cookie、Authorization 和站点 Token 永不下发给显示端。
+- 不保存网站账号密码；上游 Cookie、Authorization 和站点 Token 永不下发给显示端。
 - 优先 Direct Stream / Remux，保持低功耗和原始画质。
 - DRM、无法合法解析的内容明确拒绝，不尝试绕过。
 - 浏览器画面捕获仅作为独立实验，不进入首个 MVP。
@@ -94,11 +119,13 @@ Jellyfin 保留其擅长的用户、设备、客户端兼容、媒体库和 Jell
 
 - [需求说明](docs/requirements.md)
 - [系统设计](docs/architecture.md)
+- [Control UX 与站点账号管理](docs/control-ux.md)
 - [安全设计](docs/security.md)
 - [MVP 实施计划](docs/mvp-plan.md)
 - [ADR-0001：使用旁路网关而非修改 Jellyfin 核心](docs/adr/0001-sidecar-gateway.md)
 - [ADR-0002：Gateway 持有播放会话并使用 Display Adapter](docs/adr/0002-gateway-playback-display-adapters.md)
 - [ADR-0003：统一入口、角色选择与默认电视显示模式](docs/adr/0003-unified-entry-display-default.md)
+- [ADR-0004：站点认证按需触发，并提供独立账号管理](docs/adr/0004-site-auth-account-management.md)
 
 ## 当前状态
 
