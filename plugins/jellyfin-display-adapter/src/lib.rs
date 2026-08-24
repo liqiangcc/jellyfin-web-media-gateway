@@ -10,6 +10,7 @@ use serde_json::Value;
 use std::fmt;
 use std::time::Duration;
 use url::Url;
+use uuid::Uuid;
 
 const TICKS_PER_MS: u64 = 10_000;
 
@@ -52,6 +53,23 @@ pub struct AdapterTimeouts {
     pub poll_interval: Duration,
 }
 
+/// A Jellyfin library item backed by a server-side `.strm` file. The file's
+/// contents are the Gateway capability URL; the adapter never sends that URL
+/// as an invented field to the Session Play endpoint. It first asks Jellyfin
+/// for PlaybackInfo and uses the returned real media-source identity.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct JellyfinStrmEntry {
+    pub item_id: String,
+}
+
+impl JellyfinStrmEntry {
+    pub fn new(item_id: impl Into<String>) -> Result<Self, DisplayAdapterError> {
+        let item_id = item_id.into();
+        Uuid::parse_str(&item_id).map_err(|_| DisplayAdapterError::InvalidConfiguration)?;
+        Ok(Self { item_id })
+    }
+}
+
 impl Default for AdapterTimeouts {
     fn default() -> Self {
         Self {
@@ -87,6 +105,7 @@ impl fmt::Debug for JellyfinCredential {
 pub struct JellyfinDisplayAdapter {
     service: ConfiguredJellyfinService,
     credential: JellyfinCredential,
+    media_entry: JellyfinStrmEntry,
     client: Client,
     timeouts: AdapterTimeouts,
 }
@@ -96,6 +115,7 @@ impl fmt::Debug for JellyfinDisplayAdapter {
         f.debug_struct("JellyfinDisplayAdapter")
             .field("service", &self.service)
             .field("credential", &self.credential)
+            .field("media_entry", &self.media_entry)
             .field("timeouts", &self.timeouts)
             .finish()
     }
@@ -105,6 +125,7 @@ impl JellyfinDisplayAdapter {
     pub fn new(
         service: ConfiguredJellyfinService,
         credential: JellyfinCredential,
+        media_entry: JellyfinStrmEntry,
         timeouts: AdapterTimeouts,
     ) -> Result<Self, DisplayAdapterError> {
         if timeouts.request.is_zero()
@@ -121,6 +142,7 @@ impl JellyfinDisplayAdapter {
         Ok(Self {
             service,
             credential,
+            media_entry,
             client,
             timeouts,
         })
@@ -169,6 +191,35 @@ impl JellyfinDisplayAdapter {
 
     async fn sessions(&self) -> Result<Vec<JellyfinSession>, DisplayAdapterError> {
         self.request_json(Method::GET, "Sessions", None).await
+    }
+
+    async fn playback_info(
+        &self,
+        media: &GatewayMediaCapability,
+    ) -> Result<JellyfinMediaSource, DisplayAdapterError> {
+        let info: JellyfinPlaybackInfo = self
+            .request_json(
+                Method::GET,
+                &format!("Items/{}/PlaybackInfo", self.media_entry.item_id),
+                None,
+            )
+            .await?;
+        let expected = media.url().as_str();
+        info.media_sources
+            .into_iter()
+            .find(|source| source.path == expected)
+            .filter(|source| !source.id.is_empty())
+            .ok_or(DisplayAdapterError::MediaIncompatible)
+    }
+
+    fn validate_context(
+        request_context: &DisplayContext,
+        media_context: &DisplayContext,
+    ) -> Result<(), DisplayAdapterError> {
+        if request_context != media_context {
+            return Err(DisplayAdapterError::StaleContext);
+        }
+        Ok(())
     }
 
     async fn target(
@@ -309,7 +360,9 @@ impl DisplayAdapter for JellyfinDisplayAdapter {
     ) -> BoxFuture<'a, Result<DisplayInstance, DisplayAdapterError>> {
         Box::pin(async move {
             Self::validate_media(&request.media)?;
+            Self::validate_context(&request.context, &request.media.context)?;
             let (display, _) = self.target(&request.context.display_id).await?;
+            self.playback_info(&request.media).await?;
             Ok(display)
         })
     }
@@ -320,7 +373,9 @@ impl DisplayAdapter for JellyfinDisplayAdapter {
     ) -> BoxFuture<'a, Result<PrepareResult, DisplayAdapterError>> {
         Box::pin(async move {
             Self::validate_media(&request.media)?;
+            Self::validate_context(&request.context, &request.media.context)?;
             let (target, _) = self.target(&request.context.display_id).await?;
+            self.playback_info(&request.media).await?;
             Ok(PrepareResult {
                 context: request.context,
                 target,
@@ -334,13 +389,14 @@ impl DisplayAdapter for JellyfinDisplayAdapter {
     ) -> BoxFuture<'a, Result<StartResult, DisplayAdapterError>> {
         Box::pin(async move {
             Self::validate_media(&request.media)?;
+            Self::validate_context(&request.context, &request.media.context)?;
             let (_, _) = self.target(&request.context.display_id).await?;
+            let media_source = self.playback_info(&request.media).await?;
             let ticks = ms_to_ticks(request.position_ms)?;
             let body = serde_json::json!({
                 "PlayCommand": "PlayNow",
-                "ItemIds": ["gateway-temporary-media"],
-                "MediaSourceId": "gateway-temporary-media",
-                "MediaUrl": request.media.url().as_str(),
+                "ItemIds": [self.media_entry.item_id.clone()],
+                "MediaSourceId": media_source.id,
                 "StartPositionTicks": ticks,
             });
             self.request_empty(
@@ -386,6 +442,20 @@ struct JellyfinSession {
     is_online: bool,
     #[serde(default)]
     play_state: JellyfinPlayState,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct JellyfinPlaybackInfo {
+    #[serde(default)]
+    media_sources: Vec<JellyfinMediaSource>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct JellyfinMediaSource {
+    id: String,
+    path: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -480,7 +550,7 @@ fn map_status(status: StatusCode) -> Result<(), DisplayAdapterError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::extract::State;
+    use axum::extract::{Path, State};
     use axum::http::{HeaderMap, StatusCode};
     use axum::response::IntoResponse;
     use axum::routing::{get, post};
@@ -492,6 +562,9 @@ mod tests {
     use tokio::time::sleep;
 
     const SENTINEL: &str = "fake-jellyfin-secret-sentinel";
+    const ITEM_ID: &str = "11111111-1111-4111-8111-111111111111";
+    const MEDIA_SOURCE_ID: &str = "22222222-2222-4222-8222-222222222222";
+    const MEDIA_URL: &str = "http://gateway.test/stream/capability-1";
 
     #[derive(Clone, Default)]
     struct Fixture {
@@ -523,6 +596,28 @@ mod tests {
         .into_response()
     }
 
+    async fn playback_info(
+        Path(item_id): Path<String>,
+        State(fixture): State<Fixture>,
+        headers: HeaderMap,
+    ) -> impl IntoResponse {
+        if !authorized(&fixture, &headers) {
+            return (StatusCode::UNAUTHORIZED, Json(json!({}))).into_response();
+        }
+        if item_id != ITEM_ID {
+            return (StatusCode::NOT_FOUND, Json(json!({}))).into_response();
+        }
+        Json(json!({
+            "MediaSources": [{
+                "Id": MEDIA_SOURCE_ID,
+                "Path": MEDIA_URL,
+                "Protocol": "Http",
+                "SupportsDirectPlay": true
+            }]
+        }))
+        .into_response()
+    }
+
     async fn start(
         State(fixture): State<Fixture>,
         headers: HeaderMap,
@@ -536,6 +631,12 @@ mod tests {
             return (StatusCode::UNSUPPORTED_MEDIA_TYPE, Json(json!({}))).into_response();
         }
         let body = fixture.seen_start.lock().unwrap().last().unwrap().clone();
+        if body.get("MediaUrl").is_some()
+            || body["ItemIds"] != json!([ITEM_ID])
+            || body["MediaSourceId"] != MEDIA_SOURCE_ID
+        {
+            return (StatusCode::BAD_REQUEST, Json(json!({}))).into_response();
+        }
         *fixture.position_ticks.lock().unwrap() = body["StartPositionTicks"].as_u64().unwrap();
         if fixture.confirm_playback {
             *fixture.playing.lock().unwrap() = true;
@@ -595,6 +696,7 @@ mod tests {
     async fn spawn_fixture(fixture: Fixture) -> String {
         let app = Router::new()
             .route("/Sessions", get(sessions))
+            .route("/Items/{id}/PlaybackInfo", get(playback_info))
             .route("/Sessions/{id}/Playing", post(start))
             .route("/Sessions/{id}/Playing/Pause", post(pause))
             .route("/Sessions/{id}/Playing/Unpause", post(unpause))
@@ -612,11 +714,7 @@ mod tests {
     }
 
     fn media() -> GatewayMediaCapability {
-        GatewayMediaCapability::from_gateway(
-            Url::parse("http://gateway.test/stream/capability-1").unwrap(),
-            context(),
-        )
-        .unwrap()
+        GatewayMediaCapability::from_gateway(Url::parse(MEDIA_URL).unwrap(), context()).unwrap()
     }
 
     async fn adapter(fixture: Fixture) -> JellyfinDisplayAdapter {
@@ -624,6 +722,7 @@ mod tests {
         JellyfinDisplayAdapter::new(
             ConfiguredJellyfinService::new("fixture", Url::parse(&endpoint).unwrap()).unwrap(),
             JellyfinCredential::server_side(SENTINEL).unwrap(),
+            JellyfinStrmEntry::new(ITEM_ID).unwrap(),
             AdapterTimeouts {
                 request: Duration::from_millis(300),
                 playback_confirmation: Duration::from_millis(80),
@@ -722,7 +821,9 @@ mod tests {
         );
         let body = fixture.seen_start.lock().unwrap()[0].clone();
         assert_eq!(body["StartPositionTicks"], 11_040_000_000u64);
-        assert_eq!(body["MediaUrl"], "http://gateway.test/stream/capability-1");
+        assert!(body.get("MediaUrl").is_none());
+        assert_eq!(body["ItemIds"], json!([ITEM_ID]));
+        assert_eq!(body["MediaSourceId"], MEDIA_SOURCE_ID);
         assert!(format!("{error:?}").contains("PlaybackNotConfirmed"));
         assert!(!format!("{error:?}").contains(SENTINEL));
     }
@@ -808,6 +909,7 @@ mod tests {
         let adapter = JellyfinDisplayAdapter::new(
             ConfiguredJellyfinService::new("offline", Url::parse(&endpoint).unwrap()).unwrap(),
             JellyfinCredential::server_side(SENTINEL).unwrap(),
+            JellyfinStrmEntry::new(ITEM_ID).unwrap(),
             AdapterTimeouts {
                 request: Duration::from_millis(100),
                 playback_confirmation: Duration::from_millis(50),

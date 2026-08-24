@@ -12,6 +12,7 @@ on:
       - 'plugins/generic-direct/**'
       - '.github/workflows/r004-jellyfin-display.yml'
       - 'docs/research/r004-jellyfin-display.md'
+      - 'scripts/r004/**'
 
 permissions:
   contents: read
@@ -68,3 +69,23 @@ jobs:
           path: |
             r004-jellyfin-fixture.log
             r004-jellyfin-fixture-evidence.txt
+
+  server-smoke:
+    name: J3 real Jellyfin .strm PlaybackInfo smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Exact candidate
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Install smoke dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg jq
+      - name: Run real Jellyfin server .strm smoke
+        run: bash scripts/r004/jellyfin-server-smoke.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r004-jellyfin-server-smoke
+          path: r004-jellyfin-server-smoke.txt
