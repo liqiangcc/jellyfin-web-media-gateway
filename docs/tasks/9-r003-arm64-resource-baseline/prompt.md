@@ -35,6 +35,7 @@ status:ready + env:cloud + no active owner
 
 - Issue #8 已 Final Acceptance，受信 harness/workflow 已进入可执行仓库状态；
 - Issue #1 / #21 Target Runner 仍可用于 target proof；
+- Issue #14 / R008 已 Final Acceptance；
 - 已记录明确的 harness/workflow SHA；
 - 已记录明确的 R001/Gateway measured Candidate SHA；
 - candidate 的 build/start/stop/test-media 入口足够稳定；
