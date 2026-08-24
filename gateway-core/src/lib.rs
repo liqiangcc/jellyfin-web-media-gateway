@@ -635,7 +635,7 @@ const DISPLAY_PAGE: &str = r##"<!doctype html>
           overlay.classList.remove('playing');
           show(`${source} audible play rejected: ${error.name}`);
         }
-        send({
+        await send({
           kind: 'play_attempt', attempt_id: id, command_id: commandId, result,
           error_name: error.name || null, error_message: error.message || null,
           muted: player.muted, volume: player.volume, detail: `source=${source}`
