@@ -72,6 +72,14 @@ evidence.browser = await page.evaluate(() => ({
   fullscreenAvailable: Boolean(document.documentElement.requestFullscreen),
 }));
 
+// Establish the initial cursor before issuing the first command. Without
+// this synchronization, a command racing the page's first snapshot can be
+// included in that snapshot and then appear to be skipped by the poller.
+await waitForState(
+  state => state.telemetry.some(item => item.kind === 'transport' && item.result === 'connected'),
+  'initial remote transport connection',
+);
+
 // Remote attempt before any page interaction: result may resolve or reject,
 // but both outcomes must be recorded rather than hidden.
 await postCommand('r002-remote-before-activation');
