@@ -47,5 +47,5 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
-      - name: Repeated two-Control race
-        run: cargo test --test playback_concurrency repeated_two_control_race_stress -- --exact
+      - name: Repeated R007 concurrency scenarios
+        run: cargo test --test playback_concurrency repeated_r007_concurrency_stress -- --exact
