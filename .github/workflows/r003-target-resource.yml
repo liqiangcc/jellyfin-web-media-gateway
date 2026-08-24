@@ -1,0 +1,118 @@
+name: r003-target-resource
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: "Coordinator-approved full 40-character candidate SHA"
+        required: true
+        type: string
+      scenario:
+        description: "One canonical R003 scenario"
+        required: true
+        type: choice
+        options:
+          - idle
+          - direct-http
+          - direct-hls
+          - direct-4k
+          - remux
+          - transcode-boundary
+          - chromium-baseline
+      checkpoint_profile:
+        description: "One continuous run checkpoint profile"
+        required: true
+        type: choice
+        options:
+          - '5'
+          - '30'
+          - '60'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r003-target-resource
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    name: R003 trusted target measurement
+    runs-on: [self-hosted, linux, ARM64, ubuntu-arm64, target-device]
+    timeout-minutes: 70
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      SCENARIO: ${{ inputs.scenario }}
+      CHECKPOINT_PROFILE: ${{ inputs.checkpoint_profile }}
+      HARNESS_SHA: ${{ github.sha }}
+      TRUSTED_DIR: ${{ github.workspace }}/trusted-harness
+      CANDIDATE_DIR: ${{ github.workspace }}/candidate
+      OUTPUT_DIR: ${{ github.workspace }}/r003-artifacts
+      R001_PORT: '18787'
+      GATEWAY_URL: http://127.0.0.1:18787
+    steps:
+      - name: Checkout trusted harness revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: trusted-harness
+      - name: Checkout measured candidate revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          path: candidate
+      - name: Validate target trust boundary and inputs
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          python3 "$TRUSTED_DIR/scripts/r003/harness.py" validate-target \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --harness-sha "$HARNESS_SHA" \
+            --scenario "$SCENARIO" \
+            --checkpoint-profile "$CHECKPOINT_PROFILE" \
+            --candidate-dir "$CANDIDATE_DIR" \
+            --trusted-dir "$TRUSTED_DIR"
+          test "$(id -u)" -ne 0
+          case "$GITHUB_WORKSPACE" in
+            /var/lib/web-media-gateway|/var/lib/web-media-gateway/*) exit 1 ;;
+          esac
+      - name: Target capability preflight
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          mkdir -p "$OUTPUT_DIR"
+          python3 "$TRUSTED_DIR/scripts/r003/harness.py" preflight > "$OUTPUT_DIR/preflight.json"
+      - name: Build measured R001 candidate
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: python3 "$TRUSTED_DIR/scripts/r003/harness.py" build-candidate --candidate-dir "$CANDIDATE_DIR"
+      - name: Run one continuous R003 scenario
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          mkdir -p "$OUTPUT_DIR"
+          python3 "$TRUSTED_DIR/scripts/r003/harness.py" run-scenario \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --harness-sha "$HARNESS_SHA" \
+            --scenario "$SCENARIO" \
+            --checkpoint-profile "$CHECKPOINT_PROFILE" \
+            --output-dir "$OUTPUT_DIR" \
+            --candidate-dir "$CANDIDATE_DIR" \
+            --gateway-url "$GATEWAY_URL" \
+            --gateway-command "$CANDIDATE_DIR/target/debug/r001-server" \
+            --source-type r001-proof
+      - name: Record exact SHA and target identity
+        if: always()
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          mkdir -p "$OUTPUT_DIR"
+          {
+            echo "harness_sha=$HARNESS_SHA"
+            echo "candidate_sha=$CANDIDATE_SHA"
+            echo "runner_name=$RUNNER_NAME"
+            echo "runner_arch=$RUNNER_ARCH"
+            echo "runner_os=$RUNNER_OS"
+            uname -a
+            id
+          } > "$OUTPUT_DIR/target-identity.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: r003-target-resource-${{ inputs.scenario }}-${{ inputs.checkpoint_profile }}
+          path: r003-artifacts

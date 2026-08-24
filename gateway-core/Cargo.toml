@@ -13,6 +13,7 @@ futures-util.workspace = true
 generic-direct = { path = "../plugins/generic-direct" }
 reqwest.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 site-adapter-api = { path = "../site-adapter-api" }
 tokio.workspace = true
 url.workspace = true

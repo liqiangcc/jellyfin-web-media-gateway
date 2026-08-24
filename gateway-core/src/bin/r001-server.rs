@@ -87,8 +87,14 @@ async fn main() {
         )
     });
 
+    let display_path = if env::var_os("R002_USE_FIXTURE_DISPLAY").is_some() {
+        secret_path.clone()
+    } else {
+        Some(mp4_path.clone())
+    };
     service.configure_proof_paths(ProofPaths {
         mp4_path: Some(mp4_path),
+        display_path,
         hls_path: Some(hls_path),
         secret_path,
         chain: format!(
