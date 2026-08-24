@@ -1,7 +1,7 @@
 # R008 P0 Security Boundary Evidence
 
 Status: implementation candidate; final verification is bound to the exact
-Candidate SHA and J1/J2/J3 Actions jobs recorded in Issue #14 Attempt 1's
+Candidate SHA and J1/J2/J3 Actions jobs recorded in Issue #14 Attempt 2's
 `[EXECUTION REPORT]`. This document deliberately does not copy secrets or
 large logs; the Issue report is the durable selector for the run and jobs.
 
@@ -64,5 +64,5 @@ security scope is changed.
   protected upstream injection, replay rejection, and browser non-leakage.
 
 The exact R008 Candidate SHA and required J1/J2/J3 run/job selectors are kept
-in the Issue #14 Attempt 1 report so a later candidate cannot accidentally
+in the Issue #14 Attempt 2 report so a later candidate cannot accidentally
 inherit an earlier run's security claim.
