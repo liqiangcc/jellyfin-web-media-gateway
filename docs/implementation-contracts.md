@@ -134,6 +134,8 @@ Core 只面向 Registry。
 
 `generic-ytdlp` 必须作为 fallback Site Plugin 注册；Core 中不允许存在“如果没有插件就直接调用 yt-dlp”的特殊路径。
 
+公开站点解析可以由 Core/受限基础设施先通过 `public_web` 获取无 Secret 的文档，再以通用 `ResolveContext` 交给插件解析。插件本身不建立旁路网络连接；Core 不读取文档中的站点字段。
+
 MVP 使用 Rust workspace + trait 编译期插件：
 
 ```text
@@ -141,6 +143,7 @@ gateway-core/
 site-adapter-api/
 plugins/
 ├── generic-direct/
+├── bilibili/
 ├── generic-ytdlp/
 └── ...
 ```
@@ -221,6 +224,7 @@ ResolvedStream
 - `ResolvedMedia` 可以短期失效，所以 `PlaybackItem` 必须同时保留 `SourceLocator` 以便重新 resolve。
 - DRM/保护状态至少明确：`clear | drm_unsupported | unsupported`。
 - 插件输出必须经过 Core schema validation 后才能进入 Playback。
+- `expires_at` 是短期媒体 URL 的过期提示，不是内容身份；刷新仍必须使用原始 `SourceLocator` 和 R007 的独立 media freshness generation。
 
 ## 7. PlaybackItem
 

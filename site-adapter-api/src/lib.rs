@@ -15,6 +15,7 @@ pub struct SourceLocator {
 pub enum StreamProtocol {
     HttpFile,
     Hls,
+    Dash,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -29,9 +30,25 @@ pub struct ResolvedStream {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedMedia {
     pub title: String,
+    pub duration_ms: Option<u64>,
     pub source_site: String,
     pub streams: Vec<ResolvedStream>,
+    pub expires_at_unix: Option<u64>,
     pub protection: MediaProtection,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NavigationContext {
+    pub previous: Option<SourceLocator>,
+    pub next: Option<SourceLocator>,
+    pub collection_id: Option<String>,
+    pub current_index: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ResolveContext<'a> {
+    pub public_document: Option<&'a str>,
+    pub upstream_status: Option<u16>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,6 +75,14 @@ pub enum AdapterError {
     AmbiguousMatch,
     DuplicatePlugin,
     PluginNotFound,
+    AccessRequired,
+    ContentNotFound,
+    UpstreamDenied,
+    UnsupportedMedia,
+    ParseError,
+    SchemaError,
+    EgressRejected,
+    SecretMaterial,
 }
 
 impl fmt::Display for AdapterError {
@@ -72,6 +97,18 @@ pub trait SiteAdapter: Send + Sync {
     fn plugin_id(&self) -> &'static str;
     fn recognize(&self, input: &str) -> Result<RecognizeResult, AdapterError>;
     fn resolve(&self, locator: &SourceLocator) -> Result<ResolvedMedia, AdapterError>;
+
+    fn resolve_with_context(
+        &self,
+        locator: &SourceLocator,
+        _context: ResolveContext<'_>,
+    ) -> Result<ResolvedMedia, AdapterError> {
+        self.resolve(locator)
+    }
+
+    fn navigation(&self, _locator: &SourceLocator) -> Result<NavigationContext, AdapterError> {
+        Err(AdapterError::UnsupportedLocator)
+    }
 }
 
 #[derive(Default)]
@@ -119,6 +156,28 @@ impl SiteAdapterRegistry {
             .find(|a| a.plugin_id() == locator.plugin_id)
             .ok_or(AdapterError::PluginNotFound)?;
         adapter.resolve(locator)
+    }
+
+    pub fn resolve_with_context(
+        &self,
+        locator: &SourceLocator,
+        context: ResolveContext<'_>,
+    ) -> Result<ResolvedMedia, AdapterError> {
+        let adapter = self
+            .adapters
+            .iter()
+            .find(|a| a.plugin_id() == locator.plugin_id)
+            .ok_or(AdapterError::PluginNotFound)?;
+        adapter.resolve_with_context(locator, context)
+    }
+
+    pub fn navigation(&self, locator: &SourceLocator) -> Result<NavigationContext, AdapterError> {
+        let adapter = self
+            .adapters
+            .iter()
+            .find(|a| a.plugin_id() == locator.plugin_id)
+            .ok_or(AdapterError::PluginNotFound)?;
+        adapter.navigation(locator)
     }
 }
 

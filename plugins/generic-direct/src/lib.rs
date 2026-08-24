@@ -62,6 +62,7 @@ impl SiteAdapter for GenericDirectAdapter {
         let protocol = Self::protocol(&url).ok_or(AdapterError::UnsupportedLocator)?;
         Ok(ResolvedMedia {
             title: "generic-direct media".into(),
+            duration_ms: None,
             source_site: "generic".into(),
             streams: vec![ResolvedStream {
                 id: "primary".into(),
@@ -70,6 +71,7 @@ impl SiteAdapter for GenericDirectAdapter {
                 public_headers: BTreeMap::new(),
                 upstream_access_ref: None,
             }],
+            expires_at_unix: None,
             protection: MediaProtection::Clear,
         })
     }

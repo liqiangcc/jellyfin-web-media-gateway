@@ -1,7 +1,8 @@
 [workspace]
 members = [
-  "site-adapter-api",
-  "plugins/generic-direct",
+    "site-adapter-api",
+    "plugins/bilibili",
+    "plugins/generic-direct",
   "gateway-core",
 ]
 resolver = "2"
