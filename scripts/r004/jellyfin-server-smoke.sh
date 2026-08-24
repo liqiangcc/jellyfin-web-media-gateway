@@ -30,6 +30,20 @@ cleanup() {
 }
 trap cleanup EXIT
 
+post_until_ready() {
+  local endpoint="$1"
+  shift
+  for _ in $(seq 1 90); do
+    if curl --silent --show-error --fail-with-body --request POST \
+      "$server_url/$endpoint" "$@" >/dev/null 2>"$work_dir/startup-error.log"; then
+      return 0
+    fi
+    sleep 1
+  done
+  cat "$work_dir/startup-error.log" >&2
+  return 1
+}
+
 mkdir -p "$work_dir/media" "$work_dir/config" "$work_dir/cache"
 ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=320x180:rate=24 \
   -f lavfi -i sine=frequency=440:sample_rate=44100 -t 5 -c:v libx264 \
@@ -52,12 +66,12 @@ for _ in $(seq 1 90); do
 done
 curl --silent --show-error --fail-with-body "$server_url/System/Info/Public" >/dev/null
 
-curl --silent --show-error --fail-with-body --request POST "$server_url/Startup/Configuration" \
+post_until_ready 'Startup/Configuration' \
   --header 'Content-Type: application/json' \
-  --data '{"UICulture":"en-US","MetadataCountryCode":"US","PreferredMetadataLanguage":"en"}' >/dev/null
-curl --silent --show-error --fail-with-body --request POST "$server_url/Startup/User" \
+  --data '{"UICulture":"en-US","MetadataCountryCode":"US","PreferredMetadataLanguage":"en"}'
+post_until_ready 'Startup/User' \
   --data-urlencode "Name=$user_name" --data-urlencode "Password=$user_password" >/dev/null
-curl --silent --show-error --fail-with-body --request POST "$server_url/Startup/Complete" >/dev/null
+post_until_ready 'Startup/Complete'
 
 auth_json="$work_dir/auth.json"
 curl --silent --show-error --fail-with-body --request POST "$server_url/Users/AuthenticateByName" \
