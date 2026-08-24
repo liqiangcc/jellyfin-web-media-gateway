@@ -2,36 +2,38 @@
 
 你正在执行 `liqiangcc/jellyfin-web-media-gateway` 的 R001 Task。
 
-本文件只是 Task 内部 bootstrap / navigation 入口，不是 Task Contract，也不保存实时 Task 状态。
+本文件只是 Task bootstrap/navigation，不是 Task Contract，也不保存实时 Task 状态或 Candidate 结果。
 
 ## Execution Context
 
 ```text
 GitHub Issue: #3
 Task Contract: docs/tasks/3-r001-media-path-proof/task.md
-Expected worker: web
-Expected environment label: env:web-gpt
-Downstream handoff profile: docs/tasks/handoffs/web-gpt.md
+Expected worker: cloud-codex
+Expected environment label: env:cloud
+Downstream handoff profile: docs/tasks/handoffs/cloud.md
 Research Item: R001
 Hard publication dependencies: none
-Parallel sibling: Issue #2 / R007
+Accepted concurrency authority: Issue #2 / R007 is done and merged to main
 ```
 
-## Expected Client
+## Preferred Codex Entry
 
-本 Task 的下游执行客户端是 **Web ChatGPT Worker + GitHub connector**。
+```text
+$task-worker Execute Issue #3 using `docs/tasks/3-r001-media-path-proof/prompt.md`.
+```
 
-不要求 repo-scoped `$task-worker` Skill，也不要使用 Web 搜索替代 GitHub。
+Skill 不可见时按 `docs/tasks/handoffs/cloud.md` fallback 执行。
 
 ## Live Gate
 
-新 Web Worker 会话必须先实际读取 GitHub Issue #3，并以 Issue 当前 labels / owner 为实时 authority。
+Codex Worker 必须先实际读取 GitHub Issue #3、全部 relevant comments 和当前 PR/candidate 状态，以 Issue labels / owner 为实时 authority。
 
 ```text
 status:draft
-→ 停止，不 claim、不实现、不自行发布
+→ STOP，不 claim、不实现、不自行发布
 
-status:ready + env:web-gpt + no active owner
+status:ready + env:cloud + no active owner
 → 可以 claim，并开始新的 Attempt N
 
 其他状态
@@ -40,34 +42,24 @@ status:ready + env:web-gpt + no active owner
 
 Worker 不得因为看到本 prompt 就自行改变发布状态。
 
-## Parallel R007 Boundary
+## Recovery / Continuation Rule
 
-Issue #2 / R007 可以与本 Task 同时执行。
+本 Task 可能已有前一 Attempt 的 durable branch / PR / Actions Evidence。
 
-必须保持职责分离：
+开始新 Attempt 时必须：
 
-```text
-R001
-→ Source / ResolvedMedia / Media Gateway / media capability / Web media consumption
-
-R007
-→ Playback command CAS / telemetry revision / item refresh freshness / display generation / handoff authority
-```
-
-因此：
-
-- 不等待 R007 完成才开始 R001；
-- 不在 R001 中实现/重定义 R007 的 Playback 并发状态机；
-- media capability 中的 session/item identity 可以来自确定性的测试上下文；
-- 如果两个 candidate 同时修改 root Cargo/workspace metadata，正常 branch/rebase/merge，不把文件冲突当业务依赖；
-- 只有新的具体 R007 Evidence 真正推翻 R001 假设时，才交回 Coordinator 评审是否需要 Contract revision。
+1. 读取 Issue #3 的最新 `[COORDINATOR REVIEW]`；
+2. 找到该 Review 指向的现有 candidate branch / PR / Actions run；
+3. 优先继续、rebase、修复现有工作，不机械从零重写；
+4. 读取当前 `main`，确认已包含 accepted R007；
+5. final Candidate 必须基于/集成 current main，且不得重定义 R007 Playback authority；
+6. 旧 Actions PASS 只证明旧 Candidate SHA；rebase/fix 后必须重新跑 Task Contract 要求的 J1-J4。
 
 ## Start Protocol
 
-1. 必须实际使用 GitHub 读取当前仓库和 Issue，不根据聊天背景猜测状态。
+1. 同步最新仓库并实际使用 GitHub 读取 Issue #3、comments、current PR/candidate、Actions 状态。
 2. 读取并遵守：
    - `AGENTS.md`
-   - GitHub Issue #3 及 relevant comments
    - `docs/tasks/3-r001-media-path-proof/task.md`
    - `docs/tasks/issue-lifecycle-protocol.md`
    - `docs/architecture.md`
@@ -75,52 +67,33 @@ R007
    - `docs/technical-feasibility-validation.md`
    - `docs/mvp-plan.md`
    - `docs/security.md`
-3. 确认 Issue 当前为 `status:ready + env:web-gpt` 且无 active owner，并确认当前 Web Worker 具备 Task 要求的 GitHub write/code/Actions/browser-evidence 能力。
+3. 确认 Issue 当前为 `status:ready + env:cloud` 且无 active owner。
 4. claim → `status:in-progress` → 确定新的 `Attempt N`。
-5. 严格执行 Task Contract，只做 R001 Media Path Proof。
-6. runtime/browser/test Evidence 必须通过真实 GitHub Actions run/job/log/artifact 获得；不要把静态分析当 runtime PASS。
+5. 严格执行 Task Contract，只做 R001 Media Path Proof / current-main integration。
+6. runtime/browser/test Evidence 必须通过真实 GitHub Actions run/job/log/artifact 获得；Codex 本地测试可用于开发，但不能替代 required Actions Evidence。
 7. 正常结束评论 `[EXECUTION REPORT]` → `status:review`；阻塞评论 `[BLOCKER REPORT]` → `status:blocked`。
-8. 释放 active execution ownership并停止，等待 Coordinator Review。
+8. 释放 active execution ownership 并停止，等待 Web Coordinator Review。
 
 ## Scope Reminder
 
-R001 核心链路：
-
 ```text
-Source input
-→ SiteAdapterRegistry
-→ generic-direct
-→ SourceLocator / ResolvedMedia
-→ scoped Media Gateway capability
+R001
+→ Source / Registry / generic-direct
+→ ResolvedMedia
+→ scoped media capability
 → Media Gateway
 → Web Display
+→ MP4 Range/play/pause/seek
+→ HLS concrete result
+→ Secret boundary / no open proxy
+→ bounded cleanup
+
+R007 (already accepted)
+→ Playback command CAS / telemetry revision / media-refresh freshness
+→ display generation / handoff authority
 ```
 
-Primary required browser proof：direct HTTP MP4。
-
-HLS 必须形成明确 manifest/segment/result，不得保持“理论支持”。
-
-重点证明：
-
-```text
-Range / seek semantics
-Secret stays server-side
-/stream is not an arbitrary open proxy
-capability expiry/session/item/resource binding
-bounded streaming cleanup
-Jellyfin not required
-```
-
-不要进入：
-
-- R007 Playback command/revision/handoff implementation；
-- R002 TV audible autoplay / physical UX；
-- R003 target-phone CPU/RSS/temperature acceptance；
-- Jellyfin；
-- concrete site auth/plugin business logic；
-- Native Site Panel；
-- software video transcoding；
-- full R008 security proof。
+R001 不得进入 R002 TV UX、R003 target-phone resource acceptance、Jellyfin、real-site auth/plugin business logic、Native Site Panel、software video transcode 或完整 R008 security proof。
 
 ## Authority
 
@@ -129,22 +102,22 @@ canonical docs
 → architecture / implementation contracts / feasibility / MVP / security facts
 
 AGENTS.md
-→ long-term collaboration rules
+→ long-term collaboration and Codex-first routing rules
 
 task.md
-→ R001 unique execution contract
+→ R001 execution contract
 
 prompt.md
-→ R001 bootstrap only
+→ bootstrap only
 
 Issue fields / labels
 → live state
 
 Issue comments
-→ Attempt / Review / Acceptance history
+→ Attempt / recovery / Review / Acceptance history
 
-web-gpt handoff profile
-→ how to start Web Worker, not Task scope
+cloud handoff profile
+→ how to start Codex Worker, not Task scope
 ```
 
 ## Stop Boundary
