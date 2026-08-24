@@ -24,6 +24,7 @@ use uuid::Uuid;
 pub mod security;
 pub use security::{
     EgressPolicy, EgressPolicyError, EgressScope, HttpAuthorityError, HttpAuthorityPolicy,
+    ValidatedTarget,
 };
 
 const MAX_MANIFEST_BYTES: usize = 512 * 1024;
