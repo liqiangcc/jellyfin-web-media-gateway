@@ -132,7 +132,7 @@ Rust trait + workspace，一起编译发布。重点是先证明 SiteAdapter Con
 
 ## 当前实施顺序
 
-当前不再继续扩展功能设计，先做 Contract Convergence：
+当前不再继续扩展功能设计，先完成 Contract Freeze：
 
 1. `SourceLocator`
 2. `SiteAdapter`
@@ -141,7 +141,20 @@ Rust trait + workspace，一起编译发布。重点是先证明 SiteAdapter Con
 5. `DisplayAdapter`
 6. scoped SiteAccess + EgressPolicy
 
-然后按 `mvp-plan.md` 从最小 media path proof 开始实现。
+随后进入风险驱动技术可行性验证，而不是直接假设真实设备路径已经成立：
+
+```text
+R007 Playback concurrency contract
+→ R001 Media Path
+→ R002 TV Browser remote audible playback
+→ R003 ARM64 resource baseline
+→ R008 Security boundary
+→ Core Feasibility Review
+```
+
+Jellyfin Display、真实站点和 Native Site Panel 分别继续通过 R004/R005/R006 验证；Jellyfin 或 Native Site Panel 失败不能阻塞 Web-only Core。
+
+详细实验、指标、成功标准和 Go / No-Go Gate 见 `technical-feasibility-validation.md`，具体实施顺序见 `mvp-plan.md`。
 
 ## 文档
 
@@ -151,6 +164,7 @@ Rust trait + workspace，一起编译发布。重点是先证明 SiteAdapter Con
 - [需求说明](docs/requirements.md)
 - [系统设计](docs/architecture.md)
 - [Implementation Contracts](docs/implementation-contracts.md)
+- [技术预研与可行性验证](docs/technical-feasibility-validation.md)
 - [MVP 实施计划](docs/mvp-plan.md)
 
 专题：
@@ -171,4 +185,4 @@ ADR：
 
 ## 当前状态
 
-设计收敛阶段，尚无可运行版本。
+设计收敛完成到可编码契约阶段；技术可行性验证框架已建立，尚未把真实设备/真实媒体路径标记为已验证，也尚无可运行正式版本。
