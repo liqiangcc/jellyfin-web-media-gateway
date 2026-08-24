@@ -1,11 +1,21 @@
 ---
 name: task-dispatcher
-description: Dispatch or track an issue-linked local Codex Worker session through tmux with an isolated git worktree. Use only when explicitly asked to dispatch, inspect, track, or resume a Worker session.
+description: Dispatch or track an issue-linked child Codex Worker session through tmux with an isolated git worktree. The child is local only relative to the dispatcher's current execution context; local does not imply a fixed env type. Use only when explicitly asked to dispatch, inspect, track, or resume a Worker session.
 ---
 
 # Task Dispatcher
 
-Use this skill from a long-lived dispatcher/coordinator Codex to launch and track issue-linked **local Codex CLI** Worker sessions.
+Use this skill from a long-lived dispatcher/coordinator Codex to launch and track issue-linked child Codex CLI Worker sessions from the dispatcher's **current execution context**.
+
+In this Skill, `local` is a relative relationship only:
+
+```text
+local child
+= a child process/session launched from the current Dispatcher execution context
+!= a fixed Worker environment type
+```
+
+The Dispatcher may itself run in a cloud workspace, WSL, a Linux server, or another supported execution context. The launch relationship alone neither qualifies nor disqualifies the child for any repository `env:*` route.
 
 This is orchestration/bootstrap only. `$task-worker` remains responsible for claiming the Issue, executing `task.md`, posting the execution/blocker report, and changing Worker lifecycle state. `$task-reviewer` / Web Coordinator remains responsible for ACCEPT / REVISE / BLOCK / SPLIT, merging, Final Acceptance, and closing.
 
@@ -26,7 +36,7 @@ Stop before launching if:
 - no Issue number can be identified;
 - multiple conflicting Issue numbers are present;
 - the prompt path is missing or does not resolve in the repository;
-- the required local tools or GitHub authentication are unavailable.
+- the required tools or GitHub authentication are unavailable in the current execution context.
 
 Do not rewrite the Worker prompt or duplicate the Task Contract into the launch command.
 
@@ -41,20 +51,30 @@ Issue is open
 status = ready
 no active execution owner
 prompt.md / task.md resolve
-actual child Worker environment is explicitly known and eligible for the Issue
+actual child Worker execution environment/capabilities are explicitly known and eligible for the Issue
 ```
 
 Do not launch a duplicate Worker for an Issue already `status:in-progress`, `status:review`, `status:blocked`, or `status:done`. In those states, switch to tracking/recovery reporting instead.
 
-Worker environment is not inferred from CPU architecture or from the fact that a machine is remote. In particular:
+Do not infer Worker environment from the launch mechanism (`tmux`, child process, same host), from the words local/remote, or from CPU architecture. Determine it from the child's **actual execution context and capabilities** and compare that to the repository's `env:*` contract/handoff profile.
+
+Examples:
 
 ```text
-env:cloud
-= Codex Cloud Worker
-!= arbitrary local/server Codex CLI inside tmux
+Dispatcher-local child in WSL
+→ may match env:wsl when the required WSL capabilities are actually present
+
+Dispatcher-local child on the Ubuntu ARM64 target
+→ may match env:ubuntu-arm64 when it is actually running in that target context
+
+Dispatcher-local child in the repository-defined Codex Cloud Worker context
+→ may match env:cloud when that actual context/capability contract is satisfied
+
+A tmux/local relationship by itself
+→ proves none of the env:* values above
 ```
 
-If the Issue is published only for an environment that does not match the actual local child Worker, stop and report the routing mismatch. Do not silently treat a local tmux session as Codex Cloud, Windows, target-phone, or Manual-TV Evidence authority.
+If the Issue is published only for an environment that does not match the actual child execution context/capabilities, stop and report the routing mismatch. Do not silently promote the child to Codex Cloud, WSL, Windows, target-phone, or Manual-TV Evidence authority merely because the Dispatcher can launch it.
 
 ## Dispatcher repository preflight
 
@@ -113,20 +133,20 @@ Transport the Worker handoff as literal terminal input after Codex is ready; do 
 
 ## Progress tracking
 
-GitHub durable state is the authority; tmux is only process/liveness evidence.
+GitHub durable state is the authority; tmux is only process/liveness evidence inside the current Dispatcher execution context.
 
 When asked to track progress:
 
 1. read the Issue and latest relevant comments first;
-2. inspect the issue-linked tmux session if it exists;
+2. inspect the issue-linked tmux session if it exists in the current execution context;
 3. inspect the issue worktree branch/HEAD/dirty state without mutating it;
-4. summarize both durable Task state and local Worker liveness.
+4. summarize both durable Task state and child Worker liveness.
 
 Use this interpretation:
 
 ```text
 status:ready + no tmux
-→ published, not currently running locally
+→ published, not currently running in this Dispatcher execution context
 
 status:in-progress + live Codex/tmux
 → active Worker Attempt
@@ -154,6 +174,7 @@ GitHub status / owner:
 tmux: codex-issue-<N> (alive/dead/missing)
 worktree: <absolute path>
 worktree branch / HEAD:
+child execution context / env match:
 Codex session ID: <UUID when available>
 latest durable report/comment:
 next authority/action:
@@ -169,10 +190,11 @@ tmux: codex-issue-<N>
 dispatcher repository: <absolute main checkout>
 worker worktree: <absolute issue worktree>
 base commit: <exact synced main SHA used to create worktree>
+child execution context / env match: <actual context and matched env>
 Codex session ID: <UUID when available>
 ```
 
-The tmux name + worktree path are the stable Issue mapping. When a Codex Session ID is available, use it for precise recovery:
+The tmux name + worktree path are the stable Issue mapping within the Dispatcher execution context. When a Codex Session ID is available, use it for precise recovery:
 
 ```bash
 codex resume <SESSION_ID>
@@ -180,7 +202,7 @@ codex resume <SESSION_ID>
 
 Use `codex resume --last` only when there is no ambiguity about the most recent session **inside that issue worktree/session context**.
 
-Never resume merely because a process died. First reconcile the Issue lifecycle. A dead local process with `status:in-progress` is a Coordinator recovery condition, not permission to create a new Attempt automatically.
+Never resume merely because a process died. First reconcile the Issue lifecycle. A dead child process with `status:in-progress` is a Coordinator recovery condition, not permission to create a new Attempt automatically.
 
 ## Completion and resource policy
 
@@ -193,6 +215,6 @@ Never resume merely because a process died. First reconcile the Issue lifecycle.
 
 ## Safety boundary
 
-This Skill may fast-forward the dispatcher checkout, create isolated git worktrees, start local processes, inspect tmux state, and send the user-provided Worker handoff to Codex. It does not grant permission for unrelated external writes or for changing Task routing/lifecycle authority.
+This Skill may fast-forward the dispatcher checkout, create isolated git worktrees, start child processes in the current execution context, inspect tmux state, and send the user-provided Worker handoff to Codex. It does not grant permission for unrelated external writes or for changing Task routing/lifecycle authority.
 
 The child Worker must still obey `AGENTS.md`, the target Issue, `task.md`, `prompt.md`, `docs/tasks/issue-lifecycle-protocol.md`, and the actual environment/Runner/Target authority required by the Task.
