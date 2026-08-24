@@ -10,10 +10,16 @@ media_url="http://host.docker.internal:8788/r004.mp4"
 fixture_pid=""
 
 cleanup() {
+  set +e
   if [[ -n "$fixture_pid" ]]; then
     kill "$fixture_pid" 2>/dev/null || true
   fi
   docker rm -f "$container_name" >/dev/null 2>&1 || true
+  if [[ -d "$work_dir" ]]; then
+    docker run --rm --user 0:0 --volume "$work_dir:/cleanup" \
+      --entrypoint chown jellyfin/jellyfin:10.11.11 -R "$(id -u):$(id -g)" /cleanup \
+      >/dev/null 2>&1 || true
+  fi
   rm -rf -- "$work_dir"
 }
 trap cleanup EXIT
