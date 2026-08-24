@@ -45,9 +45,7 @@ The first proposed Google sample MP4 returned HTTP 403 from the GitHub-hosted ru
 
 ## Browser proof
 
-Verified executable candidate: `56f6380bc8d2d18f1e4bd6228ebd0e035ebe5fe3`
-
-GitHub Actions run: `32734416922`
+The exact Candidate SHA, GitHub Actions run, job IDs, and artifact IDs for this Attempt are recorded in the Issue #3 Attempt 2 `[EXECUTION REPORT]`.
 
 Execution plane:
 
@@ -63,17 +61,14 @@ Observed MP4 browser result:
 - duration: `60.095011s`
 - readyState: `4`
 - play advanced currentTime beyond `0.5s`
-- pause held at `0.507510s`
+- pause held at `0.519827s`
 - seek target: `33.05225605s`
 - observed seek position: `33.052256s`
 - browser `/stream/` request used `Range: bytes=0-`
 
 The browser proof also played a deterministic protected MP4 fixture through the Gateway. Browser-visible Gateway requests contained no Authorization header and no Cookie, and the fixture secret did not appear in the browser evidence or server artifact. Final browser metrics showed `active_streams=0`.
 
-Accepted browser evidence artifact for the executable candidate:
-
-- artifact id: `9522666213`
-- digest: `sha256:a07593e64d63f76f3f4c32ca8395d452587ba08068c898c7085bfad7b57b094b`
+The browser evidence artifact for this Attempt is linked from the Issue #3 Attempt 2 report.
 
 ## HTTP/Range and capability behavior
 
@@ -133,17 +128,14 @@ This is the R001 bounded abort/reconnect proof. It is not a substitute for R003 
 
 ## Jobs
 
-Required R001 jobs on run `32734416922`:
+Required R001 jobs for this Attempt all completed successfully; exact run/job selectors are recorded in the Issue #3 Attempt 2 report.
 
-- J1 deterministic x64 / job `97453756490`: fmt, clippy with warnings denied, workspace unit/contract tests including accepted R007 tests — PASS
-- J2 Chromium MP4 play/pause/seek + protected secret boundary / job `97453756384` — PASS
-- J3 public MP4 Range + public HLS master/variant/segment smoke / job `97453756074` — PASS
-- J4 bounded abort/reconnect cleanup 100x / job `97453756467` — PASS
+- J1 deterministic x64: fmt, clippy with warnings denied, workspace unit/contract tests including accepted R007 tests — PASS
+- J2 Chromium MP4 play/pause/seek + protected secret boundary — PASS
+- J3 public MP4 Range + public HLS master/variant/segment smoke — PASS
+- J4 bounded abort/reconnect cleanup 100x — PASS
 
-Accepted public-smoke evidence artifact for the executable candidate:
-
-- artifact id: `9522642988`
-- digest: `sha256:2364d7c7996279d04b2d3fad45de8065af548cbdd2bcf208fa500ba038e3e857`
+The public-smoke evidence artifact for this Attempt is linked from the Issue #3 Attempt 2 report.
 
 The workflow uses read-only repository contents permission for accepted verification runs.
 
