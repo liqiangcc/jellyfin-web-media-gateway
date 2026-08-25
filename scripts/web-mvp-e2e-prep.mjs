@@ -21,7 +21,10 @@ const browser = await chromium.launch({
 function safeUrl(value) {
   try {
     const url = new URL(value);
-    return url.origin === new URL(base).origin ? `${url.pathname}${url.search ? '?[query]' : ''}` : '[external-url]';
+    if (url.origin !== new URL(base).origin) return '[external-url]';
+    const parts = url.pathname.split('/');
+    if (parts[1] === 'stream' && parts.length > 2) parts[2] = '<capability-redacted>';
+    return `${parts.join('/')}${url.search ? '?[query]' : ''}`;
   } catch (_) {
     return '[invalid-url]';
   }
