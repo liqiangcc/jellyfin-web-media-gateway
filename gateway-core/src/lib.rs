@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 use url::Url;
 use uuid::Uuid;
 
+pub mod browser;
 pub mod security;
 pub use security::{
     EgressPolicy, EgressPolicyError, EgressScope, HttpAuthorityError, HttpAuthorityPolicy,
