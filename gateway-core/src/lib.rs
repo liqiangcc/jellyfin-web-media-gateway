@@ -42,10 +42,10 @@ pub use control::{
 };
 pub use control_view::{
     ActionRequiredKind, ActionRequiredView, ActiveDisplayView, BrowserViewInput,
-    ControlFreshnessView, ControlView, ControlViewInput, DisplayViewInput, NativePanelInput,
-    NativePanelStatus, NativeSitePanelView, NowPlayingView, PendingActionView, PendingIntentInput,
-    PlaybackContextView, PlaybackControlsView, PlaybackFreshnessView, PlaybackObservationView,
-    SiteAccountStateView, SiteView, SiteViewInput,
+    ControlFreshnessView, ControlView, ControlViewInput, DisplayErrorInput, DisplayViewInput,
+    NativePanelInput, NativePanelStatus, NativeSitePanelView, NowPlayingView, PendingActionView,
+    PendingIntentInput, PlaybackContextView, PlaybackControlsView, PlaybackFreshnessView,
+    PlaybackObservationView, SiteAccountStateView, SiteView, SiteViewInput,
 };
 pub use security::{
     EgressPolicy, EgressPolicyError, EgressScope, HttpAuthorityError, HttpAuthorityPolicy,

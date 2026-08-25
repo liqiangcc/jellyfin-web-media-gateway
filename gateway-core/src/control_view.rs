@@ -9,7 +9,7 @@ use crate::ControlSnapshot;
 use crate::auth::{AccountState, PendingIntent, PendingPlaybackAction, SiteAccount};
 use crate::browser::{BrowserError, BrowserStatus};
 use display_adapter_api::{
-    DisplayAdapterError, DisplayInstance, DisplayStatus, PlaybackObservation,
+    DisplayAdapterError, DisplayContext, DisplayInstance, DisplayStatus, PlaybackObservation,
 };
 use serde::Serialize;
 use std::fmt;
@@ -117,7 +117,32 @@ pub struct NativePanelInput {
 pub struct DisplayViewInput {
     pub instance: Option<DisplayInstance>,
     pub status: Option<DisplayStatus>,
-    pub error: Option<DisplayAdapterError>,
+    pub error: Option<DisplayErrorInput>,
+}
+
+/// A display error is only meaningful for the source-owned context that
+/// produced it. The wrapper prevents an old generation from becoming a
+/// current Control action merely because its error code is still available.
+#[derive(Clone, Eq, PartialEq)]
+pub struct DisplayErrorInput {
+    pub context: DisplayContext,
+    pub error: DisplayAdapterError,
+}
+
+impl DisplayErrorInput {
+    pub fn new(context: DisplayContext, error: DisplayAdapterError) -> Self {
+        Self { context, error }
+    }
+}
+
+impl fmt::Debug for DisplayErrorInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DisplayErrorInput")
+            .field("context", &self.context)
+            .field("error", &display_error_code(&self.error))
+            .finish()
+    }
 }
 
 impl fmt::Debug for DisplayViewInput {
@@ -126,7 +151,13 @@ impl fmt::Debug for DisplayViewInput {
             .debug_struct("DisplayViewInput")
             .field("instance", &self.instance)
             .field("status", &self.status)
-            .field("error", &self.error.as_ref().map(display_error_code))
+            .field(
+                "error",
+                &self
+                    .error
+                    .as_ref()
+                    .map(|input| display_error_code(&input.error)),
+            )
             .finish()
     }
 }
@@ -149,14 +180,35 @@ impl ControlView {
     pub fn project(input: ControlViewInput) -> Self {
         let playback = &input.playback;
         let site_state = input.site.account_state.unwrap_or(AccountState::Unknown);
+        let display_instance = input
+            .display
+            .instance
+            .as_ref()
+            .filter(|instance| instance.id == playback.active_display.display_id);
+        let display_status = input
+            .display
+            .status
+            .as_ref()
+            .filter(|status| display_context_matches(&status.context, playback));
+        let display_error = input
+            .display
+            .error
+            .as_ref()
+            .filter(|error| display_context_matches(&error.context, playback));
         let active_display = ActiveDisplayView::from_input(
             &playback.active_display,
-            input.display.instance.as_ref(),
-            input.display.status.as_ref(),
-            input.display.error.as_ref(),
+            display_instance,
+            display_status,
+            display_error,
         );
         let native_site_panel = NativeSitePanelView::from_input(&input.browser.panel);
-        let action_required = action_required(site_state, &input.browser, &input.display, playback);
+        let action_required = action_required(
+            site_state,
+            &input.browser,
+            display_instance.is_some_and(|instance| instance.online),
+            display_error,
+            playback,
+        );
 
         Self {
             now_playing: NowPlayingView {
@@ -203,6 +255,9 @@ impl ControlView {
     /// caller-driven; it does not retain a previous view or create a global
     /// Control revision.
     pub fn is_fresh_for(&self, previous: &Self) -> bool {
+        if self.playback_context.session_id != previous.playback_context.session_id {
+            return false;
+        }
         let current = &self.freshness;
         let old = &previous.freshness;
         let playback_fresh = if current.playback.session_revision != old.playback.session_revision {
@@ -276,7 +331,7 @@ impl ActiveDisplayView {
         authority: &crate::ControlDisplaySnapshot,
         instance: Option<&DisplayInstance>,
         status: Option<&DisplayStatus>,
-        error: Option<&DisplayAdapterError>,
+        error: Option<&DisplayErrorInput>,
     ) -> Self {
         Self {
             display_id: authority.display_id.clone(),
@@ -289,7 +344,7 @@ impl ActiveDisplayView {
                 PlaybackObservation::Stopped => PlaybackObservationView::Stopped,
                 PlaybackObservation::Unknown => PlaybackObservationView::Unknown,
             }),
-            error_code: error.map(display_error_code),
+            error_code: error.map(|input| display_error_code(&input.error)),
             generation: authority.generation,
         }
     }
@@ -384,7 +439,8 @@ pub struct PlaybackFreshnessView {
 fn action_required(
     site_state: AccountState,
     browser: &BrowserViewInput,
-    display: &DisplayViewInput,
+    display_online: bool,
+    display_error: Option<&DisplayErrorInput>,
     playback: &ControlSnapshot,
 ) -> Option<ActionRequiredView> {
     // Precedence is presentation-only.  It never changes any domain value.
@@ -420,13 +476,13 @@ fn action_required(
         });
     }
 
-    if display.error.is_some() || !display.instance.as_ref().is_some_and(|value| value.online) {
+    if display_error.is_some() || !display_online {
         return Some(ActionRequiredView {
             kind: ActionRequiredKind::Display,
-            code: display
-                .error
-                .as_ref()
-                .map_or_else(|| "DISPLAY_OFFLINE".to_owned(), display_error_code),
+            code: display_error.map_or_else(
+                || "DISPLAY_OFFLINE".to_owned(),
+                |input| display_error_code(&input.error),
+            ),
         });
     }
 
@@ -434,6 +490,14 @@ fn action_required(
         kind: ActionRequiredKind::PlaybackHandoff,
         code: "HANDOFF_PENDING".to_owned(),
     })
+}
+
+fn display_context_matches(context: &DisplayContext, playback: &ControlSnapshot) -> bool {
+    context.session_id == playback.session_id
+        && context.item_id == playback.current_item.item_id
+        && context.item_revision == playback.current_item.item_revision
+        && context.display_id == playback.active_display.display_id
+        && context.display_generation == playback.active_display.generation
 }
 
 fn display_error_code(error: &DisplayAdapterError) -> String {
@@ -459,6 +523,7 @@ fn display_error_code(error: &DisplayAdapterError) -> String {
 mod tests {
     use super::*;
     use crate::control::{ControlDisplaySnapshot, ControlHandoffSnapshot, ControlItemSnapshot};
+    use display_adapter_api::PositionSample;
     use serde_json::to_string;
 
     fn playback(state: &str) -> ControlSnapshot {
@@ -520,6 +585,34 @@ mod tests {
         input
     }
 
+    fn display_context(
+        session_id: &str,
+        item_id: &str,
+        item_revision: u64,
+        display_id: &str,
+        display_generation: u64,
+    ) -> DisplayContext {
+        DisplayContext::new(
+            session_id,
+            item_id,
+            item_revision,
+            display_id,
+            display_generation,
+        )
+    }
+
+    fn display_status(context: DisplayContext) -> DisplayStatus {
+        DisplayStatus {
+            context,
+            observation: PlaybackObservation::Playing,
+            position: PositionSample {
+                requested_ms: None,
+                reported_ms: 12_000,
+                error_ms: None,
+            },
+        }
+    }
+
     #[test]
     fn projection_is_read_only_safe_and_preserves_domain_freshness() {
         let view = ControlView::project(base_input());
@@ -542,7 +635,10 @@ mod tests {
         input.browser.status = Some(BrowserStatus::Crashed);
         input.browser.panel.error = Some(BrowserError::PanelDisconnected);
         input.display.instance.as_mut().unwrap().online = false;
-        input.display.error = Some(DisplayAdapterError::ServerUnavailable);
+        input.display.error = Some(DisplayErrorInput::new(
+            display_context("session-1", "item-1", 4, "display-1", 6),
+            DisplayAdapterError::ServerUnavailable,
+        ));
         input.playback = playback("playing");
         let view = ControlView::project(input);
         assert_eq!(
@@ -570,7 +666,10 @@ mod tests {
 
         input.browser = BrowserViewInput::default();
         input.display.instance.as_mut().unwrap().online = false;
-        input.display.error = Some(DisplayAdapterError::TargetOffline);
+        input.display.error = Some(DisplayErrorInput::new(
+            display_context("session-1", "item-1", 4, "display-1", 6),
+            DisplayAdapterError::TargetOffline,
+        ));
         let display_failed = ControlView::project(input);
         assert_eq!(display_failed.site.site_id.as_deref(), Some("site-a"));
         assert_eq!(
@@ -594,6 +693,59 @@ mod tests {
         assert_eq!(after_update, rebuilt);
         assert!(after_update.is_fresh_for(&first));
         assert!(!first.is_fresh_for(&after_update));
+    }
+
+    #[test]
+    fn display_instance_must_match_current_active_display_identity() {
+        let mut input = base_input();
+        input.display.instance.as_mut().unwrap().id = "old-display".into();
+        input.display.instance.as_mut().unwrap().adapter_type = "stale-adapter".into();
+        input.display.instance.as_mut().unwrap().label = "stale-label".into();
+        let view = ControlView::project(input);
+        assert_eq!(view.active_display.display_id, "display-1");
+        assert_eq!(view.active_display.adapter_type, None);
+        assert_eq!(view.active_display.label, None);
+        assert!(!view.active_display.online);
+    }
+
+    #[test]
+    fn stale_or_mismatched_display_status_cannot_overwrite_observation() {
+        for context in [
+            display_context("old-session", "item-1", 4, "display-1", 6),
+            display_context("session-1", "old-item", 4, "display-1", 6),
+            display_context("session-1", "item-1", 3, "display-1", 6),
+            display_context("session-1", "item-1", 4, "display-1", 5),
+        ] {
+            let mut input = base_input();
+            input.display.status = Some(display_status(context));
+            let view = ControlView::project(input);
+            assert_eq!(view.active_display.observation, None);
+            assert_eq!(view.action_required, None);
+        }
+    }
+
+    #[test]
+    fn stale_contextual_display_error_cannot_create_current_action_required() {
+        let mut input = base_input();
+        input.display.error = Some(DisplayErrorInput::new(
+            display_context("session-1", "item-1", 4, "display-1", 5),
+            DisplayAdapterError::ServerUnavailable,
+        ));
+        let view = ControlView::project(input);
+        assert_eq!(view.active_display.error_code, None);
+        assert_eq!(view.action_required, None);
+    }
+
+    #[test]
+    fn freshness_comparison_rejects_cross_session_views() {
+        let first = ControlView::project(base_input());
+        let mut different_session = base_input();
+        different_session.playback.session_id = "session-2".into();
+        different_session.playback.session_revision = 10;
+        different_session.event_cursor = Some(30);
+        let different = ControlView::project(different_session);
+        assert!(!different.is_fresh_for(&first));
+        assert!(!first.is_fresh_for(&different));
     }
 
     #[test]

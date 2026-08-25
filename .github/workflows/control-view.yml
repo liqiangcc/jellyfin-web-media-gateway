@@ -78,6 +78,10 @@ jobs:
           cargo test -p gateway-core control_view::tests::independent_failures_keep_unrelated_sections_available -- --exact
           cargo test -p gateway-core control_view::tests::pending_intent_and_sensitive_source_boundaries_are_redacted -- --exact
           cargo test -p gateway-core control_view::tests::handoff_is_projected_as_domain_state_and_controls_are_derived -- --exact
+          cargo test -p gateway-core control_view::tests::display_instance_must_match_current_active_display_identity -- --exact
+          cargo test -p gateway-core control_view::tests::stale_or_mismatched_display_status_cannot_overwrite_observation -- --exact
+          cargo test -p gateway-core control_view::tests::stale_contextual_display_error_cannot_create_current_action_required -- --exact
+          cargo test -p gateway-core control_view::tests::freshness_comparison_rejects_cross_session_views -- --exact
           cargo test -p gateway-core --test http_security
           cargo test -p gateway-core --test security_baseline
 
