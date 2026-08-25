@@ -51,6 +51,7 @@ jobs:
         run: |
           cargo fmt --all -- --check
           cargo test -p gateway-core display_session::tests::registration_heartbeat_and_context_are_server_owned_and_bounded -- --exact
+          cargo test -p gateway-core display_session::tests::registration_liveness_is_independent_from_playback_attachment -- --exact
           cargo test -p gateway-core display_session::tests::reconnect_supersedes_old_lease_and_rejects_old_callback -- --exact
           cargo test -p gateway-core display_session::tests::expired_lease_is_offline_and_cannot_be_renewed -- --exact
 
@@ -75,8 +76,11 @@ jobs:
       - name: Stale matrix candidate isolation and HTTP boundary
         run: |
           cargo test -p gateway-core display_session::tests::stale_context_matrix_is_rejected_before_side_effects -- --exact
+          cargo test -p gateway-core display_session::tests::same_item_callback_accepts_informationally_stale_command_revision -- --exact
+          cargo test -p gateway-core display_session::tests::candidate_sequence_is_local_and_cannot_change_active_telemetry -- --exact
           cargo test -p gateway-core display_session::tests::current_position_callback_routes_through_r007_and_candidate_cannot_commit -- --exact
           cargo test -p gateway-core display_session::tests::accepted_control_view_consumes_generic_web_display_facts_without_branching -- --exact
+          cargo test -p gateway-core control_contract_tests::web_display_can_register_before_session_and_attach_by_context_lookup -- --exact
           cargo test -p gateway-core control_contract_tests::web_display_http_registration_lease_context_and_callback_are_generation_safe -- --exact
           cargo test -p gateway-core control_contract_tests::web_display_http_routes_reuse_origin_and_body_security -- --exact
           cargo test -p gateway-core --test http_security

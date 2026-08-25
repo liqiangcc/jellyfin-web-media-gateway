@@ -85,6 +85,7 @@ struct RequestRecord {
 struct HandoffTransition {
     ticket: HandoffTicket,
     candidate_position_ms: Option<u64>,
+    candidate_telemetry_sequence: u64,
 }
 
 #[derive(Debug)]
@@ -262,6 +263,7 @@ impl PlaybackSession {
                 self.handoff = Some(HandoffTransition {
                     ticket: ticket.clone(),
                     candidate_position_ms: None,
+                    candidate_telemetry_sequence: 0,
                 });
                 self.bump_session_revision();
                 Some(ticket)
@@ -360,7 +362,12 @@ impl PlaybackSession {
         true
     }
 
-    pub fn apply_candidate_callback(&mut self, ticket: &HandoffTicket, position_ms: u64) -> bool {
+    pub fn apply_candidate_callback(
+        &mut self,
+        ticket: &HandoffTicket,
+        telemetry_sequence: u64,
+        position_ms: u64,
+    ) -> bool {
         let valid = match &self.handoff {
             Some(transition) => transition.ticket == *ticket,
             None => false,
@@ -375,6 +382,10 @@ impl PlaybackSession {
         }
 
         if let Some(transition) = &mut self.handoff {
+            if telemetry_sequence <= transition.candidate_telemetry_sequence {
+                return false;
+            }
+            transition.candidate_telemetry_sequence = telemetry_sequence;
             transition.candidate_position_ms = Some(position_ms);
         }
         true

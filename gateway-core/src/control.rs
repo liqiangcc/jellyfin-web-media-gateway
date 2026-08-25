@@ -460,12 +460,11 @@ impl ControlService {
         }
         let accepted = telemetry.item_id == ticket.item_id
             && telemetry.item_revision == ticket.item_revision
-            && telemetry.telemetry_sequence > record.playback.telemetry_sequence();
-        if accepted {
-            record
-                .playback
-                .apply_candidate_callback(&ticket, telemetry.position_ms);
-        }
+            && record.playback.apply_candidate_callback(
+                &ticket,
+                telemetry.telemetry_sequence,
+                telemetry.position_ms,
+            );
         if accepted {
             append_event(
                 &mut record,

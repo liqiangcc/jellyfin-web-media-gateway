@@ -27,7 +27,9 @@ const MAX_CAPABILITIES: usize = 32;
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DisplayRegistration {
-    pub session_id: String,
+    /// Optional initial attachment. Registration/liveness is valid before a
+    /// PlaybackSession exists; context lookup is the attachment boundary.
+    pub session_id: Option<String>,
     /// This is a bounded R007 display identity. It is never used to select a
     /// generation; the current Playback snapshot remains authoritative.
     pub display_id: String,
@@ -58,7 +60,7 @@ pub struct DisplayRegistrationResponse {
     pub lease_token: String,
     pub page_lease_epoch: u64,
     pub lease_ttl_ms: u64,
-    pub context: DisplayContextResponse,
+    pub context: Option<DisplayContextResponse>,
 }
 
 impl fmt::Debug for DisplayRegistrationResponse {
@@ -206,6 +208,7 @@ impl From<&DisplaySessionError> for DisplaySessionErrorResponse {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DisplaySessionError {
     SessionNotFound,
+    SessionNotAttached,
     InvalidIdentifier(&'static str),
     InvalidLabel,
     InvalidCapabilities,
@@ -222,6 +225,7 @@ impl DisplaySessionError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::SessionNotFound => "SESSION_NOT_FOUND",
+            Self::SessionNotAttached => "SESSION_NOT_ATTACHED",
             Self::InvalidIdentifier(_) => "IDENTIFIER_INVALID",
             Self::InvalidLabel => "LABEL_INVALID",
             Self::InvalidCapabilities => "CAPABILITIES_INVALID",
@@ -238,6 +242,7 @@ impl DisplaySessionError {
     pub fn message(&self) -> &'static str {
         match self {
             Self::SessionNotFound => "playback session was not found",
+            Self::SessionNotAttached => "display is not attached to a playback session",
             Self::InvalidIdentifier(_) => "identifier is invalid",
             Self::InvalidLabel => "display label is invalid",
             Self::InvalidCapabilities => "display capabilities are invalid",
@@ -263,7 +268,6 @@ struct DisplayObservationRecord {
     context: DisplayContext,
     observation: WebDisplayObservation,
     position_ms: u64,
-    telemetry_sequence: u64,
     error: Option<WebDisplayErrorCode>,
 }
 
@@ -271,7 +275,7 @@ struct DisplayObservationRecord {
 struct DisplayRecord {
     registration_id: String,
     display_id: String,
-    session_id: String,
+    session_id: Option<String>,
     lease_token: String,
     page_lease_epoch: u64,
     expires_at: Instant,
@@ -338,77 +342,85 @@ impl DisplaySessionService {
         input: DisplayRegistration,
         now: Instant,
     ) -> Result<DisplayRegistrationResponse, DisplaySessionError> {
-        validate_identifier(&input.session_id, "session_id")?;
+        if let Some(session_id) = input.session_id.as_deref() {
+            validate_identifier(session_id, "session_id")?;
+            // An optional initial attachment is checked, but registration
+            // itself does not depend on a PlaybackSession existing.
+            control.snapshot(session_id)?;
+        }
         validate_identifier(&input.display_id, "display_id")?;
         validate_label(&input.label)?;
         validate_capabilities(&input.capabilities)?;
-        let snapshot = control.snapshot(&input.session_id)?;
         let mut registry = self.inner.lock().expect("display registry poisoned");
         let existing_registration = registry
             .registration_by_display
             .get(&input.display_id)
             .cloned();
 
-        let (registration_id, page_lease_epoch, record) = if let Some(previous_id) =
-            input.previous_registration_id.as_deref()
-        {
-            let Some(existing) = registry.records.get_mut(previous_id) else {
-                return Err(DisplaySessionError::RegistrationNotFound);
-            };
-            if input.previous_lease_token.as_deref() != Some(existing.lease_token.as_str()) {
-                return Err(DisplaySessionError::LeaseInvalid);
-            }
-            if existing.expires_at <= now {
-                return Err(DisplaySessionError::LeaseExpired);
-            }
-            if existing.session_id != input.session_id || existing.display_id != input.display_id {
-                return Err(DisplaySessionError::StaleContext);
-            }
-            existing.lease_token = new_token();
-            existing.page_lease_epoch = existing
-                .page_lease_epoch
-                .checked_add(1)
-                .expect("page lease epoch overflow");
-            existing.expires_at = now + self.lease_ttl;
-            existing.label = input.label;
-            existing.capabilities = input.capabilities;
-            (
-                existing.registration_id.clone(),
-                existing.page_lease_epoch,
-                existing.clone(),
-            )
-        } else {
-            if let Some(existing_id) = existing_registration {
-                if registry
-                    .records
-                    .get(&existing_id)
-                    .is_some_and(|record| record.expires_at > now)
-                {
-                    return Err(DisplaySessionError::AlreadyRegistered);
+        let (registration_id, page_lease_epoch, record) =
+            if let Some(previous_id) = input.previous_registration_id.as_deref() {
+                let Some(existing) = registry.records.get_mut(previous_id) else {
+                    return Err(DisplaySessionError::RegistrationNotFound);
+                };
+                if input.previous_lease_token.as_deref() != Some(existing.lease_token.as_str()) {
+                    return Err(DisplaySessionError::LeaseInvalid);
                 }
-                registry.records.remove(&existing_id);
-                registry.registration_by_display.remove(&input.display_id);
-            }
-            let registration_id = new_token();
-            let record = DisplayRecord {
-                registration_id: registration_id.clone(),
-                display_id: input.display_id.clone(),
-                session_id: input.session_id,
-                lease_token: new_token(),
-                page_lease_epoch: 1,
-                expires_at: now + self.lease_ttl,
-                label: input.label,
-                capabilities: input.capabilities,
-                observation: None,
+                if existing.expires_at <= now {
+                    return Err(DisplaySessionError::LeaseExpired);
+                }
+                if (input.session_id.is_some() && existing.session_id != input.session_id)
+                    || existing.display_id != input.display_id
+                {
+                    return Err(DisplaySessionError::StaleContext);
+                }
+                existing.lease_token = new_token();
+                existing.page_lease_epoch = existing
+                    .page_lease_epoch
+                    .checked_add(1)
+                    .expect("page lease epoch overflow");
+                existing.expires_at = now + self.lease_ttl;
+                existing.label = input.label;
+                existing.capabilities = safe_capabilities(&input.capabilities);
+                if input.session_id.is_some() {
+                    existing.session_id = input.session_id;
+                }
+                (
+                    existing.registration_id.clone(),
+                    existing.page_lease_epoch,
+                    existing.clone(),
+                )
+            } else {
+                if let Some(existing_id) = existing_registration {
+                    if registry
+                        .records
+                        .get(&existing_id)
+                        .is_some_and(|record| record.expires_at > now)
+                    {
+                        return Err(DisplaySessionError::AlreadyRegistered);
+                    }
+                    registry.records.remove(&existing_id);
+                    registry.registration_by_display.remove(&input.display_id);
+                }
+                let registration_id = new_token();
+                let record = DisplayRecord {
+                    registration_id: registration_id.clone(),
+                    display_id: input.display_id.clone(),
+                    session_id: input.session_id,
+                    lease_token: new_token(),
+                    page_lease_epoch: 1,
+                    expires_at: now + self.lease_ttl,
+                    label: input.label,
+                    capabilities: safe_capabilities(&input.capabilities),
+                    observation: None,
+                };
+                registry
+                    .registration_by_display
+                    .insert(input.display_id, registration_id.clone());
+                registry
+                    .records
+                    .insert(registration_id.clone(), record.clone());
+                (registration_id, 1, record)
             };
-            registry
-                .registration_by_display
-                .insert(input.display_id, registration_id.clone());
-            registry
-                .records
-                .insert(registration_id.clone(), record.clone());
-            (registration_id, 1, record)
-        };
 
         let response = DisplayRegistrationResponse {
             registration_id: registration_id.clone(),
@@ -416,7 +428,15 @@ impl DisplaySessionService {
             lease_token: record.lease_token.clone(),
             page_lease_epoch,
             lease_ttl_ms: self.ttl_ms(),
-            context: context_response(&record, &snapshot),
+            context: record
+                .session_id
+                .as_deref()
+                .map(|session_id| {
+                    control
+                        .snapshot(session_id)
+                        .map(|snapshot| context_response(&record, &snapshot))
+                })
+                .transpose()?,
         };
         Ok(response)
     }
@@ -463,7 +483,21 @@ impl DisplaySessionService {
         display_id: &str,
         lease_token: &str,
     ) -> Result<DisplayContextResponse, DisplaySessionError> {
-        self.context_at(control, display_id, lease_token, Instant::now())
+        self.context_for_session(control, display_id, lease_token, None)
+    }
+
+    /// Read the current Playback-owned context and, when a session is
+    /// supplied, attach this page instance to that existing session. The
+    /// supplied ID is only a lookup key; item/display generations always come
+    /// from the accepted Playback snapshot.
+    pub fn context_for_session(
+        &self,
+        control: &ControlService,
+        display_id: &str,
+        lease_token: &str,
+        session_id: Option<&str>,
+    ) -> Result<DisplayContextResponse, DisplaySessionError> {
+        self.context_at(control, display_id, lease_token, session_id, Instant::now())
     }
 
     fn context_at(
@@ -471,10 +505,14 @@ impl DisplaySessionService {
         control: &ControlService,
         display_id: &str,
         lease_token: &str,
+        session_id: Option<&str>,
         now: Instant,
     ) -> Result<DisplayContextResponse, DisplaySessionError> {
         validate_identifier(display_id, "display_id")?;
-        let registry = self.inner.lock().expect("display registry poisoned");
+        if let Some(session_id) = session_id {
+            validate_identifier(session_id, "session_id")?;
+        }
+        let mut registry = self.inner.lock().expect("display registry poisoned");
         let registration_id = registry
             .registration_by_display
             .get(display_id)
@@ -482,10 +520,18 @@ impl DisplaySessionService {
             .ok_or(DisplaySessionError::RegistrationNotFound)?;
         let record = registry
             .records
-            .get(&registration_id)
+            .get_mut(&registration_id)
             .ok_or(DisplaySessionError::RegistrationNotFound)?;
         validate_lease(record, lease_token, now)?;
-        let snapshot = control.snapshot(&record.session_id)?;
+        let session_id = session_id
+            .or(record.session_id.as_deref())
+            .ok_or(DisplaySessionError::SessionNotAttached)?;
+        let snapshot = control.snapshot(session_id)?;
+        if record.session_id.as_deref() != Some(session_id) {
+            // This is registry attachment state only. It cannot alter
+            // Playback's active display or display generation authority.
+            record.session_id = Some(session_id.to_owned());
+        }
         Ok(context_response(record, &snapshot))
     }
 
@@ -526,16 +572,25 @@ impl DisplaySessionService {
             .get_mut(&registration_id)
             .ok_or(DisplaySessionError::RegistrationNotFound)?;
         validate_lease(record, &callback.lease_token, now)?;
-        if record.session_id != callback.session_id || record.display_id != callback.display_id {
+        if record.session_id.as_deref() != Some(callback.session_id.as_str())
+            || record.display_id != callback.display_id
+        {
             return Err(DisplaySessionError::StaleContext);
         }
 
         // Keep the registry lock while checking and applying the R007 callback.
         // A reconnect therefore cannot supersede the lease between validation
         // and the side effect.
-        let snapshot = control.snapshot(&record.session_id)?;
-        if snapshot.session_revision != callback.session_revision
-            || snapshot.current_item.item_id != callback.item_id
+        let session_id = record
+            .session_id
+            .as_deref()
+            .ok_or(DisplaySessionError::SessionNotAttached)?;
+        let snapshot = control.snapshot(session_id)?;
+        // `session_revision` is command-CAS freshness, not display telemetry
+        // freshness. A callback may carry an older informational revision
+        // after a same-item command; item/display/lease identity below is the
+        // authoritative callback boundary.
+        if snapshot.current_item.item_id != callback.item_id
             || snapshot.current_item.item_revision != callback.item_revision
         {
             return Err(DisplaySessionError::StaleContext);
@@ -551,24 +606,12 @@ impl DisplaySessionService {
             return Err(DisplaySessionError::StaleContext);
         }
 
-        if is_candidate
-            && callback.telemetry_sequence.is_some_and(|sequence| {
-                record.observation.as_ref().is_some_and(|observation| {
-                    observation.context.display_id == callback.display_id
-                        && observation.context.display_generation == callback.display_generation
-                        && sequence <= observation.telemetry_sequence
-                })
-            })
-        {
-            return Err(DisplaySessionError::StaleTelemetry);
-        }
-
         let telemetry_accepted = if let (Some(sequence), Some(position_ms)) =
             (callback.telemetry_sequence, callback.position_ms)
         {
             let accepted = if is_current {
                 control.apply_display_position_telemetry(
-                    &record.session_id,
+                    session_id,
                     DisplayPositionTelemetry {
                         display_id: &callback.display_id,
                         display_generation: callback.display_generation,
@@ -580,7 +623,7 @@ impl DisplaySessionService {
                 )?
             } else {
                 control.apply_candidate_position_telemetry(
-                    &record.session_id,
+                    session_id,
                     DisplayPositionTelemetry {
                         display_id: &callback.display_id,
                         display_generation: callback.display_generation,
@@ -614,12 +657,9 @@ impl DisplaySessionService {
             context,
             observation,
             position_ms: callback.position_ms.unwrap_or(snapshot.position_ms),
-            telemetry_sequence: callback
-                .telemetry_sequence
-                .unwrap_or(snapshot.telemetry_sequence),
             error,
         });
-        let current = control.snapshot(&record.session_id)?;
+        let current = control.snapshot(record.session_id.as_deref().expect("validated session"))?;
         Ok(DisplayCallbackResponse {
             accepted: true,
             candidate_observation: is_candidate,
@@ -657,7 +697,11 @@ impl DisplaySessionService {
             .records
             .get(&registration_id)
             .ok_or(DisplaySessionError::RegistrationNotFound)?;
-        let snapshot = control.snapshot(&record.session_id)?;
+        let session_id = record
+            .session_id
+            .as_deref()
+            .ok_or(DisplaySessionError::SessionNotAttached)?;
+        let snapshot = control.snapshot(session_id)?;
         let active = snapshot.active_display.display_id == record.display_id;
         let instance = active.then(|| DisplayInstance {
             id: record.display_id.clone(),
@@ -738,7 +782,7 @@ fn context_response(record: &DisplayRecord, snapshot: &ControlSnapshot) -> Displ
         handoff: snapshot.handoff.clone(),
         is_current_display,
         is_handoff_candidate,
-        media_capabilities: vec!["video".into(), "audio".into(), "subtitles".into()],
+        media_capabilities: record.capabilities.clone(),
     }
 }
 
@@ -793,6 +837,14 @@ fn validate_capabilities(values: &[String]) -> Result<(), DisplaySessionError> {
     Ok(())
 }
 
+fn safe_capabilities(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .filter(|value| matches!(value.as_str(), "video" | "audio"))
+        .cloned()
+        .collect()
+}
+
 fn new_token() -> String {
     Uuid::new_v4().simple().to_string()
 }
@@ -804,7 +856,7 @@ mod tests {
 
     fn registration(session_id: &str, display_id: &str) -> DisplayRegistration {
         DisplayRegistration {
-            session_id: session_id.into(),
+            session_id: Some(session_id.into()),
             display_id: display_id.into(),
             label: "Living room browser".into(),
             capabilities: vec!["video".into(), "audio".into()],
@@ -846,7 +898,13 @@ mod tests {
             .unwrap();
         assert_ne!(registered.registration_id, "display-a");
         assert_eq!(registered.page_lease_epoch, 1);
-        assert!(registered.context.is_current_display);
+        assert!(
+            registered
+                .context
+                .as_ref()
+                .expect("attached context")
+                .is_current_display
+        );
         assert!(!format!("{registered:?}").contains("secret-media"));
 
         let heartbeat = service
@@ -863,11 +921,145 @@ mod tests {
                 &control,
                 "display-a",
                 &registered.lease_token,
+                None,
                 now + Duration::from_secs(1),
             )
             .unwrap();
         assert_eq!(context.display_generation, 1);
         assert!(!format!("{context:?}").contains("secret-media"));
+    }
+
+    #[test]
+    fn registration_liveness_is_independent_from_playback_attachment() {
+        let control = ControlService::default();
+        let session = control.seed_test_session("item-a", "media", "display-a");
+        let service = DisplaySessionService::default();
+        let registered = service
+            .register(
+                &control,
+                DisplayRegistration {
+                    session_id: None,
+                    display_id: "display-a".into(),
+                    label: "Idle browser".into(),
+                    capabilities: vec!["video".into(), "audio".into(), "subtitles".into()],
+                    previous_registration_id: None,
+                    previous_lease_token: None,
+                },
+            )
+            .unwrap();
+        assert!(registered.context.is_none());
+        assert_eq!(
+            service.context(&control, "display-a", &registered.lease_token),
+            Err(DisplaySessionError::SessionNotAttached)
+        );
+
+        let context = service
+            .context_for_session(
+                &control,
+                "display-a",
+                &registered.lease_token,
+                Some(&session),
+            )
+            .unwrap();
+        assert_eq!(context.session_id, session);
+        assert_eq!(context.media_capabilities, vec!["video", "audio"]);
+    }
+
+    #[test]
+    fn same_item_callback_accepts_informationally_stale_command_revision() {
+        let control = ControlService::default();
+        let session = control.seed_test_session("item-a", "media", "display-a");
+        let service = DisplaySessionService::default();
+        let registered = service
+            .register(&control, registration(&session, "display-a"))
+            .unwrap();
+        let context = registered.context.as_ref().expect("attached context");
+        let old_revision = context.session_revision;
+        control
+            .execute_command(
+                &session,
+                ControlCommandRequest {
+                    request_id: "pause-before-telemetry".into(),
+                    expected_session_revision: Some(old_revision),
+                    command: ControlCommand::Pause,
+                },
+            )
+            .unwrap();
+
+        let mut callback = callback(
+            registered.lease_token,
+            context,
+            Some(WebDisplayObservation::Paused),
+            Some(2_000),
+            Some(1),
+        );
+        callback.session_revision = old_revision;
+        assert!(
+            service
+                .callback(&control, callback)
+                .unwrap()
+                .telemetry_accepted
+        );
+    }
+
+    #[test]
+    fn candidate_sequence_is_local_and_cannot_change_active_telemetry() {
+        let control = ControlService::default();
+        let session = control.seed_test_session("item-a", "media", "display-a");
+        let service = DisplaySessionService::default();
+        let active = service
+            .register(&control, registration(&session, "display-a"))
+            .unwrap();
+        service
+            .callback(
+                &control,
+                callback(
+                    active.lease_token,
+                    active.context.as_ref().expect("attached context"),
+                    Some(WebDisplayObservation::Playing),
+                    Some(100_000),
+                    Some(100),
+                ),
+            )
+            .unwrap();
+        let handoff = control
+            .execute_command(
+                &session,
+                ControlCommandRequest {
+                    request_id: "local-candidate-sequence".into(),
+                    expected_session_revision: Some(0),
+                    command: ControlCommand::BeginHandoff {
+                        target_display_id: "display-b".into(),
+                    },
+                },
+            )
+            .unwrap();
+        let candidate = service
+            .register(&control, registration(&session, "display-b"))
+            .unwrap();
+        let mut context = candidate.context.expect("attached context");
+        context.session_revision = handoff.session_revision;
+        let result = service
+            .callback(
+                &control,
+                callback(
+                    candidate.lease_token,
+                    &context,
+                    Some(WebDisplayObservation::Playing),
+                    Some(101_000),
+                    Some(1),
+                ),
+            )
+            .unwrap();
+        assert!(result.candidate_observation);
+        let snapshot = control.snapshot(&session).unwrap();
+        assert_eq!(snapshot.position_ms, 100_000);
+        assert_eq!(snapshot.telemetry_sequence, 100);
+        assert_eq!(snapshot.active_display.display_id, "display-a");
+        assert_eq!(
+            snapshot.handoff.unwrap().candidate_position_ms,
+            Some(101_000)
+        );
     }
 
     #[test]
@@ -879,7 +1071,7 @@ mod tests {
         let first = service
             .register_at(&control, registration(&session, "display-a"), now)
             .unwrap();
-        let old_context = first.context.clone();
+        let old_context = first.context.clone().expect("attached context");
         let second = service
             .register_at(
                 &control,
@@ -914,7 +1106,7 @@ mod tests {
         let registered = service
             .register(&control, registration(&session, "display-a"))
             .unwrap();
-        let context = registered.context;
+        let context = registered.context.expect("attached context");
         let mut wrong_session = callback(
             registered.lease_token.clone(),
             &context,
@@ -945,12 +1137,6 @@ mod tests {
                 context.item_revision,
                 context.display_generation + 1,
                 context.session_revision,
-            ),
-            (
-                context.item_id.as_str(),
-                context.item_revision,
-                context.display_generation,
-                context.session_revision + 1,
             ),
         ] {
             let result = service.callback(
@@ -987,7 +1173,7 @@ mod tests {
                 &control,
                 callback(
                     registered.lease_token.clone(),
-                    &registered.context,
+                    registered.context.as_ref().expect("attached context"),
                     Some(WebDisplayObservation::Playing),
                     Some(12_000),
                     Some(1),
@@ -1013,7 +1199,7 @@ mod tests {
         let target = service
             .register(&control, registration(&session, "display-b"))
             .unwrap();
-        let mut candidate = target.context;
+        let mut candidate = target.context.expect("attached context");
         candidate.session_revision = handoff.session_revision;
         let candidate_result = service
             .callback(
@@ -1052,7 +1238,7 @@ mod tests {
                 &control,
                 callback(
                     registered.lease_token,
-                    &registered.context,
+                    registered.context.as_ref().expect("attached context"),
                     Some(WebDisplayObservation::Playing),
                     Some(5_000),
                     Some(1),

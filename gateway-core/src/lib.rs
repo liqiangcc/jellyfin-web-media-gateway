@@ -928,6 +928,11 @@ struct DisplayHeartbeatRequest {
     lease_token: String,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+struct DisplayContextQuery {
+    session_id: Option<String>,
+}
+
 const DISPLAY_LEASE_HEADER: &str = "x-display-lease";
 
 async fn control_session_snapshot_handler(
@@ -1045,6 +1050,7 @@ async fn display_heartbeat_handler(
 async fn display_context_handler(
     State(state): State<Arc<GatewayState>>,
     Path(display_id): Path<String>,
+    Query(query): Query<DisplayContextQuery>,
     headers: HeaderMap,
 ) -> Response {
     let Some(lease_token) = headers
@@ -1053,10 +1059,12 @@ async fn display_context_handler(
     else {
         return display_session_error_response(DisplaySessionError::LeaseInvalid);
     };
-    match state
-        .display_sessions
-        .context(&state.control, &display_id, lease_token)
-    {
+    match state.display_sessions.context_for_session(
+        &state.control,
+        &display_id,
+        lease_token,
+        query.session_id.as_deref(),
+    ) {
         Ok(response) => Json(response).into_response(),
         Err(error) => display_session_error_response(error),
     }
@@ -1093,9 +1101,9 @@ fn display_json_rejection(rejection: JsonRejection) -> Response {
 
 fn display_session_error_response(error: DisplaySessionError) -> Response {
     let status = match error {
-        DisplaySessionError::SessionNotFound | DisplaySessionError::RegistrationNotFound => {
-            StatusCode::NOT_FOUND
-        }
+        DisplaySessionError::SessionNotFound
+        | DisplaySessionError::SessionNotAttached
+        | DisplaySessionError::RegistrationNotFound => StatusCode::NOT_FOUND,
         DisplaySessionError::LeaseInvalid | DisplaySessionError::LeaseExpired => {
             StatusCode::UNAUTHORIZED
         }

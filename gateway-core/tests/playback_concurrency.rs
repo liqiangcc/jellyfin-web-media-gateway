@@ -206,7 +206,7 @@ fn handoff_candidate_callback_before_commit_has_no_global_authority() {
     let ticket = result.transition.expect("handoff ticket");
     let revision_after_reservation = session.session_revision();
 
-    assert!(session.apply_candidate_callback(&ticket, 12_345));
+    assert!(session.apply_candidate_callback(&ticket, 1, 12_345));
     assert_eq!(session.active_display(), &original_display);
     assert_eq!(session.position_ms(), 0);
     assert_eq!(session.candidate_position_ms(), Some(12_345));
@@ -231,7 +231,7 @@ fn handoff_timeout_invalidates_candidate() {
 
     assert!(session.expire_handoff(&ticket));
     let revision_after_expiry = session.session_revision();
-    assert!(!session.apply_candidate_callback(&ticket, 9_999));
+    assert!(!session.apply_candidate_callback(&ticket, 1, 9_999));
     assert!(!session.commit_handoff(&ticket));
     assert_eq!(session.active_display(), &original_display);
     assert_eq!(session.session_revision(), revision_after_expiry);
@@ -253,11 +253,11 @@ fn handoff_cancel_invalidates_candidate() {
         .expect("reserve handoff");
     let ticket = result.transition.expect("handoff ticket");
 
-    assert!(session.apply_candidate_callback(&ticket, 4_321));
+    assert!(session.apply_candidate_callback(&ticket, 1, 4_321));
     assert!(session.cancel_handoff(&ticket));
     let revision_after_cancel = session.session_revision();
 
-    assert!(!session.apply_candidate_callback(&ticket, 9_999));
+    assert!(!session.apply_candidate_callback(&ticket, 2, 9_999));
     assert!(!session.commit_handoff(&ticket));
     assert_eq!(session.active_display(), &original_display);
     assert_eq!(session.position_ms(), 0);
@@ -278,7 +278,7 @@ fn cancelled_candidate_generation_is_not_reused_after_same_target_handoff() {
         ))
         .expect("reserve old handoff");
     let old_ticket = old_result.transition.expect("old handoff ticket");
-    assert!(session.apply_candidate_callback(&old_ticket, 4_321));
+    assert!(session.apply_candidate_callback(&old_ticket, 1, 4_321));
     assert!(session.cancel_handoff(&old_ticket));
 
     let new_result = session
@@ -311,7 +311,7 @@ fn cancelled_candidate_generation_is_not_reused_after_same_target_handoff() {
         1,
         99_000,
     ));
-    assert!(!session.apply_candidate_callback(&old_ticket, 99_000));
+    assert!(!session.apply_candidate_callback(&old_ticket, 2, 99_000));
     assert_eq!(session.position_ms(), 0);
     assert_eq!(session.telemetry_sequence(), 0);
     assert_eq!(session.session_revision(), revision_after_commit);
@@ -331,7 +331,7 @@ fn expired_candidate_generation_is_not_reused_after_same_target_handoff() {
         ))
         .expect("reserve old handoff");
     let old_ticket = old_result.transition.expect("old handoff ticket");
-    assert!(session.apply_candidate_callback(&old_ticket, 5_432));
+    assert!(session.apply_candidate_callback(&old_ticket, 1, 5_432));
     assert!(session.expire_handoff(&old_ticket));
 
     let new_result = session
@@ -364,7 +364,7 @@ fn expired_candidate_generation_is_not_reused_after_same_target_handoff() {
         1,
         88_000,
     ));
-    assert!(!session.apply_candidate_callback(&old_ticket, 88_000));
+    assert!(!session.apply_candidate_callback(&old_ticket, 2, 88_000));
     assert_eq!(session.position_ms(), 0);
     assert_eq!(session.telemetry_sequence(), 0);
     assert_eq!(session.session_revision(), revision_after_commit);
@@ -387,7 +387,7 @@ fn old_source_callback_after_handoff_commit_is_ignored() {
         ))
         .expect("reserve handoff");
     let ticket = result.transition.expect("handoff ticket");
-    assert!(session.apply_candidate_callback(&ticket, 1_234));
+    assert!(session.apply_candidate_callback(&ticket, 1, 1_234));
     assert!(session.commit_handoff(&ticket));
 
     assert_eq!(session.active_display().display_id, "display-b");

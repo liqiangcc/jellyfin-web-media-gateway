@@ -530,6 +530,52 @@ async fn web_display_http_registration_lease_context_and_callback_are_generation
 }
 
 #[tokio::test]
+async fn web_display_can_register_before_session_and_attach_by_context_lookup() {
+    let service = service();
+    let registered = json_body(
+        service
+            .router()
+            .oneshot(json_post(
+                "/api/v1/displays/register",
+                json!({
+                    "display_id": "idle-display",
+                    "label": "Idle browser",
+                    "capabilities": ["video", "audio", "subtitles"]
+                }),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(registered["context"].is_null());
+    let session_id =
+        service
+            .control()
+            .seed_test_session("item-a", "media-not-public", "idle-display");
+    let context = service
+        .router()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/displays/idle-display/context?session_id={session_id}"
+                ))
+                .header(header::HOST, HOST)
+                .header(
+                    "x-display-lease",
+                    registered["lease_token"].as_str().unwrap(),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(context.status(), StatusCode::OK);
+    let context = json_body(context).await;
+    assert_eq!(context["session_id"], session_id);
+    assert_eq!(context["media_capabilities"], json!(["video", "audio"]));
+}
+
+#[tokio::test]
 async fn web_display_http_routes_reuse_origin_and_body_security() {
     let service = service();
     let cross_origin = Request::builder()
