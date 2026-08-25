@@ -82,9 +82,11 @@ async function testDisplay() {
     const dimensions = await page.locator('#display-shell').evaluate(element => ({ width: element.clientWidth, height: element.clientHeight }));
     if (dimensions.width !== width || dimensions.height !== height) throw new Error(`viewport shell mismatch at ${width}x${height}`);
   }
-  await page.locator('#retry').focus();
+  await page.locator('#activate').focus();
   await page.keyboard.press('Tab');
-  if (!(await page.evaluate(() => document.activeElement?.tagName))?.includes('BUTTON')) throw new Error('remote focus traversal left essential controls');
+  if (await page.evaluate(() => document.activeElement?.id) !== 'fullscreen') throw new Error('remote focus traversal skipped fullscreen control');
+  await page.keyboard.press('Tab');
+  if (await page.evaluate(() => document.activeElement?.id) !== 'retry') throw new Error('remote focus traversal skipped reconnect control');
   await page.locator('#fullscreen').click();
   if (!(await page.locator('#status').textContent()).includes('Fullscreen unavailable')) throw new Error('fullscreen degradation was not explicit');
   await page.locator('#activate').click();
