@@ -368,8 +368,12 @@ fn is_public_v6(ip: Ipv6Addr) -> bool {
 pub enum SiteAccessError {
     Expired,
     SiteMismatch,
+    AccountMismatch,
     HostNotAllowed,
     InvalidUrl,
+    SessionNotBound,
+    SessionExpired,
+    StaleSession,
 }
 
 /// A capability contains scope metadata only. Raw Vault material is never part
@@ -381,6 +385,7 @@ pub struct SiteAccessCapability {
     allowed_hosts: HashSet<String>,
     expires_at: Instant,
     capability_id: String,
+    session_id: Option<String>,
 }
 
 impl SiteAccessCapability {
@@ -396,11 +401,31 @@ impl SiteAccessCapability {
             account_ref,
             allowed_hosts: allowed_hosts
                 .into_iter()
-                .map(|host| host.to_ascii_lowercase())
+                .map(|host| host.trim_end_matches('.').to_ascii_lowercase())
                 .collect(),
             expires_at: Instant::now() + ttl,
             capability_id: capability_id.into(),
+            session_id: None,
         }
+    }
+
+    pub fn issue_for_session(
+        site_id: impl Into<String>,
+        account_ref: impl Into<String>,
+        allowed_hosts: impl IntoIterator<Item = String>,
+        capability_id: impl Into<String>,
+        session_id: impl Into<String>,
+        ttl: Duration,
+    ) -> Self {
+        let mut capability = Self::issue(
+            site_id,
+            Some(account_ref.into()),
+            allowed_hosts,
+            capability_id,
+            ttl,
+        );
+        capability.session_id = Some(session_id.into());
+        capability
     }
 
     pub fn site_id(&self) -> &str {
@@ -415,15 +440,49 @@ impl SiteAccessCapability {
         &self.capability_id
     }
 
+    pub fn allowed_hosts(&self) -> impl Iterator<Item = &str> {
+        self.allowed_hosts.iter().map(String::as_str)
+    }
+
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
     pub fn authorize(&self, site_id: &str, url: &Url) -> Result<(), SiteAccessError> {
+        self.authorize_for_account(site_id, None, url)
+    }
+
+    pub fn authorize_for_account(
+        &self,
+        site_id: &str,
+        account_ref: Option<&str>,
+        url: &Url,
+    ) -> Result<(), SiteAccessError> {
         if self.expires_at <= Instant::now() {
             return Err(SiteAccessError::Expired);
         }
         if self.site_id != site_id {
             return Err(SiteAccessError::SiteMismatch);
         }
+        if let Some(expected_account) = self.account_ref.as_deref() {
+            if let Some(account_ref) = account_ref
+                && account_ref != expected_account
+            {
+                return Err(SiteAccessError::AccountMismatch);
+            }
+        }
+        if !matches!(url.scheme(), "http" | "https")
+            || url.username() != ""
+            || url.password().is_some()
+            || url.host_str().is_none()
+        {
+            return Err(SiteAccessError::InvalidUrl);
+        }
         let host = url.host_str().ok_or(SiteAccessError::InvalidUrl)?;
-        if !self.allowed_hosts.contains(&host.to_ascii_lowercase()) {
+        if !self
+            .allowed_hosts
+            .contains(&host.trim_end_matches('.').to_ascii_lowercase())
+        {
             return Err(SiteAccessError::HostNotAllowed);
         }
         Ok(())
