@@ -3,6 +3,9 @@ use std::fmt;
 use std::sync::Arc;
 use url::Url;
 
+pub mod conformance;
+pub mod security;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourceLocator {
     pub site_id: String,
@@ -53,6 +56,9 @@ pub struct RecognizeResult {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AdapterError {
     InvalidInput,
+    InvalidAdapterOutput,
+    InvalidLocatorOwnership,
+    InvalidResolvedMedia,
     UnsupportedLocator,
     NoMatch,
     AmbiguousMatch,
@@ -69,6 +75,7 @@ impl fmt::Display for AdapterError {
 impl std::error::Error for AdapterError {}
 
 pub trait SiteAdapter: Send + Sync {
+    fn site_id(&self) -> &'static str;
     fn plugin_id(&self) -> &'static str;
     fn recognize(&self, input: &str) -> Result<RecognizeResult, AdapterError>;
     fn resolve(&self, locator: &SourceLocator) -> Result<ResolvedMedia, AdapterError>;
@@ -82,6 +89,9 @@ pub struct SiteAdapterRegistry {
 
 impl SiteAdapterRegistry {
     pub fn register(&mut self, adapter: Arc<dyn SiteAdapter>) -> Result<(), AdapterError> {
+        if adapter.site_id().is_empty() || adapter.plugin_id().is_empty() {
+            return Err(AdapterError::InvalidAdapterOutput);
+        }
         if !self.ids.insert(adapter.plugin_id().to_string()) {
             return Err(AdapterError::DuplicatePlugin);
         }
@@ -93,6 +103,7 @@ impl SiteAdapterRegistry {
         let mut candidates = Vec::new();
         for adapter in &self.adapters {
             let result = adapter.recognize(input)?;
+            validate_recognition(adapter.as_ref(), &result)?;
             if result.matched {
                 candidates.push(result);
             }
@@ -118,7 +129,31 @@ impl SiteAdapterRegistry {
             .iter()
             .find(|a| a.plugin_id() == locator.plugin_id)
             .ok_or(AdapterError::PluginNotFound)?;
-        adapter.resolve(locator)
+        if locator.site_id != adapter.site_id() {
+            return Err(AdapterError::InvalidLocatorOwnership);
+        }
+        let media = adapter.resolve(locator)?;
+        conformance::validate_resolved_media(&media)
+            .map_err(|_| AdapterError::InvalidResolvedMedia)?;
+        Ok(media)
+    }
+}
+
+fn validate_recognition(
+    adapter: &dyn SiteAdapter,
+    result: &RecognizeResult,
+) -> Result<(), AdapterError> {
+    if result.site_id != adapter.site_id() || result.plugin_id != adapter.plugin_id() {
+        return Err(AdapterError::InvalidAdapterOutput);
+    }
+    match (result.matched, result.locator.as_ref()) {
+        (false, None) => Ok(()),
+        (true, Some(locator))
+            if locator.site_id == adapter.site_id() && locator.plugin_id == adapter.plugin_id() =>
+        {
+            Ok(())
+        }
+        _ => Err(AdapterError::InvalidAdapterOutput),
     }
 }
 
@@ -128,6 +163,10 @@ mod tests {
 
     struct Fake(&'static str, u16);
     impl SiteAdapter for Fake {
+        fn site_id(&self) -> &'static str {
+            "fake"
+        }
+
         fn plugin_id(&self) -> &'static str {
             self.0
         }
