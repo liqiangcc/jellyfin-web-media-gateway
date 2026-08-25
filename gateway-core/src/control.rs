@@ -1,8 +1,10 @@
 use crate::playback::{Command, CommandEnvelope, CommandError, PlaybackSession, PlaybackState};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
+#[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+#[cfg(test)]
 use uuid::Uuid;
 
 pub const MAX_CONTROL_BODY_BYTES: usize = 32 * 1024;
@@ -220,6 +222,7 @@ struct SessionRecord {
 #[derive(Clone, Debug)]
 pub struct ControlService {
     sessions: Arc<RwLock<HashMap<String, Arc<Mutex<SessionRecord>>>>>,
+    #[cfg(test)]
     next_session_id: Arc<AtomicU64>,
     event_limit: usize,
 }
@@ -238,6 +241,7 @@ impl ControlService {
         );
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            #[cfg(test)]
             next_session_id: Arc::new(AtomicU64::new(1)),
             event_limit,
         }
@@ -245,7 +249,8 @@ impl ControlService {
 
     /// Trusted service/test hook. Production callers receive opaque IDs from
     /// the service; no HTTP route accepts caller-selected media or sessions.
-    pub fn seed_test_session(
+    #[cfg(test)]
+    pub(crate) fn seed_test_session(
         &self,
         item_id: impl Into<String>,
         resolved_media: impl Into<String>,

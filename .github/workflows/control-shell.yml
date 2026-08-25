@@ -52,10 +52,10 @@ jobs:
           cargo clippy --workspace --all-targets -- -D warnings
       - name: Snapshot, command, reconnect, and telemetry contracts
         run: |
-          cargo test -p gateway-core --test control_contract sessions_are_isolated_and_snapshot_is_canonical_non_secret_view -- --exact
-          cargo test -p gateway-core --test control_contract http_commands_preserve_r007_idempotency_cas_and_event_semantics -- --exact
-          cargo test -p gateway-core --test control_contract reconnect_requires_snapshot_when_cursor_history_is_expired -- --exact
-          cargo test -p gateway-core --test control_contract telemetry_updates_observation_without_command_revision_and_rejects_stale_callbacks -- --exact
+          cargo test -p gateway-core control_contract_tests::sessions_are_isolated_and_snapshot_is_canonical_non_secret_view -- --exact
+          cargo test -p gateway-core control_contract_tests::http_commands_preserve_r007_idempotency_cas_and_event_semantics -- --exact
+          cargo test -p gateway-core control_contract_tests::reconnect_requires_snapshot_when_cursor_history_is_expired -- --exact
+          cargo test -p gateway-core control_contract_tests::telemetry_updates_observation_without_command_revision_and_rejects_stale_callbacks -- --exact
 
   j2-control-negatives:
     name: J2 Control concurrency and security negatives
@@ -77,8 +77,8 @@ jobs:
           toolchain: stable
       - name: Concurrent CAS and deterministic rejection tests
         run: |
-          cargo test -p gateway-core --test control_contract two_controls_through_http_cannot_commit_against_one_old_revision -- --exact
-          cargo test -p gateway-core --test control_contract command_input_is_bounded_structured_and_does_not_accept_url_authority -- --exact
+          cargo test -p gateway-core control_contract_tests::two_controls_through_http_cannot_commit_against_one_old_revision -- --exact
+          cargo test -p gateway-core control_contract_tests::command_input_is_bounded_structured_and_does_not_accept_url_authority -- --exact
       - name: Existing HTTP and security boundary regressions
         run: |
           cargo test -p gateway-core --test http_security

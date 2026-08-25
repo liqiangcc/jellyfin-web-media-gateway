@@ -25,6 +25,8 @@ use uuid::Uuid;
 pub mod auth;
 pub mod browser;
 pub mod control;
+#[cfg(test)]
+mod control_contract_tests;
 pub mod security;
 pub use auth::{
     AccountState, AuthBoundaryError, CandidateValidation, CleanupResult, PendingIntent,
@@ -510,7 +512,8 @@ impl GatewayService {
         self.state.store.max_entries
     }
 
-    pub fn control(&self) -> ControlService {
+    #[cfg(test)]
+    pub(crate) fn control(&self) -> ControlService {
         self.state.control.clone()
     }
 

@@ -1,9 +1,10 @@
-use axum::body::{Body, to_bytes};
-use axum::http::{Request, StatusCode, header};
-use gateway_core::{
+use crate::{
     ControlCommand, ControlCommandRequest, ControlEventKind, ControlService, GatewayService,
 };
+use axum::body::{Body, to_bytes};
+use axum::http::{Request, StatusCode, header};
 use serde_json::{Value, json};
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Barrier;
 use tower::ServiceExt;
@@ -53,6 +54,16 @@ fn command(request_id: &str, expected: u64, command: Value) -> Value {
     })
 }
 
+#[test]
+fn public_control_surface_has_no_caller_selected_media_seed_api() {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let control_source = std::fs::read_to_string(manifest.join("src/control.rs")).unwrap();
+    let lib_source = std::fs::read_to_string(manifest.join("src/lib.rs")).unwrap();
+    assert!(!control_source.contains("pub fn seed_test_session("));
+    assert!(control_source.contains("pub(crate) fn seed_test_session("));
+    assert!(!lib_source.contains("pub fn control(&self)"));
+}
+
 #[tokio::test]
 async fn sessions_are_isolated_and_snapshot_is_canonical_non_secret_view() {
     let service = service();
@@ -78,7 +89,6 @@ async fn sessions_are_isolated_and_snapshot_is_canonical_non_secret_view() {
             .unwrap(),
     )
     .await;
-
     assert_eq!(first_snapshot["session_id"], first);
     assert_eq!(first_snapshot["current_item"]["item_id"], "item-a");
     assert_eq!(first_snapshot["session_revision"], 0);
@@ -104,8 +114,7 @@ async fn http_commands_preserve_r007_idempotency_cas_and_event_semantics() {
         .control()
         .seed_test_session("item-a", "media-secret", "display-a");
     let path = format!("/api/v1/sessions/{session_id}/commands");
-
-    for (request_id, expected, command_body) in [
+    for (request_id, expected, body) in [
         ("play-1", 0, json!({"type":"play"})),
         ("pause-1", 1, json!({"type":"pause"})),
         ("seek-1", 2, json!({"type":"seek", "position_ms": 1200})),
@@ -116,15 +125,16 @@ async fn http_commands_preserve_r007_idempotency_cas_and_event_semantics() {
             json!({"type":"begin_handoff", "target_display_id":"display-b"}),
         ),
     ] {
-        let response = service
-            .router()
-            .oneshot(json_post(
-                &path,
-                command(request_id, expected, command_body),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK, "{request_id}");
+        assert_eq!(
+            service
+                .router()
+                .oneshot(json_post(&path, command(request_id, expected, body)))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK,
+            "{request_id}"
+        );
     }
 
     let duplicate = service
