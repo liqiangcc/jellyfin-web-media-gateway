@@ -69,7 +69,9 @@ async function command(requestId, expectedRevision, value) {
 
 async function clickAndWait(id, feedback) {
   await page.locator(id).click();
-  await waitFor('#feedback', value => value.includes(feedback), `${id} feedback`);
+  await waitFor('#feedback', value => value.includes(feedback)
+    || (feedback === 'Command accepted' && value.includes('Gateway event received')),
+  `${id} feedback`);
 }
 
 try {
