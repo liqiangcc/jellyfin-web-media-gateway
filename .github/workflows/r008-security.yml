@@ -73,11 +73,12 @@ jobs:
         run: |
           cargo test -p gateway-core --test security_baseline -- --nocapture 2>&1 | tee security-test.log
           cargo test -p gateway-core --test http_security -- --nocapture 2>&1 | tee http-security-test.log
+          cargo test -p gateway-core --test auth_contract -- --nocapture 2>&1 | tee auth-contract-test.log
           cargo test -p gateway-core --test media_gateway -- --nocapture 2>&1 | tee media-test.log
       - name: Verify fixture output contains no secret sentinel
         run: |
           ! rg -n 'r008-fixture-secret|fixture-test-secret|r001-fixture-secret' \
-            security-test.log http-security-test.log media-test.log
+            security-test.log http-security-test.log auth-contract-test.log media-test.log
 
   j3-workflow-trust:
     name: J3 target workflow trust and deferred boundaries
