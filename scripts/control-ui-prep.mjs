@@ -118,6 +118,10 @@ try {
   evidence.negatives.revisionConflict = true;
   await page.unroute(`**/api/v1/sessions/${sessionId}/events*`);
 
+  // Rebuild a playing view before exercising request identity reuse so the
+  // UI-generated Pause command is enabled by the fresh server projection.
+  await clickAndWait('#play', 'Command accepted');
+
   // Force the UI-generated request id to be reused, then make the transport
   // return the real R007 REQUEST_ID_MISMATCH response from the same endpoint.
   const fixedNow = 1700000000000;
