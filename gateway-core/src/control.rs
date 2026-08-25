@@ -224,6 +224,13 @@ pub enum ControlLookupError {
     NotFound,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ControlPublicationError {
+    AlreadyExists,
+    #[cfg(test)]
+    InjectedFailure,
+}
+
 #[derive(Debug)]
 struct SessionRecord {
     playback: PlaybackSession,
@@ -236,6 +243,8 @@ pub struct ControlService {
     sessions: Arc<RwLock<HashMap<String, Arc<Mutex<SessionRecord>>>>>,
     #[cfg(test)]
     next_session_id: Arc<AtomicU64>,
+    #[cfg(test)]
+    fail_next_publication: Arc<std::sync::atomic::AtomicBool>,
     event_limit: usize,
 }
 
@@ -255,6 +264,8 @@ impl ControlService {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(test)]
             next_session_id: Arc::new(AtomicU64::new(1)),
+            #[cfg(test)]
+            fail_next_publication: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             event_limit,
         }
     }
@@ -290,6 +301,39 @@ impl ControlService {
             .expect("control sessions poisoned")
             .insert(session_id.clone(), Arc::new(Mutex::new(record)));
         session_id
+    }
+
+    /// Publish a fully prepared session. Callers must obtain all external
+    /// capabilities before entering this method; the single map insertion is
+    /// the PlaybackSession publication boundary.
+    pub(crate) fn publish_prepared_session(
+        &self,
+        session_id: String,
+        item_id: String,
+        media_descriptor: String,
+        display_id: String,
+    ) -> Result<(), ControlPublicationError> {
+        #[cfg(test)]
+        if self.fail_next_publication.swap(false, Ordering::SeqCst) {
+            return Err(ControlPublicationError::InjectedFailure);
+        }
+
+        let mut sessions = self.sessions.write().expect("control sessions poisoned");
+        if sessions.contains_key(&session_id) {
+            return Err(ControlPublicationError::AlreadyExists);
+        }
+        let record = SessionRecord {
+            playback: PlaybackSession::new(item_id, media_descriptor, display_id),
+            next_cursor: 0,
+            events: VecDeque::with_capacity(self.event_limit),
+        };
+        sessions.insert(session_id, Arc::new(Mutex::new(record)));
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_publication(&self) {
+        self.fail_next_publication.store(true, Ordering::SeqCst);
     }
 
     fn session(&self, session_id: &str) -> Result<Arc<Mutex<SessionRecord>>, ControlLookupError> {
