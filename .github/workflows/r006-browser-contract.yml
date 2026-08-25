@@ -1,0 +1,78 @@
+name: r006-browser-contract
+
+on:
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'gateway-core/**'
+      - 'site-adapter-api/**'
+      - 'plugins/**'
+      - '.github/workflows/r006-browser-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  j1-contract:
+    name: J1 deterministic Browser Worker contract suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+      - name: Format and lint
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run C1-C5/C7/C8 deterministic fake-worker suite
+        run: cargo test -p gateway-core --lib browser::tests -- --nocapture
+
+  j2-security-failure:
+    name: J2 navigation, stale capability, panel, and cleanup suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Run security and failure cases
+        run: |
+          cargo test -p gateway-core --lib browser::tests::navigation_uses_r008_policy_and_denies_local_file_and_private_targets -- --exact --nocapture
+          cargo test -p gateway-core --lib browser::tests::configured_local_service_is_explicit_and_not_user_selectable -- --exact --nocapture
+          cargo test -p gateway-core --lib browser::tests::profile_refs_are_opaque_and_expiry_is_rejected_and_cleaned -- --exact --nocapture
+          cargo test -p gateway-core --lib browser::tests::debug_does_not_expose_sensitive_input_or_command_payloads -- --exact --nocapture
+          cargo test -p gateway-core --lib browser::tests::debug_does_not_expose_sensitive_event_navigation_urls -- --exact --nocapture
+          cargo test -p gateway-core --lib browser::tests::panel_is_bound_short_lived_reconnectable_and_deny_by_default -- --exact --nocapture
+          cargo test -p gateway-core --lib browser::tests::panel_expiry_and_worker_failure_disconnect_and_cleanup -- --exact --nocapture
+          cargo test -p gateway-core --lib browser::tests::cancel_crash_timeout_and_close_have_explicit_outcomes_and_cleanup -- --exact --nocapture
+      - name: Check generic boundary has no concrete-site knowledge
+        run: |
+          ! rg -n -i 'bilibili|youtube|dom selector' gateway-core/src/browser.rs
+          ! rg -n -i 'cpu|rss|thermal|always.?on|on.?demand|pool size|phone' gateway-core/src/browser.rs
+
+  j3-regressions:
+    name: J3 workspace and accepted R007/R008 regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+      - name: Run exact-Candidate workspace regressions
+        run: cargo test --workspace --all-targets

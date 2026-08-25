@@ -22,6 +22,7 @@ use url::Url;
 use uuid::Uuid;
 
 pub mod auth;
+pub mod browser;
 pub mod security;
 pub use auth::{
     AccountState, AuthBoundaryError, CandidateValidation, CleanupResult, PendingIntent,
