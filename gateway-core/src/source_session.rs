@@ -14,7 +14,7 @@ use site_adapter_api::{
     AdapterError, MediaProtection, ResolvedMedia, SiteAdapterRegistry, StreamProtocol,
 };
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -102,6 +102,7 @@ struct CreationRecord {
 pub(crate) struct SourceSessionService {
     registry: Arc<SiteAdapterRegistry>,
     creations: Arc<Mutex<HashMap<String, CreationRecord>>>,
+    media_views: Arc<RwLock<HashMap<String, SessionMediaView>>>,
 }
 
 impl SourceSessionService {
@@ -109,7 +110,24 @@ impl SourceSessionService {
         Self {
             registry,
             creations: Arc::new(Mutex::new(HashMap::new())),
+            media_views: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    pub(crate) fn media_for_snapshot(
+        &self,
+        snapshot: &crate::ControlSnapshot,
+    ) -> Option<SessionMediaView> {
+        let media = self
+            .media_views
+            .read()
+            .expect("source media views poisoned")
+            .get(&snapshot.session_id)
+            .cloned()?;
+        (media.item_id == snapshot.current_item.item_id
+            && media.item_revision == snapshot.current_item.item_revision
+            && media.media_generation == snapshot.current_item.media_generation)
+            .then_some(media)
     }
 
     pub(crate) fn create(
@@ -253,6 +271,10 @@ impl SourceSessionService {
                 return internal_failure();
             }
         };
+        self.media_views
+            .write()
+            .expect("source media views poisoned")
+            .insert(session_id.clone(), media_view.clone());
         CreationOutcome::Success(Box::new(CreateSessionResponse {
             request_id: request.request_id.clone(),
             session_id,

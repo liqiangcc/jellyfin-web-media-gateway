@@ -87,6 +87,14 @@ pub struct DisplayHeartbeatResponse {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct LiveDisplayView {
+    pub display_id: String,
+    pub label: String,
+    pub capabilities: Vec<String>,
+    pub online: bool,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct DisplayContextResponse {
     pub registration_id: String,
     pub session_id: String,
@@ -472,6 +480,26 @@ impl DisplaySessionService {
         self.heartbeat_at(display_id, lease_token, Instant::now())
     }
 
+    /// Return only bounded selector metadata for live Web Displays. Lease
+    /// tokens, page epochs and Playback generations are deliberately absent.
+    pub fn live_displays(&self) -> Vec<LiveDisplayView> {
+        let now = Instant::now();
+        let registry = self.inner.lock().expect("display registry poisoned");
+        let mut displays: Vec<_> = registry
+            .records
+            .values()
+            .filter(|record| record.expires_at > now)
+            .map(|record| LiveDisplayView {
+                display_id: record.display_id.clone(),
+                label: record.label.clone(),
+                capabilities: record.capabilities.clone(),
+                online: true,
+            })
+            .collect();
+        displays.sort_by(|left, right| left.display_id.cmp(&right.display_id));
+        displays
+    }
+
     fn heartbeat_at(
         &self,
         display_id: &str,
@@ -521,6 +549,22 @@ impl DisplaySessionService {
         session_id: Option<&str>,
     ) -> Result<DisplayContextResponse, DisplaySessionError> {
         self.context_at(control, display_id, lease_token, session_id, Instant::now())
+    }
+
+    /// Attach a live page to the session currently authoritative for its
+    /// display. The session and display facts still come from Playback; the
+    /// registry only records the page's server-side attachment for callbacks.
+    pub fn context_for_active_display(
+        &self,
+        control: &ControlService,
+        display_id: &str,
+        lease_token: &str,
+    ) -> Result<DisplayContextResponse, DisplaySessionError> {
+        validate_identifier(display_id, "display_id")?;
+        let snapshot = control
+            .snapshot_for_active_display(display_id)
+            .map_err(DisplaySessionError::from)?;
+        self.context_for_session(control, display_id, lease_token, Some(&snapshot.session_id))
     }
 
     fn context_at(
