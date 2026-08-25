@@ -28,6 +28,7 @@ pub mod control;
 #[cfg(test)]
 mod control_contract_tests;
 pub mod control_view;
+pub mod display_session;
 pub mod security;
 pub use auth::{
     AccountState, AuthBoundaryError, CandidateValidation, CleanupResult, PendingIntent,
@@ -38,7 +39,7 @@ pub use control::{
     ControlCommand, ControlCommandError, ControlCommandRequest, ControlCommandResponse,
     ControlDisplaySnapshot, ControlErrorResponse, ControlEvent, ControlEventKind,
     ControlEventsResponse, ControlHandoffSnapshot, ControlItemSnapshot, ControlLookupError,
-    ControlService, ControlSnapshot, ControlValidationError,
+    ControlService, ControlSnapshot, ControlValidationError, DisplayPositionTelemetry,
 };
 pub use control_view::{
     ActionRequiredKind, ActionRequiredView, ActiveDisplayView, BrowserViewInput,
@@ -46,6 +47,11 @@ pub use control_view::{
     NativePanelInput, NativePanelStatus, NativeSitePanelView, NowPlayingView, PendingActionView,
     PendingIntentInput, PlaybackContextView, PlaybackControlsView, PlaybackFreshnessView,
     PlaybackObservationView, SiteAccountStateView, SiteView, SiteViewInput,
+};
+pub use display_session::{
+    DisplayCallback, DisplayCallbackResponse, DisplayContextResponse, DisplayHeartbeatResponse,
+    DisplayRegistration, DisplayRegistrationResponse, DisplaySessionError,
+    DisplaySessionErrorResponse, DisplaySessionService, WebDisplayErrorCode, WebDisplayObservation,
 };
 pub use security::{
     EgressPolicy, EgressPolicyError, EgressScope, HttpAuthorityError, HttpAuthorityPolicy,
@@ -201,6 +207,7 @@ struct GatewayState {
     fixture_mp4: Arc<RwLock<Option<PathBuf>>>,
     probe: Arc<ProbeStore>,
     control: ControlService,
+    display_sessions: DisplaySessionService,
 }
 
 #[derive(Clone)]
@@ -429,6 +436,7 @@ impl GatewayService {
                 fixture_mp4: Arc::new(RwLock::new(None)),
                 probe: Arc::new(ProbeStore::default()),
                 control: ControlService::default(),
+                display_sessions: DisplaySessionService::default(),
             }),
         }
     }
@@ -546,6 +554,19 @@ impl GatewayService {
             .route(
                 "/api/v1/sessions/{session_id}/events",
                 get(control_session_events_handler),
+            )
+            .route("/api/v1/displays/register", post(display_register_handler))
+            .route(
+                "/api/v1/displays/{display_id}/heartbeat",
+                post(display_heartbeat_handler),
+            )
+            .route(
+                "/api/v1/displays/{display_id}/context",
+                get(display_context_handler),
+            )
+            .route(
+                "/api/v1/displays/{display_id}/callback",
+                post(display_callback_handler),
             )
             .route("/api/v1/display-probe/state", get(probe_state_handler))
             .route("/api/v1/display-probe/events", get(probe_events_handler))
@@ -901,6 +922,14 @@ struct ControlEventsQuery {
     after: Option<u64>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DisplayHeartbeatRequest {
+    lease_token: String,
+}
+
+const DISPLAY_LEASE_HEADER: &str = "x-display-lease";
+
 async fn control_session_snapshot_handler(
     State(state): State<Arc<GatewayState>>,
     Path(session_id): Path<String>,
@@ -979,6 +1008,107 @@ async fn control_session_command_handler(
 
 fn control_error_response(status: StatusCode, error: ControlErrorResponse) -> Response {
     (status, Json(error)).into_response()
+}
+
+async fn display_register_handler(
+    State(state): State<Arc<GatewayState>>,
+    request: Result<Json<DisplayRegistration>, JsonRejection>,
+) -> Response {
+    let input = match request {
+        Ok(Json(input)) => input,
+        Err(rejection) => return display_json_rejection(rejection),
+    };
+    match state.display_sessions.register(&state.control, input) {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => display_session_error_response(error),
+    }
+}
+
+async fn display_heartbeat_handler(
+    State(state): State<Arc<GatewayState>>,
+    Path(display_id): Path<String>,
+    request: Result<Json<DisplayHeartbeatRequest>, JsonRejection>,
+) -> Response {
+    let input = match request {
+        Ok(Json(input)) => input,
+        Err(rejection) => return display_json_rejection(rejection),
+    };
+    match state
+        .display_sessions
+        .heartbeat(&display_id, &input.lease_token)
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => display_session_error_response(error),
+    }
+}
+
+async fn display_context_handler(
+    State(state): State<Arc<GatewayState>>,
+    Path(display_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(lease_token) = headers
+        .get(DISPLAY_LEASE_HEADER)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return display_session_error_response(DisplaySessionError::LeaseInvalid);
+    };
+    match state
+        .display_sessions
+        .context(&state.control, &display_id, lease_token)
+    {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => display_session_error_response(error),
+    }
+}
+
+async fn display_callback_handler(
+    State(state): State<Arc<GatewayState>>,
+    Path(display_id): Path<String>,
+    request: Result<Json<DisplayCallback>, JsonRejection>,
+) -> Response {
+    let Json(callback) = match request {
+        Ok(value) => value,
+        Err(rejection) => return display_json_rejection(rejection),
+    };
+    if callback.display_id != display_id {
+        return display_session_error_response(DisplaySessionError::StaleContext);
+    }
+    // The callback service validates the lease and all R007 context before
+    // accepting any telemetry or generic status/error observation.
+    match state.display_sessions.callback(&state.control, callback) {
+        Ok(response) => Json(response).into_response(),
+        Err(error) => display_session_error_response(error),
+    }
+}
+
+fn display_json_rejection(rejection: JsonRejection) -> Response {
+    let response = rejection.into_response();
+    if response.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        response
+    } else {
+        display_session_error_response(DisplaySessionError::InvalidCallback)
+    }
+}
+
+fn display_session_error_response(error: DisplaySessionError) -> Response {
+    let status = match error {
+        DisplaySessionError::SessionNotFound | DisplaySessionError::RegistrationNotFound => {
+            StatusCode::NOT_FOUND
+        }
+        DisplaySessionError::LeaseInvalid | DisplaySessionError::LeaseExpired => {
+            StatusCode::UNAUTHORIZED
+        }
+        DisplaySessionError::AlreadyRegistered | DisplaySessionError::StaleContext => {
+            StatusCode::CONFLICT
+        }
+        DisplaySessionError::StaleTelemetry => StatusCode::CONFLICT,
+        DisplaySessionError::InvalidIdentifier(_)
+        | DisplaySessionError::InvalidLabel
+        | DisplaySessionError::InvalidCapabilities
+        | DisplaySessionError::InvalidCallback => StatusCode::BAD_REQUEST,
+    };
+    (status, Json(DisplaySessionErrorResponse::from(&error))).into_response()
 }
 
 async fn probe_state_handler(State(state): State<Arc<GatewayState>>) -> Json<ProbeStateSnapshot> {
