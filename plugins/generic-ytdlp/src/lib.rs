@@ -707,7 +707,7 @@ mod tests {
         let executable =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-ytdlp");
         let limits = ProcessLimits {
-            timeout: Duration::from_millis(25),
+            timeout: Duration::from_millis(300),
             max_stdout_bytes: 512,
             max_stderr_bytes: 512,
         };

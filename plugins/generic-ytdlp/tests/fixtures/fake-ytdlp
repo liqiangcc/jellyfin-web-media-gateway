@@ -5,7 +5,7 @@ set -eu
 # only to exercise the plugin's argv, timeout and output-boundary tests.
 source_url="${4:-}"
 case "$source_url" in
-  *mode=timeout*) sleep 1 ;;
+  *mode=timeout*) sleep 2 ;;
   *mode=stdout-overflow*) yes x | head -c 4096 ;;
   *mode=stderr-overflow*) yes x | head -c 4096 >&2 ;;
   *mode=nonzero*) printf '%s' 'fixture stderr secret' >&2; exit 7 ;;
