@@ -230,7 +230,9 @@ pub fn assert_error_diagnostics_bounded(sentinels: &[&str]) -> Result<(), Confor
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ResolvedStream, SiteAdapterRegistry, SourceLocator, StreamProtocol};
+    use crate::{
+        ResolvedStream, ResolvedSubtitle, SiteAdapterRegistry, SourceLocator, StreamProtocol,
+    };
     use std::collections::BTreeMap;
     use std::sync::Arc;
     use url::Url;
@@ -327,6 +329,59 @@ mod tests {
             assert!(is_secret_header(name, value));
         }
         assert!(!is_secret_header("Accept", "video/mp4"));
+    }
+
+    #[test]
+    fn subtitle_contract_rejects_local_unsupported_and_secret_inputs() {
+        let base = ResolvedMedia {
+            title: "fixture".into(),
+            source_site: "fixture-site".into(),
+            streams: vec![ResolvedStream {
+                id: "primary".into(),
+                protocol: StreamProtocol::HttpFile,
+                url: Url::parse("https://example.test/video.mp4").unwrap(),
+                public_headers: BTreeMap::new(),
+                upstream_access_ref: None,
+            }],
+            subtitles: Vec::new(),
+            protection: MediaProtection::Clear,
+        };
+        for subtitle in [
+            ResolvedSubtitle {
+                id: "local".into(),
+                url: Url::parse("file:///tmp/captions.vtt").unwrap(),
+                content_type: "text/vtt".into(),
+                language: None,
+                label: None,
+                public_headers: BTreeMap::new(),
+                upstream_access_ref: None,
+            },
+            ResolvedSubtitle {
+                id: "unsupported".into(),
+                url: Url::parse("https://example.test/captions.srt").unwrap(),
+                content_type: "text/srt".into(),
+                language: None,
+                label: None,
+                public_headers: BTreeMap::new(),
+                upstream_access_ref: None,
+            },
+            ResolvedSubtitle {
+                id: "secret".into(),
+                url: Url::parse("https://example.test/captions.vtt").unwrap(),
+                content_type: "text/vtt".into(),
+                language: None,
+                label: None,
+                public_headers: BTreeMap::from([(
+                    "Authorization".into(),
+                    "Bearer fixture-secret".into(),
+                )]),
+                upstream_access_ref: None,
+            },
+        ] {
+            let mut candidate = base.clone();
+            candidate.subtitles.push(subtitle);
+            assert!(validate_resolved_media(&candidate).is_err());
+        }
     }
 
     #[test]

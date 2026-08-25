@@ -830,7 +830,7 @@ const ENTRY_PAGE: &str = r##"<!doctype html>
 const TV_DISPLAY_PAGE: &str = r##"<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>TV Web Display</title>
 <style>:root{color-scheme:dark;font-family:system-ui,sans-serif}*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;background:#000}body{overflow:hidden}#display-shell{position:relative;width:100vw;height:100vh;min-height:100dvh;background:#000}#player{width:100%;height:100%;object-fit:contain;background:#000}#overlay{position:absolute;inset:auto 3vw 3vh;max-width:48rem;padding:1rem 1.25rem;border:1px solid #65718a;border-radius:.7rem;background:#101827ee}#overlay.playing{opacity:0;pointer-events:none;transition:opacity .35s}#overlay:hover,#overlay:focus-within{opacity:1;pointer-events:auto}h1{font-size:clamp(1.1rem,2.4vw,2rem);margin:.1rem 0 .4rem}p{margin:.35rem 0}button{min-height:2.8rem;margin:.35rem .35rem .2rem 0;padding:.5rem .8rem;color:#fff;background:#263b62;border:1px solid #8aa9e8;border-radius:.35rem;font:inherit}button:focus-visible{outline:3px solid #ffca55;outline-offset:2px}#diagnostics{max-height:11rem;overflow:auto;white-space:pre-wrap;font-size:.75rem;color:#b8c5d8}.ok{color:#b8f0bd}.warn{color:#ffd58a}</style></head>
-<body><main id="display-shell" class="viewport-immersive"><video id="player" playsinline preload="auto" __MEDIA_ATTRIBUTE__></video><track id="subtitle-track" kind="subtitles" default __SUBTITLE_ATTRIBUTE__><section id="overlay" aria-live="polite"><h1>TV Web Display</h1><p id="status">Waiting for a Gateway playback session.</p><p id="capabilities"></p><button id="activate" type="button">Press OK to play</button><button id="fullscreen" type="button">Try Fullscreen</button><button id="retry" type="button">Reconnect Display</button><details><summary>Display diagnostics</summary><pre id="diagnostics">starting…</pre></details></section></main>
+<body><main id="display-shell" class="viewport-immersive"><video id="player" playsinline preload="auto" __MEDIA_ATTRIBUTE__><track id="subtitle-track" kind="subtitles" default __SUBTITLE_ATTRIBUTE__></video><section id="overlay" aria-live="polite"><h1>TV Web Display</h1><p id="status">Waiting for a Gateway playback session.</p><p id="capabilities"></p><button id="activate" type="button">Press OK to play</button><button id="fullscreen" type="button">Try Fullscreen</button><button id="retry" type="button">Reconnect Display</button><details><summary>Display diagnostics</summary><pre id="diagnostics">starting…</pre></details></section></main>
 <script>(()=>{
   const player=document.querySelector('#player'), shell=document.querySelector('#display-shell'), overlay=document.querySelector('#overlay'), status=document.querySelector('#status'), diagnostics=document.querySelector('#diagnostics'), capabilities=document.querySelector('#capabilities'), track=document.querySelector('#subtitle-track');
   const storageKey='gateway.tv.display.v1'; let registration=null, heartbeatTimer=null, reconnecting=false, mediaError=null;
@@ -1764,6 +1764,68 @@ mod unit {
                 Err(GatewayError::SecretHeader)
             ));
         }
+    }
+
+    #[test]
+    fn subtitle_view_issues_only_an_opaque_gateway_path() {
+        let service = GatewayService::new(8);
+        let subtitle = ResolvedSubtitle {
+            id: "english".into(),
+            url: Url::parse("https://example.test/captions.vtt").unwrap(),
+            content_type: "text/vtt".into(),
+            language: Some("en".into()),
+            label: Some("English".into()),
+            public_headers: BTreeMap::new(),
+            upstream_access_ref: Some("server-only-ref".into()),
+        };
+        let view = service
+            .subtitle_track_view(
+                &subtitle,
+                Binding::new("session", "item", 1, "english"),
+                EgressScope::PublicWeb,
+                Duration::from_secs(30),
+            )
+            .unwrap();
+        assert_eq!(view.format, "webvtt");
+        assert!(view.gateway_path.starts_with("/stream/"));
+        assert!(!view.gateway_path.contains("example.test"));
+        assert!(!view.gateway_path.contains("server-only-ref"));
+    }
+
+    #[test]
+    fn subtitle_view_rejects_unsupported_content_and_secret_headers() {
+        let service = GatewayService::new(8);
+        let mut subtitle = ResolvedSubtitle {
+            id: "bad".into(),
+            url: Url::parse("https://example.test/captions.srt").unwrap(),
+            content_type: "text/srt".into(),
+            language: None,
+            label: None,
+            public_headers: BTreeMap::new(),
+            upstream_access_ref: None,
+        };
+        assert!(matches!(
+            service.subtitle_track_view(
+                &subtitle,
+                Binding::new("session", "item", 1, "bad"),
+                EgressScope::PublicWeb,
+                Duration::from_secs(30),
+            ),
+            Err(GatewayError::UnsupportedSubtitleContentType)
+        ));
+        subtitle.content_type = "text/vtt".into();
+        subtitle
+            .public_headers
+            .insert("Authorization".into(), "Bearer fixture-secret".into());
+        assert!(matches!(
+            service.subtitle_track_view(
+                &subtitle,
+                Binding::new("session", "item", 1, "bad"),
+                EgressScope::PublicWeb,
+                Duration::from_secs(30),
+            ),
+            Err(GatewayError::SecretHeader)
+        ));
     }
 
     #[test]

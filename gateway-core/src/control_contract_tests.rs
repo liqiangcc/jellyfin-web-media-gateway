@@ -572,7 +572,10 @@ async fn web_display_can_register_before_session_and_attach_by_context_lookup() 
     assert_eq!(context.status(), StatusCode::OK);
     let context = json_body(context).await;
     assert_eq!(context["session_id"], session_id);
-    assert_eq!(context["media_capabilities"], json!(["video", "audio"]));
+    assert_eq!(
+        context["media_capabilities"],
+        json!(["video", "audio", "subtitles"])
+    );
 }
 
 #[tokio::test]

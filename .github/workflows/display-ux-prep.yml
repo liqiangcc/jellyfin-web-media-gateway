@@ -1,0 +1,148 @@
+name: display-ux-prep
+
+on:
+  push:
+    branches:
+      - "worker/**"
+  pull_request:
+    paths:
+      - "gateway-core/**"
+      - "site-adapter-api/**"
+      - "plugins/generic-direct/**"
+      - "plugins/generic-ytdlp/**"
+      - "scripts/display-ux-prep.mjs"
+      - ".github/workflows/display-ux-prep.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: "Exact candidate commit to verify"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: display-ux-prep-${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+
+jobs:
+  j1-browser-happy:
+    name: J1 smart entry display subtitle and focus
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Build gateway
+        run: cargo build -p gateway-core --bin r001-server
+      - name: Install deterministic fixtures
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=320x180:rate=24 -f lavfi -i sine=frequency=440:sample_rate=44100 -t 5 -c:v libx264 -pix_fmt yuv420p -c:a aac -movflags +faststart /tmp/display-ux-prep.mp4
+          printf '%s\n' 'WEBVTT' '' '00:00.000 --> 00:02.000' 'Deterministic Gateway subtitle' > /tmp/display-ux-prep.vtt
+      - name: Start Gateway fixture server
+        run: |
+          R001_FIXTURE_MP4=/tmp/display-ux-prep.mp4 R001_FIXTURE_VTT=/tmp/display-ux-prep.vtt R002_USE_FIXTURE_DISPLAY=1 ./target/debug/r001-server >server.log 2>&1 &
+          echo $! > server.pid
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8787/healthz && exit 0; sleep 1; done
+          cat server.log
+          exit 1
+      - name: Hosted Chromium happy-path evidence
+        run: |
+          npm install --no-save playwright-core@1.55.0
+          BASE_URL=http://127.0.0.1:8787 DISPLAY_UX_MODE=happy node scripts/display-ux-prep.mjs
+      - name: Secret scan
+        run: |
+          ! grep -Eiq 'Bearer[[:space:]]+|Cookie|Authorization|r001-fixture-secret|fixture-secret|/tmp/' display-ux-prep-proof.json server.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: display-ux-prep-j1
+          path: |
+            display-ux-prep-proof.json
+            server.log
+
+  j2-browser-negative:
+    name: J2 browser degradation and Secret negatives
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - run: cargo build -p gateway-core --bin r001-server
+      - name: Install fixture and browser tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=320x180:rate=24 -f lavfi -i sine=frequency=440:sample_rate=44100 -t 5 -c:v libx264 -pix_fmt yuv420p -c:a aac -movflags +faststart /tmp/display-ux-negative.mp4
+          printf '%s\n' 'WEBVTT' '' '00:00.000 --> 00:02.000' 'Negative-matrix subtitle' > /tmp/display-ux-negative.vtt
+          R001_FIXTURE_MP4=/tmp/display-ux-negative.mp4 R001_FIXTURE_VTT=/tmp/display-ux-negative.vtt R002_USE_FIXTURE_DISPLAY=1 ./target/debug/r001-server >server.log 2>&1 &
+          echo $! > server.pid
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8787/healthz && exit 0; sleep 1; done
+          cat server.log
+          exit 1
+      - name: Hosted Chromium negative/degradation evidence
+        run: |
+          npm install --no-save playwright-core@1.55.0
+          BASE_URL=http://127.0.0.1:8787 DISPLAY_UX_MODE=negative node scripts/display-ux-prep.mjs
+      - name: Verify negative evidence is clean
+        run: |
+          ! grep -Eiq 'Bearer[[:space:]]+|Cookie|Authorization|r001-fixture-secret|fixture-secret|/tmp/' display-ux-prep-proof.json server.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: display-ux-prep-j2
+          path: |
+            display-ux-prep-proof.json
+            server.log
+
+  j3-regressions:
+    name: J3 workspace and accepted authority regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt,clippy
+      - name: Exact-Candidate workspace regressions
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace --all-targets
+          cargo test -p gateway-core --test playback_concurrency
+          cargo test -p gateway-core --test media_gateway
+          cargo test -p gateway-core --test http_security
+          cargo test -p gateway-core --test security_baseline
+          bash scripts/check-core-site-boundary.sh
