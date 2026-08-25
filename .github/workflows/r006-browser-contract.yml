@@ -51,6 +51,7 @@ jobs:
           cargo test -p gateway-core --lib browser::tests::configured_local_service_is_explicit_and_not_user_selectable -- --exact --nocapture
           cargo test -p gateway-core --lib browser::tests::profile_refs_are_opaque_and_expiry_is_rejected_and_cleaned -- --exact --nocapture
           cargo test -p gateway-core --lib browser::tests::debug_does_not_expose_sensitive_input_or_command_payloads -- --exact --nocapture
+          cargo test -p gateway-core --lib browser::tests::debug_does_not_expose_sensitive_event_navigation_urls -- --exact --nocapture
           cargo test -p gateway-core --lib browser::tests::panel_is_bound_short_lived_reconnectable_and_deny_by_default -- --exact --nocapture
           cargo test -p gateway-core --lib browser::tests::panel_expiry_and_worker_failure_disconnect_and_cleanup -- --exact --nocapture
           cargo test -p gateway-core --lib browser::tests::cancel_crash_timeout_and_close_have_explicit_outcomes_and_cleanup -- --exact --nocapture

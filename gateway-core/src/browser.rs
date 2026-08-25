@@ -329,14 +329,24 @@ pub enum InputKind {
 
 /// Generic, versioned facts emitted by a Browser Worker.  There are no
 /// selectors, private API names, login-success rules, or site media concepts.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct BrowserEvent {
     pub version: u16,
     pub sequence: u64,
     pub kind: BrowserEventKind,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl fmt::Debug for BrowserEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BrowserEvent")
+            .field("version", &self.version)
+            .field("sequence", &self.sequence)
+            .field("kind", &self.kind)
+            .finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub enum BrowserEventKind {
     WorkerOpened { session: BrowserSessionId },
     ProfileAttached,
@@ -353,6 +363,56 @@ pub enum BrowserEventKind {
     WorkerClosed,
     WorkerCrashed,
     WorkerTimedOut,
+}
+
+impl fmt::Debug for BrowserEventKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::WorkerOpened { session } => f
+                .debug_struct("BrowserEventKind::WorkerOpened")
+                .field("session", session)
+                .finish(),
+            Self::ProfileAttached => f.write_str("BrowserEventKind::ProfileAttached"),
+            Self::ProfileDetached => f.write_str("BrowserEventKind::ProfileDetached"),
+            Self::NavigationStarted { url } => {
+                let safe_url = redacted_url(url);
+                f.debug_struct("BrowserEventKind::NavigationStarted")
+                    .field("url", &safe_url)
+                    .finish()
+            }
+            Self::NavigationChanged { url, title } => {
+                let safe_url = redacted_url(url);
+                let safe_title = title.as_ref().map(|_| "[REDACTED]");
+                f.debug_struct("BrowserEventKind::NavigationChanged")
+                    .field("url", &safe_url)
+                    .field("title", &safe_title)
+                    .finish()
+            }
+            Self::Loading => f.write_str("BrowserEventKind::Loading"),
+            Self::Ready => f.write_str("BrowserEventKind::Ready"),
+            Self::InputAccepted { kind } => f
+                .debug_struct("BrowserEventKind::InputAccepted")
+                .field("kind", kind)
+                .finish(),
+            Self::InputResult { kind, accepted } => f
+                .debug_struct("BrowserEventKind::InputResult")
+                .field("kind", kind)
+                .field("accepted", accepted)
+                .finish(),
+            Self::NetworkDenied => f.write_str("BrowserEventKind::NetworkDenied"),
+            Self::Error { code } => f
+                .debug_struct("BrowserEventKind::Error")
+                .field("code", code)
+                .finish(),
+            Self::OperationCancelled { operation_id } => f
+                .debug_struct("BrowserEventKind::OperationCancelled")
+                .field("operation_id", operation_id)
+                .finish(),
+            Self::WorkerClosed => f.write_str("BrowserEventKind::WorkerClosed"),
+            Self::WorkerCrashed => f.write_str("BrowserEventKind::WorkerCrashed"),
+            Self::WorkerTimedOut => f.write_str("BrowserEventKind::WorkerTimedOut"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1189,5 +1249,36 @@ mod tests {
         );
         let navigate = BrowserCommand::Navigate { request };
         assert!(!format!("{navigate:?}").contains("url-secret-sentinel"));
+    }
+
+    #[test]
+    fn debug_does_not_expose_sensitive_event_navigation_urls() {
+        let sentinel = "event-secret-sentinel-7c42";
+        let started = BrowserEvent {
+            version: BROWSER_EVENT_VERSION,
+            sequence: 1,
+            kind: BrowserEventKind::NavigationStarted {
+                url: Url::parse(&format!(
+                    "https://example.test/watch?token={sentinel}#fragment"
+                ))
+                .unwrap(),
+            },
+        };
+        let changed = BrowserEvent {
+            version: BROWSER_EVENT_VERSION,
+            sequence: 2,
+            kind: BrowserEventKind::NavigationChanged {
+                url: Url::parse(&format!(
+                    "https://example.test/watch?token={sentinel}#fragment"
+                ))
+                .unwrap(),
+                title: Some("event-title-sentinel".into()),
+            },
+        };
+        let diagnostics = format!("{started:?} {changed:?}");
+        assert!(!diagnostics.contains(sentinel));
+        assert!(!diagnostics.contains("event-title-sentinel"));
+        assert!(diagnostics.contains("https://example.test/watch"));
+        assert!(diagnostics.contains("[REDACTED]"));
     }
 }
