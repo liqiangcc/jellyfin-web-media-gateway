@@ -87,6 +87,15 @@ impl fmt::Debug for BrowserSessionId {
 #[derive(Clone, Eq, Hash, PartialEq)]
 pub struct ProfileAttachmentRef(String);
 
+impl ProfileAttachmentRef {
+    /// Only trusted Core/Vault infrastructure may issue production refs.  A
+    /// plugin or browser-facing caller cannot construct this type.
+    #[allow(dead_code)]
+    pub(crate) fn from_vault_issued(token: impl Into<String>) -> Self {
+        Self(token.into())
+    }
+}
+
 impl fmt::Debug for ProfileAttachmentRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("ProfileAttachmentRef")
@@ -130,19 +139,26 @@ pub enum BrowserStatus {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct BrowserOperationId(u64);
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct BrowserNavigationRequest {
     operation_id: BrowserOperationId,
     url: Url,
-    scope: EgressScope,
+}
+
+impl fmt::Debug for BrowserNavigationRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BrowserNavigationRequest")
+            .field("operation_id", &self.operation_id)
+            .field("url", &redacted_url(&self.url))
+            .finish()
+    }
 }
 
 impl BrowserNavigationRequest {
-    pub fn new(url: Url, scope: EgressScope) -> Self {
+    pub fn new(url: Url) -> Self {
         Self {
             operation_id: BrowserOperationId(Uuid::new_v4().as_u128() as u64),
             url,
-            scope,
         }
     }
 
@@ -153,32 +169,37 @@ impl BrowserNavigationRequest {
     pub fn url(&self) -> &Url {
         &self.url
     }
-
-    pub fn scope(&self) -> &EgressScope {
-        &self.scope
-    }
-}
-
-/// Navigation authorization is deliberately separate from the worker.  The
-/// production implementation delegates to the Core-owned R008 policy.
-pub trait NavigationPolicy: Send + Sync {
-    fn authorize<'a>(&'a self, request: &'a BrowserNavigationRequest) -> BrowserFuture<'a, ()>;
 }
 
 #[derive(Clone)]
 pub struct R008NavigationPolicy {
     egress: Arc<RwLock<EgressPolicy>>,
+    scope: EgressScope,
 }
 
 impl R008NavigationPolicy {
-    pub fn new(egress: EgressPolicy) -> Self {
+    /// The public browser-facing context is always public-web scoped.  A
+    /// caller cannot choose a configured local service through this API.
+    pub fn public_web(egress: EgressPolicy) -> Self {
         Self {
             egress: Arc::new(RwLock::new(egress)),
+            scope: EgressScope::PublicWeb,
         }
     }
-}
 
-impl NavigationPolicy for R008NavigationPolicy {
+    /// Trusted Core-only path for a configured internal integration.  It is
+    /// intentionally unavailable to plugins and browser-facing callers.
+    #[allow(dead_code)]
+    pub(crate) fn configured_local_service(
+        egress: EgressPolicy,
+        service_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            egress: Arc::new(RwLock::new(egress)),
+            scope: EgressScope::ConfiguredLocalService(service_name.into()),
+        }
+    }
+
     fn authorize<'a>(&'a self, request: &'a BrowserNavigationRequest) -> BrowserFuture<'a, ()> {
         Box::pin(async move {
             let policy = self
@@ -187,14 +208,21 @@ impl NavigationPolicy for R008NavigationPolicy {
                 .map_err(|_| BrowserError::WorkerUnavailable)?
                 .clone();
             policy
-                .validate(request.url(), request.scope())
+                .validate(request.url(), &self.scope)
                 .await
                 .map_err(|_| BrowserError::NavigationDenied)
         })
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+fn redacted_url(url: &Url) -> String {
+    let mut safe = url.clone();
+    safe.set_query(None);
+    safe.set_fragment(None);
+    safe.to_string()
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub enum BrowserInput {
     Key {
         key: String,
@@ -210,10 +238,26 @@ pub enum BrowserInput {
     Submit,
 }
 
+impl fmt::Debug for BrowserInput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Key { .. } => f.write_str("BrowserInput::Key([REDACTED])"),
+            Self::Pointer { x, y, button } => f
+                .debug_struct("BrowserInput::Pointer")
+                .field("x", x)
+                .field("y", y)
+                .field("button", button)
+                .finish(),
+            Self::Text { .. } => f.write_str("BrowserInput::Text([REDACTED])"),
+            Self::Submit => f.write_str("BrowserInput::Submit"),
+        }
+    }
+}
+
 /// Versionable, transport-neutral commands.  Implementations may map these
 /// to IPC/WebSocket messages later; the commands contain no site semantics or
 /// server filesystem authority.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub enum BrowserCommand {
     OpenSession { mode: BrowserAuthMode },
     AttachProfile { profile: ProfileAttachmentRef },
@@ -224,6 +268,37 @@ pub enum BrowserCommand {
     PollEvents { after_sequence: u64 },
     Cancel { operation_id: BrowserOperationId },
     Close,
+}
+
+impl fmt::Debug for BrowserCommand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OpenSession { mode } => f
+                .debug_struct("BrowserCommand::OpenSession")
+                .field("mode", mode)
+                .finish(),
+            Self::AttachProfile { .. } => f.write_str("BrowserCommand::AttachProfile([OPAQUE])"),
+            Self::DetachProfile => f.write_str("BrowserCommand::DetachProfile"),
+            Self::Navigate { request } => f
+                .debug_struct("BrowserCommand::Navigate")
+                .field("request", request)
+                .finish(),
+            Self::Input { input } => f
+                .debug_struct("BrowserCommand::Input")
+                .field("input", input)
+                .finish(),
+            Self::QueryStatus => f.write_str("BrowserCommand::QueryStatus"),
+            Self::PollEvents { after_sequence } => f
+                .debug_struct("BrowserCommand::PollEvents")
+                .field("after_sequence", after_sequence)
+                .finish(),
+            Self::Cancel { operation_id } => f
+                .debug_struct("BrowserCommand::Cancel")
+                .field("operation_id", operation_id)
+                .finish(),
+            Self::Close => f.write_str("BrowserCommand::Close"),
+        }
+    }
 }
 
 impl BrowserInput {
@@ -397,9 +472,10 @@ impl FakeBrowserWorker {
         Self::default()
     }
 
-    /// Test/harness-only issuance of an opaque profile reference.  A real
-    /// Vault integration will issue the same public shape from its own store.
-    pub fn issue_profile_attachment(&self, ttl: Duration) -> ProfileAttachmentRef {
+    /// Test-only issuance of an opaque profile reference.  Production refs
+    /// are issued by Core/Vault infrastructure instead.
+    #[cfg(test)]
+    fn issue_profile_attachment(&self, ttl: Duration) -> ProfileAttachmentRef {
         let reference = ProfileAttachmentRef(Uuid::new_v4().simple().to_string());
         self.state
             .lock()
@@ -630,7 +706,7 @@ pub trait BrowserWorker: Send + Sync {
         &'a self,
         session: &'a BrowserSessionId,
         request: BrowserNavigationRequest,
-        policy: &'a dyn NavigationPolicy,
+        policy: &'a R008NavigationPolicy,
     ) -> BrowserFuture<'a, ()>;
     fn send_input(&self, session: &BrowserSessionId, input: BrowserInput) -> BrowserFuture<'_, ()>;
     fn status(&self, session: &BrowserSessionId) -> Result<BrowserStatus, BrowserError>;
@@ -713,7 +789,7 @@ impl BrowserWorker for FakeBrowserWorker {
         &'a self,
         session: &'a BrowserSessionId,
         request: BrowserNavigationRequest,
-        policy: &'a dyn NavigationPolicy,
+        policy: &'a R008NavigationPolicy,
     ) -> BrowserFuture<'a, ()> {
         Box::pin(async move {
             if policy.authorize(&request).await.is_err() {
@@ -840,7 +916,7 @@ mod tests {
     use super::*;
 
     fn policy() -> R008NavigationPolicy {
-        R008NavigationPolicy::new(EgressPolicy::default())
+        R008NavigationPolicy::public_web(EgressPolicy::default())
     }
 
     async fn session(worker: &FakeBrowserWorker) -> BrowserSession {
@@ -856,21 +932,24 @@ mod tests {
         worker
             .navigate(
                 session.id(),
-                BrowserNavigationRequest::new(
-                    Url::parse("https://1.1.1.1/video").unwrap(),
-                    EgressScope::PublicWeb,
-                ),
+                BrowserNavigationRequest::new(Url::parse("https://1.1.1.1/video").unwrap()),
                 &policy(),
             )
             .await
             .unwrap();
         worker
-            .send_input(session.id(), BrowserInput::Submit)
+            .send_input(
+                session.id(),
+                BrowserInput::Text {
+                    value: "password-sentinel-7f3e".into(),
+                },
+            )
             .await
             .unwrap();
         worker.close(session.id()).unwrap();
 
         let events = worker.poll_events(session.id(), 0).unwrap();
+        assert!(!format!("{events:?}").contains("password-sentinel-7f3e"));
         assert_eq!(events.first().unwrap().version, BROWSER_EVENT_VERSION);
         assert!(matches!(
             events[0].kind,
@@ -924,7 +1003,7 @@ mod tests {
             let result = worker
                 .navigate(
                     session.id(),
-                    BrowserNavigationRequest::new(Url::parse(url).unwrap(), EgressScope::PublicWeb),
+                    BrowserNavigationRequest::new(Url::parse(url).unwrap()),
                     &r008,
                 )
                 .await;
@@ -949,16 +1028,17 @@ mod tests {
                 &Url::parse("http://127.0.0.1:8096/").unwrap(),
             )
             .unwrap();
-        let r008 = R008NavigationPolicy::new(egress);
+        let public = R008NavigationPolicy::public_web(egress.clone());
+        let trusted_local =
+            R008NavigationPolicy::configured_local_service(egress, "configured-test-service");
         assert!(
             worker
                 .navigate(
                     session.id(),
                     BrowserNavigationRequest::new(
                         Url::parse("http://127.0.0.1:8096/health").unwrap(),
-                        EgressScope::ConfiguredLocalService("configured-test-service".into()),
                     ),
-                    &r008,
+                    &trusted_local,
                 )
                 .await
                 .is_ok()
@@ -969,9 +1049,8 @@ mod tests {
                     session.id(),
                     BrowserNavigationRequest::new(
                         Url::parse("http://127.0.0.1:8096/health").unwrap(),
-                        EgressScope::ConfiguredLocalService("user-selected".into()),
                     ),
-                    &r008,
+                    &public,
                 )
                 .await,
             Err(BrowserError::NavigationDenied)
@@ -982,10 +1061,7 @@ mod tests {
     async fn cancel_crash_timeout_and_close_have_explicit_outcomes_and_cleanup() {
         let worker = FakeBrowserWorker::new();
         let first = session(&worker).await;
-        let request = BrowserNavigationRequest::new(
-            Url::parse("https://1.1.1.1/cancel").unwrap(),
-            EgressScope::PublicWeb,
-        );
+        let request = BrowserNavigationRequest::new(Url::parse("https://1.1.1.1/cancel").unwrap());
         worker.cancel(first.id(), request.operation_id()).unwrap();
         assert_eq!(
             worker.navigate(first.id(), request, &policy()).await,
@@ -1090,5 +1166,28 @@ mod tests {
         assert!(!format!("{profile:?}").contains("cookie.sqlite"));
         let token = PanelControlToken("fixture-panel-token".into());
         assert!(!format!("{token:?}").contains("fixture-panel-token"));
+    }
+
+    #[test]
+    fn debug_does_not_expose_sensitive_input_or_command_payloads() {
+        let sentinel = "verification-code-sentinel-93a1";
+        let input = BrowserInput::Text {
+            value: sentinel.into(),
+        };
+        let command = BrowserCommand::Input {
+            input: input.clone(),
+        };
+        assert!(!format!("{input:?}").contains(sentinel));
+        assert!(!format!("{command:?}").contains(sentinel));
+
+        let profile = ProfileAttachmentRef("vault/cookie-db-sentinel".into());
+        let attach = BrowserCommand::AttachProfile { profile };
+        assert!(!format!("{attach:?}").contains("cookie-db-sentinel"));
+
+        let request = BrowserNavigationRequest::new(
+            Url::parse("https://1.1.1.1/video?token=url-secret-sentinel").unwrap(),
+        );
+        let navigate = BrowserCommand::Navigate { request };
+        assert!(!format!("{navigate:?}").contains("url-secret-sentinel"));
     }
 }

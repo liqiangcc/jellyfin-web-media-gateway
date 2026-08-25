@@ -7,6 +7,7 @@
 //! capabilities.  In particular, `SiteAccessCapability` never contains the
 //! `SecretMaterial` stored here.
 
+use crate::browser::ProfileAttachmentRef;
 use crate::security::{
     EgressPolicy, EgressPolicyError, EgressScope, SiteAccessCapability, SiteAccessError,
     is_secret_header,
@@ -466,6 +467,28 @@ impl SessionVault {
             .is_some_and(|stored| stored.reference == *session)
     }
 
+    /// Issue an opaque browser-profile attachment capability from the
+    /// Core/Vault boundary.  Browser workers consume this ref but cannot issue
+    /// or materialize profile material themselves.
+    #[allow(dead_code)]
+    pub(crate) fn issue_profile_attachment_ref(
+        &self,
+        session: &SiteSessionRef,
+    ) -> Result<ProfileAttachmentRef, VaultError> {
+        let inner = self.inner.lock().expect("session vault poisoned");
+        if inner
+            .sessions
+            .get(session.session_id())
+            .filter(|stored| !stored.candidate && stored.reference == *session)
+            .is_none()
+        {
+            return Err(VaultError::SessionNotActive);
+        }
+        Ok(ProfileAttachmentRef::from_vault_issued(
+            Uuid::new_v4().simple().to_string(),
+        ))
+    }
+
     pub fn authorize_capability(
         &self,
         capability: &SiteAccessCapability,
@@ -785,5 +808,22 @@ mod tests {
         let diagnostic = format!("{material:?}");
         assert!(!diagnostic.contains("secret-sentinel"));
         assert!(diagnostic.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn active_vault_session_issues_opaque_profile_attachment_ref() {
+        let vault = SessionVault::isolated_test();
+        vault
+            .register_account("site-a", "account-a", "fixture")
+            .unwrap();
+        let candidate = vault
+            .create_fixture_candidate_session("site-a", "account-a", "profile")
+            .unwrap();
+        vault
+            .validate_and_swap(&candidate, CandidateValidation::Valid)
+            .unwrap();
+        let profile = vault.issue_profile_attachment_ref(&candidate).unwrap();
+        let diagnostic = format!("{profile:?}");
+        assert!(!diagnostic.contains("profile"));
     }
 }
