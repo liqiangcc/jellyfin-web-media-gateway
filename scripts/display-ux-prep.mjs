@@ -70,10 +70,10 @@ async function testDisplay() {
   await page.goto(`${base}/display?profile=tv`, { waitUntil: 'domcontentloaded' });
   const first = await waitForRegistration(page);
   if (!first.display_id || !first.registration_id) throw new Error('TV display did not register');
-  await page.waitForFunction(() => document.querySelector('#subtitle-track')?.track?.readyState === 2, null, { timeout: 10000 });
+  await page.waitForFunction(() => document.querySelector('#subtitle-track')?.readyState === 2, null, { timeout: 10000 });
   const subtitle = await page.evaluate(() => {
     const element = document.querySelector('#subtitle-track');
-    return { src: element?.src || '', readyState: element?.track?.readyState, cues: element?.track?.cues?.length || 0 };
+    return { src: element?.src || '', readyState: element?.readyState, cues: element?.track?.cues?.length || 0 };
   });
   if (!subtitle.src.startsWith(new URL(base).origin + '/stream/')) throw new Error('subtitle did not use a same-origin Gateway path');
   if (!subtitle.cues) throw new Error('Gateway WebVTT track has no cues');
