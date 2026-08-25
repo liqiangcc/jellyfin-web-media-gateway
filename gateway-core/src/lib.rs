@@ -853,6 +853,7 @@ const TV_DISPLAY_PAGE: &str = r##"<!doctype html>
   const wake='wakeLock' in navigator?'Wake Lock available':'Wake Lock unavailable';
   const sw='serviceWorker' in navigator?'Service Worker available':'Service Worker unavailable';
   show(`${secure}. ${wake}; ${sw}.`); register();
+  if(track.track) track.track.mode='hidden';
   if(track.getAttribute('src')==='')track.remove();
   window.__displayPrep={getRegistration:()=>registration,getStatus:()=>status.textContent,play,reconnect:register};
   window.addEventListener('pagehide',()=>{if(heartbeatTimer)clearInterval(heartbeatTimer)});
