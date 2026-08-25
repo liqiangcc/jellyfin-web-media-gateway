@@ -1,0 +1,109 @@
+name: plugin-conformance
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "site-adapter-api/**"
+      - "plugins/generic-direct/**"
+      - "gateway-core/**"
+      - "display-adapter-api/**"
+      - "scripts/check-core-site-boundary.sh"
+      - "scripts/fixtures/core-site-boundary-*.rs"
+      - ".github/workflows/plugin-conformance.yml"
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: "Exact candidate commit to verify"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-conformance-${{ inputs.candidate_sha || github.event.pull_request.head.sha }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha }}
+
+jobs:
+  j1-conformance:
+    name: J1 conformance harness and generic-direct
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt,clippy
+      - name: Format and lint
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run reusable conformance and generic-direct tests
+        run: |
+          cargo test -p site-adapter-api --all-targets -- --nocapture
+          cargo test -p generic-direct --all-targets -- --nocapture
+
+  j2-boundaries:
+    name: J2 secret/error negatives and architecture guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Run secret and generic diagnostic negatives
+        run: |
+          cargo test -p site-adapter-api conformance::tests -- --nocapture 2>&1 | tee plugin-conformance.log
+          ! rg -n 'fixture-cookie-secret|fixture-authorization-secret|Bearer fixture-secret' plugin-conformance.log
+      - name: Run bounded Stable Core architecture guard
+        run: |
+          bash scripts/check-core-site-boundary.sh
+          bash scripts/check-core-site-boundary.sh --self-test
+
+  j3-regressions:
+    name: J3 workspace and R001/R008 regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt,clippy
+      - name: Run exact-Candidate workspace and security regressions
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace --all-targets
+          cargo test -p gateway-core --test security_baseline -- --nocapture
