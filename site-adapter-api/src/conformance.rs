@@ -7,6 +7,8 @@
 use crate::{AdapterError, MediaProtection, RecognizeResult, ResolvedMedia, SiteAdapter};
 use std::fmt;
 
+pub use crate::security::is_secret_header;
+
 #[derive(Clone, Copy, Debug)]
 pub struct RecognizeFixture {
     pub input: &'static str,
@@ -170,30 +172,6 @@ pub fn validate_resolved_media(media: &ResolvedMedia) -> Result<(), String> {
     Ok(())
 }
 
-/// Return true for header material that must remain behind the scoped access
-/// boundary instead of being exposed to a display adapter.
-pub fn is_secret_header(name: &str, value: &str) -> bool {
-    let normalized = name.to_ascii_lowercase().replace('_', "-");
-    let sensitive_name = matches!(
-        normalized.as_str(),
-        "cookie"
-            | "set-cookie"
-            | "authorization"
-            | "proxy-authorization"
-            | "www-authenticate"
-            | "x-api-key"
-            | "api-key"
-            | "access-token"
-            | "refresh-token"
-            | "id-token"
-    );
-    sensitive_name
-        || value
-            .split_whitespace()
-            .next()
-            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("bearer"))
-}
-
 /// Check that the public error enum remains bounded and cannot echo fixture
 /// secrets.  Callers should pass sentinel values used by their tests.
 pub fn assert_error_diagnostics_bounded(sentinels: &[&str]) -> Result<(), ConformanceFailure> {
@@ -311,6 +289,11 @@ mod tests {
         for (name, value) in [
             ("Cookie", "session=fixture-secret"),
             ("Authorization", "Bearer fixture-secret"),
+            ("Set-Cookie", "session=fixture-secret"),
+            ("X-API-Key", "fixture-secret"),
+            ("x-auth-token", "fixture-secret"),
+            ("proxy-authenticate", "fixture-secret"),
+            ("X-Trace", "Basic fixture-secret"),
             ("X-Trace", "Bearer fixture-secret"),
         ] {
             assert!(is_secret_header(name, value));

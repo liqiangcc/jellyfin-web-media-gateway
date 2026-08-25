@@ -487,21 +487,7 @@ impl SiteAccessCapability {
     }
 }
 
-pub fn is_secret_header(name: &str, value: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    let value = value.trim().to_ascii_lowercase();
-    matches!(
-        name.as_str(),
-        "authorization"
-            | "proxy-authorization"
-            | "cookie"
-            | "set-cookie"
-            | "x-api-key"
-            | "x-auth-token"
-            | "proxy-authenticate"
-    ) || value.starts_with("bearer ")
-        || value.starts_with("basic ")
-}
+pub use site_adapter_api::security::is_secret_header;
 
 pub fn redact_text(input: &str, secrets: &[&str]) -> String {
     secrets.iter().fold(input.to_string(), |output, secret| {

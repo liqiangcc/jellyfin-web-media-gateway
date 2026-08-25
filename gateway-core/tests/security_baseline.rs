@@ -1,6 +1,6 @@
 use gateway_core::security::{
     EgressPolicy, EgressPolicyError, EgressScope, SiteAccessCapability, SiteAccessError,
-    is_public_web_ip, redact_text, redact_url,
+    is_public_web_ip, is_secret_header, redact_text, redact_url,
 };
 use std::fs;
 use std::net::IpAddr;
@@ -152,6 +152,25 @@ fn secret_diagnostics_and_signed_urls_are_redacted() {
     assert!(!redact_text(&diagnostic, &[secret]).contains(secret));
     let url = Url::parse("https://cdn.example.test/video.m3u8?token=r008-fixture-secret").unwrap();
     assert_eq!(redact_url(&url), "https://cdn.example.test/video.m3u8");
+}
+
+#[test]
+fn r008_secret_header_classifier_matches_shared_adapter_boundary() {
+    for (name, value) in [
+        ("Cookie", "session=fixture-secret"),
+        ("Authorization", "Bearer fixture-secret"),
+        ("Set-Cookie", "session=fixture-secret"),
+        ("X-API-Key", "fixture-secret"),
+        ("x-auth-token", "fixture-secret"),
+        ("proxy-authenticate", "fixture-secret"),
+        ("X-Trace", "Basic fixture-secret"),
+        ("X-Trace", "Bearer fixture-secret"),
+    ] {
+        assert!(is_secret_header(name, value), "{name}");
+    }
+    for (name, value) in [("Accept", "video/mp4"), ("X-Trace", "request-123")] {
+        assert!(!is_secret_header(name, value), "{name}");
+    }
 }
 
 #[test]

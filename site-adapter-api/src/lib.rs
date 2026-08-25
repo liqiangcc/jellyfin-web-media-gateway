@@ -4,6 +4,7 @@ use std::sync::Arc;
 use url::Url;
 
 pub mod conformance;
+pub mod security;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourceLocator {
