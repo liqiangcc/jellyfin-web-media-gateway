@@ -21,11 +21,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: control-shell-${{ github.event.pull_request.head.sha || inputs.candidate_sha }}
+  group: control-shell-${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
   cancel-in-progress: false
 
 env:
-  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha }}
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
 
 jobs:
   j1-control-contracts:
