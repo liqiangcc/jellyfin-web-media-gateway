@@ -62,7 +62,7 @@ function assertCleanBrowser(page, label) {
   return page.evaluate(() => ({
     text: document.body.innerText,
     storage: JSON.stringify(sessionStorage),
-    media: document.querySelector('#player')?.getAttribute('src') || '',
+    media: document.querySelector('#player')?.src || '',
   })).then(value => {
     const serialized = JSON.stringify(value);
     if (/(Bearer\s+|Cookie|Authorization|r001-fixture-secret|file:|resolved_media|upstream_access_ref)/i.test(serialized)) {
@@ -99,7 +99,7 @@ async function run() {
 
   await display.waitForFunction(id => window.__displayPrep?.getRendering()?.session_id === id, sessionId, { timeout: 20000 });
   const rendering = await display.evaluate(() => window.__displayPrep.getRendering());
-  const mediaPath = await display.locator('#player').getAttribute('src');
+  const mediaPath = await display.evaluate(() => document.querySelector('#player')?.src || '');
   if (!mediaPath?.startsWith(new URL(base).origin + '/stream/')) throw new Error('Display did not receive a Gateway media path');
   if (rendering.session_id !== sessionId || rendering.item_revision !== 1) throw new Error('Display rendering view identity mismatch');
   if (evidence.requests.gateway_media < 1) throw new Error('Display did not request Gateway media');
