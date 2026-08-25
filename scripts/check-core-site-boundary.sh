@@ -10,9 +10,26 @@ DENY_PATTERN='bilibili|youtube|youtu\.be|tiktok|douyin|instagram|facebook|twitte
 
 scan_paths() {
     local paths=("$@")
-    if rg -n -i --glob '*.rs' "$DENY_PATTERN" "${paths[@]}"; then
+    local status
+    if command -v rg >/dev/null 2>&1; then
+        if rg -n -i --glob '*.rs' "$DENY_PATTERN" "${paths[@]}"; then
+            status=0
+        else
+            status=$?
+        fi
+    else
+        if grep -RInE --include='*.rs' "$DENY_PATTERN" "${paths[@]}"; then
+            status=0
+        else
+            status=$?
+        fi
+    fi
+    if [[ "$status" -eq 0 ]]; then
         echo "Stable Core contains concrete-site vocabulary" >&2
         return 1
+    fi
+    if [[ "$status" -ne 1 ]]; then
+        return "$status"
     fi
 }
 
@@ -38,7 +55,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
 
     # The repository's documentation and plugin implementations are not part
     # of the scan contract even though they necessarily mention real sites.
-    if rg -n -i 'bilibili|youtube' "$ROOT_DIR/docs/site-plugin-architecture.md" "$ROOT_DIR/plugins" >/dev/null; then
+    if grep -RniE 'bilibili|youtube' "$ROOT_DIR/docs/site-plugin-architecture.md" "$ROOT_DIR/plugins" >/dev/null; then
         :
     else
         echo "self-test fixtures lost their concrete-site sentinel" >&2

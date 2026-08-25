@@ -82,7 +82,7 @@ jobs:
       - name: Run secret and generic diagnostic negatives
         run: |
           cargo test -p site-adapter-api conformance::tests -- --nocapture 2>&1 | tee plugin-conformance.log
-          ! rg -n 'fixture-cookie-secret|fixture-authorization-secret|Bearer fixture-secret' plugin-conformance.log
+          ! grep -En 'fixture-cookie-secret|fixture-authorization-secret|Bearer fixture-secret' plugin-conformance.log
       - name: Run bounded Stable Core architecture guard
         run: |
           bash scripts/check-core-site-boundary.sh
