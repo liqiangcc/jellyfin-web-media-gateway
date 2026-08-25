@@ -169,6 +169,33 @@ pub fn validate_resolved_media(media: &ResolvedMedia) -> Result<(), String> {
             }
         }
     }
+    for subtitle in &media.subtitles {
+        if subtitle.id.trim().is_empty() || subtitle.id.len() > 128 {
+            return Err("subtitle id must be non-empty and bounded".into());
+        }
+        if !matches!(subtitle.url.scheme(), "http" | "https") {
+            return Err("subtitle URL must use http or https".into());
+        }
+        if !subtitle.content_type.eq_ignore_ascii_case("text/vtt") {
+            return Err("subtitle content type must be text/vtt".into());
+        }
+        if subtitle
+            .language
+            .as_deref()
+            .is_some_and(|value| value.is_empty() || value.len() > 64)
+            || subtitle
+                .label
+                .as_deref()
+                .is_some_and(|value| value.is_empty() || value.len() > 128)
+        {
+            return Err("subtitle language/label is invalid".into());
+        }
+        for (name, value) in &subtitle.public_headers {
+            if is_secret_header(name, value) {
+                return Err(format!("secret-bearing subtitle header: {name}"));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -256,6 +283,7 @@ mod tests {
                     public_headers: BTreeMap::new(),
                     upstream_access_ref: None,
                 }],
+                subtitles: Vec::new(),
                 protection: MediaProtection::Clear,
             })
         }

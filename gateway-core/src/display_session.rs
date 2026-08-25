@@ -840,7 +840,7 @@ fn validate_capabilities(values: &[String]) -> Result<(), DisplaySessionError> {
 fn safe_capabilities(values: &[String]) -> Vec<String> {
     values
         .iter()
-        .filter(|value| matches!(value.as_str(), "video" | "audio"))
+        .filter(|value| matches!(value.as_str(), "video" | "audio" | "subtitles"))
         .cloned()
         .collect()
 }
@@ -962,7 +962,10 @@ mod tests {
             )
             .unwrap();
         assert_eq!(context.session_id, session);
-        assert_eq!(context.media_capabilities, vec!["video", "audio"]);
+        assert_eq!(
+            context.media_capabilities,
+            vec!["video", "audio", "subtitles"]
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use axum::http::{HeaderMap, HeaderValue};
 use gateway_core::{Binding, EgressScope, GatewayService, ProofPaths, UpstreamResource};
 use generic_direct::GenericDirectAdapter;
-use site_adapter_api::{SiteAdapterRegistry, StreamProtocol};
+use site_adapter_api::{ResolvedSubtitle, SiteAdapterRegistry, StreamProtocol};
 use std::env;
 use std::net::IpAddr;
 #[cfg(test)]
@@ -83,6 +83,8 @@ async fn main() {
 
     let fixture_path = env::var_os("R001_FIXTURE_MP4").map(PathBuf::from);
     service.configure_fixture_mp4(fixture_path.clone());
+    let subtitle_fixture_path = env::var_os("R001_FIXTURE_VTT").map(PathBuf::from);
+    service.configure_fixture_vtt(subtitle_fixture_path.clone());
     let secret_path = fixture_path.map(|_| {
         service
             .configure_local_service(
@@ -108,6 +110,34 @@ async fn main() {
         )
     });
 
+    let subtitle_path = subtitle_fixture_path.map(|_| {
+        let subtitle = ResolvedSubtitle {
+            id: "fixture-en".into(),
+            url: Url::parse(&format!("http://{addr}/fixture/subtitles.vtt")).unwrap(),
+            content_type: "text/vtt".into(),
+            language: Some("en".into()),
+            label: Some("English".into()),
+            public_headers: Default::default(),
+            upstream_access_ref: None,
+        };
+        let binding = Binding::new("r001-session", "public-mp4", 1, "subtitle-fixture");
+        service
+            .configure_local_service(
+                "r001-subtitle-fixture",
+                Url::parse(&format!("http://{addr}")).unwrap(),
+            )
+            .expect("configure subtitle fixture local service");
+        service
+            .subtitle_track_view(
+                &subtitle,
+                binding,
+                EgressScope::ConfiguredLocalService("r001-subtitle-fixture".into()),
+                ttl,
+            )
+            .expect("subtitle fixture capability")
+            .gateway_path
+    });
+
     let display_path = if env::var_os("R002_USE_FIXTURE_DISPLAY").is_some() {
         secret_path.clone()
     } else {
@@ -116,6 +146,7 @@ async fn main() {
     service.configure_proof_paths(ProofPaths {
         mp4_path: Some(mp4_path),
         display_path,
+        subtitle_path,
         hls_path: Some(hls_path),
         secret_path,
         chain: format!(

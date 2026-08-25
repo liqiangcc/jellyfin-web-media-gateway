@@ -30,10 +30,22 @@ pub struct ResolvedStream {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedSubtitle {
+    pub id: String,
+    pub url: Url,
+    pub content_type: String,
+    pub language: Option<String>,
+    pub label: Option<String>,
+    pub public_headers: BTreeMap<String, String>,
+    pub upstream_access_ref: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedMedia {
     pub title: String,
     pub source_site: String,
     pub streams: Vec<ResolvedStream>,
+    pub subtitles: Vec<ResolvedSubtitle>,
     pub protection: MediaProtection,
 }
 
