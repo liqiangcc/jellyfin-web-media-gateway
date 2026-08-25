@@ -76,7 +76,7 @@ struct CreationFingerprint {
 
 #[derive(Clone, Debug)]
 pub(crate) enum CreationOutcome {
-    Success(CreateSessionResponse),
+    Success(Box<CreateSessionResponse>),
     Failure {
         status: axum::http::StatusCode,
         error: CreateSessionErrorResponse,
@@ -253,7 +253,7 @@ impl SourceSessionService {
                 return internal_failure();
             }
         };
-        CreationOutcome::Success(CreateSessionResponse {
+        CreationOutcome::Success(Box::new(CreateSessionResponse {
             request_id: request.request_id.clone(),
             session_id,
             item_id,
@@ -262,7 +262,7 @@ impl SourceSessionService {
             display_id: request.display_id.clone(),
             source_site: media_view.source_site.clone(),
             media: media_view,
-        })
+        }))
     }
 }
 
