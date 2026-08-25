@@ -1,0 +1,142 @@
+name: web-mvp-e2e-prep
+
+on:
+  push:
+    branches:
+      - "worker/issue-49-web-mvp-e2e-prep"
+  pull_request:
+    paths:
+      - "gateway-core/**"
+      - "plugins/generic-direct/**"
+      - "site-adapter-api/**"
+      - "scripts/web-mvp-e2e-prep.mjs"
+      - ".github/workflows/web-mvp-e2e-prep.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: "Exact candidate commit to verify"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-mvp-e2e-prep-${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+
+jobs:
+  j1-browser-happy:
+    name: J1 hosted Chromium Web-only product path
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Confirm exact candidate checkout
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build production Gateway route
+        run: cargo build -p gateway-core --bin r001-server
+      - name: Start production Gateway
+        shell: bash
+        run: |
+          ./target/debug/r001-server >server.log 2>&1 &
+          echo $! > server.pid
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8787/healthz >/dev/null && exit 0; sleep 1; done
+          cat server.log
+          exit 1
+      - name: Install hosted Chromium harness
+        run: npm install --no-save playwright-core@1.55.0
+      - name: Run J1 exact-Candidate product journey
+        run: BASE_URL=http://127.0.0.1:8787 node scripts/web-mvp-e2e-prep.mjs
+      - name: Secret and exact-Candidate guard
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          ! grep -Eiq 'Bearer[[:space:]]+|Cookie|Authorization|r001-fixture-secret|resolved_media|upstream_access_ref|/tmp/' web-mvp-e2e-proof.json server.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web-mvp-e2e-j1-${{ env.CANDIDATE_SHA }}
+          path: |
+            web-mvp-e2e-proof.json
+            server.log
+
+  j2-browser-negative:
+    name: J2 hosted Chromium reconnect failure and security matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Confirm exact candidate checkout
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build production Gateway route
+        run: cargo build -p gateway-core --bin r001-server
+      - name: Start production Gateway
+        shell: bash
+        run: |
+          ./target/debug/r001-server >server.log 2>&1 &
+          echo $! > server.pid
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8787/healthz >/dev/null && exit 0; sleep 1; done
+          cat server.log
+          exit 1
+      - name: Install hosted Chromium harness
+        run: npm install --no-save playwright-core@1.55.0
+      - name: Run J2 exact-Candidate negative matrix
+        run: BASE_URL=http://127.0.0.1:8787 node scripts/web-mvp-e2e-prep.mjs
+      - name: Secret and exact-Candidate guard
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          ! grep -Eiq 'Bearer[[:space:]]+|Cookie|Authorization|r001-fixture-secret|resolved_media|upstream_access_ref|/tmp/' web-mvp-e2e-proof.json server.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: web-mvp-e2e-j2-${{ env.CANDIDATE_SHA }}
+          path: |
+            web-mvp-e2e-proof.json
+            server.log
+
+  j3-regressions:
+    name: J3 workspace and accepted authority regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Confirm exact candidate checkout
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - name: Exact-Candidate workspace and authority regressions
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace --all-targets
+          cargo test -p gateway-core --test playback_concurrency
+          cargo test -p gateway-core --test media_gateway
+          cargo test -p gateway-core --test http_security
+          cargo test -p gateway-core --test security_baseline
+          bash scripts/check-core-site-boundary.sh
