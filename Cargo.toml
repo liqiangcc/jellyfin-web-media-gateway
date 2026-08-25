@@ -3,6 +3,7 @@ members = [
   "display-adapter-api",
   "site-adapter-api",
   "plugins/generic-direct",
+  "plugins/generic-ytdlp",
   "gateway-core",
   "plugins/jellyfin-display-adapter",
 ]
