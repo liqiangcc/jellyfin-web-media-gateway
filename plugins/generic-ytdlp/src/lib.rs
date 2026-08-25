@@ -11,6 +11,7 @@ use site_adapter_api::{
     SiteAdapterRegistry, SourceLocator, StreamProtocol,
 };
 use std::collections::BTreeMap;
+use std::fmt;
 #[cfg(test)]
 use std::io::{self, Read};
 #[cfg(test)]
@@ -40,7 +41,6 @@ const MAX_URL_BYTES: usize = 16 * 1024;
 const MAX_HEADERS: usize = 32;
 const MAX_HEADER_NAME_BYTES: usize = 128;
 const MAX_HEADER_VALUE_BYTES: usize = 4096;
-const MAX_ACCESS_REF_BYTES: usize = 256;
 
 /// Limits applied to a subprocess and each captured output stream.
 #[cfg(test)]
@@ -71,9 +71,18 @@ impl ProcessLimits {
 
 /// Structured input to the process boundary.  Callers cannot provide an
 /// arbitrary argv or yt-dlp flag; the plugin owns the fixed command shape.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct ProcessRequest {
     source_url: Url,
+}
+
+impl fmt::Debug for ProcessRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProcessRequest")
+            .field("source_url", &"<redacted>")
+            .finish()
+    }
 }
 
 impl ProcessRequest {
@@ -168,16 +177,10 @@ impl ProcessRunner for CommandProcessRunner {
         let stderr_overflow_signal = Arc::new(AtomicBool::new(false));
         let stdout_reader_signal = Arc::clone(&stdout_overflow_signal);
         let stderr_reader_signal = Arc::clone(&stderr_overflow_signal);
-        let stdout_reader = thread::spawn(move || {
-            let result = read_capped(stdout, stdout_limit);
-            stdout_reader_signal.store(result.1, Ordering::Release);
-            result
-        });
-        let stderr_reader = thread::spawn(move || {
-            let result = discard_capped(stderr, stderr_limit);
-            stderr_reader_signal.store(result, Ordering::Release);
-            result
-        });
+        let stdout_reader =
+            thread::spawn(move || read_capped(stdout, stdout_limit, &stdout_reader_signal));
+        let stderr_reader =
+            thread::spawn(move || discard_capped(stderr, stderr_limit, &stderr_reader_signal));
 
         let started = Instant::now();
         let mut timed_out = false;
@@ -239,10 +242,13 @@ fn terminate(child: &mut Child) {
 }
 
 #[cfg(test)]
-fn read_capped<R: Read>(mut reader: R, limit: usize) -> (Vec<u8>, bool) {
+fn read_capped<R: Read>(
+    mut reader: R,
+    limit: usize,
+    overflow_signal: &AtomicBool,
+) -> (Vec<u8>, bool) {
     let mut output = Vec::with_capacity(limit.min(8192));
     let mut buffer = [0_u8; 8192];
-    let mut overflow = false;
     loop {
         match reader.read(&mut buffer) {
             Ok(0) => break,
@@ -252,29 +258,40 @@ fn read_capped<R: Read>(mut reader: R, limit: usize) -> (Vec<u8>, bool) {
                     output.extend_from_slice(&buffer[..count.min(remaining)]);
                 }
                 if count > remaining {
-                    overflow = true;
+                    overflow_signal.store(true, Ordering::Release);
+                    return (output, true);
                 }
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(_) => {
-                overflow = true;
-                break;
+                overflow_signal.store(true, Ordering::Release);
+                return (output, true);
             }
         }
     }
-    (output, overflow)
+    (output, false)
 }
 
 #[cfg(test)]
-fn discard_capped<R: Read>(mut reader: R, limit: usize) -> bool {
+fn discard_capped<R: Read>(mut reader: R, limit: usize, overflow_signal: &AtomicBool) -> bool {
     let mut total = 0usize;
     let mut buffer = [0_u8; 8192];
     loop {
         match reader.read(&mut buffer) {
-            Ok(0) => return total > limit,
-            Ok(count) => total = total.saturating_add(count),
+            Ok(0) => return false,
+            Ok(count) => {
+                let remaining = limit.saturating_sub(total);
+                if count > remaining {
+                    overflow_signal.store(true, Ordering::Release);
+                    return true;
+                }
+                total += count;
+            }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(_) => return true,
+            Err(_) => {
+                overflow_signal.store(true, Ordering::Release);
+                return true;
+            }
         }
     }
 }
@@ -375,9 +392,7 @@ pub fn parse_machine_output(bytes: &[u8]) -> Result<ResolvedMedia, ParseError> {
                 return Err(ParseError::SecretHeader);
             }
         }
-        if stream.upstream_access_ref.as_ref().is_some_and(|value| {
-            value.is_empty() || value.len() > MAX_ACCESS_REF_BYTES || has_control(value)
-        }) {
+        if stream.upstream_access_ref.is_some() {
             return Err(ParseError::InvalidField);
         }
         streams.push(ResolvedStream {
@@ -385,7 +400,7 @@ pub fn parse_machine_output(bytes: &[u8]) -> Result<ResolvedMedia, ParseError> {
             protocol,
             url,
             public_headers: stream.public_headers,
-            upstream_access_ref: stream.upstream_access_ref,
+            upstream_access_ref: None,
         });
     }
     Ok(ResolvedMedia {
@@ -650,6 +665,7 @@ mod tests {
         assert_eq!(parse_machine_output(br#"{"title":"x","protection":"clear","streams":[{"id":"x","protocol":"hls","url":"https://cdn.example.test/x.m3u8","public_headers":{"Authorization":"Bearer secret"}}]}"#), Err(ParseError::SecretHeader));
         assert_eq!(parse_machine_output(br#"{"title":"x","protection":"clear","streams":[{"id":"x","protocol":"rtmp","url":"https://cdn.example.test/x"}]}"#), Err(ParseError::UnsupportedProtocol));
         assert_eq!(parse_machine_output(br#"{"title":"x","protection":"clear","streams":[{"id":"x","protocol":"hls","url":"file:///tmp/x"}]}"#), Err(ParseError::InvalidUrl));
+        assert_eq!(parse_machine_output(br#"{"title":"x","protection":"clear","streams":[{"id":"x","protocol":"hls","url":"https://cdn.example.test/x.m3u8","upstream_access_ref":"forged-by-process"}]}"#), Err(ParseError::InvalidField));
     }
 
     #[test]
@@ -676,6 +692,18 @@ mod tests {
         ] {
             assert!(format!("{error:?}").len() < 64);
         }
+    }
+
+    #[test]
+    fn process_request_debug_redacts_query_and_fragment() {
+        let request = ProcessRequest::new(
+            Url::parse("https://example.test/watch?token=secret-token#fragment-secret").unwrap(),
+        )
+        .unwrap();
+        let diagnostics = format!("{request:?}");
+        assert_eq!(diagnostics, "ProcessRequest { source_url: \"<redacted>\" }");
+        assert!(!diagnostics.contains("secret-token"));
+        assert!(!diagnostics.contains("fragment-secret"));
     }
 
     #[test]
@@ -720,14 +748,18 @@ mod tests {
             runner.run(&request)
         };
         assert_eq!(run("timeout"), Err(ProcessError::TimedOut));
+        let overflow_started = Instant::now();
         assert_eq!(
             run("stdout-overflow"),
             Err(ProcessError::StdoutLimitExceeded)
         );
+        assert!(overflow_started.elapsed() < limits.timeout);
+        let overflow_started = Instant::now();
         assert_eq!(
             run("stderr-overflow"),
             Err(ProcessError::StderrLimitExceeded)
         );
+        assert!(overflow_started.elapsed() < limits.timeout);
         assert_eq!(run("nonzero"), Err(ProcessError::NonZeroExit));
     }
 }

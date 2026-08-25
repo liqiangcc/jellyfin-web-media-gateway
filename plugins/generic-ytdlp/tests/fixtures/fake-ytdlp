@@ -6,8 +6,8 @@ set -eu
 source_url="${4:-}"
 case "$source_url" in
   *mode=timeout*) sleep 2 ;;
-  *mode=stdout-overflow*) yes x | head -c 4096 ;;
-  *mode=stderr-overflow*) yes x | head -c 4096 >&2 ;;
+  *mode=stdout-overflow*) while :; do printf '%s' 'stdout-overflow'; done ;;
+  *mode=stderr-overflow*) while :; do printf '%s' 'stderr-overflow' >&2; done ;;
   *mode=nonzero*) printf '%s' 'fixture stderr secret' >&2; exit 7 ;;
   *) printf '%s' '{"title":"fixture media","protection":"clear","streams":[{"id":"primary","protocol":"http-file","url":"https://cdn.example.test/video.mp4","public_headers":{"Accept":"video/mp4"},"upstream_access_ref":null}]}' ;;
 esac
