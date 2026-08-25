@@ -1,6 +1,6 @@
 ---
 name: task-worker
-description: Claim and execute one published jellyfin-web-media-gateway Task Attempt, then report the result back to its GitHub Issue. Use only when explicitly asked to execute a ready Task; do not publish, review, accept, or close tasks.
+description: Claim and execute one published jellyfin-web-media-gateway Task Attempt, then report the result back to its GitHub Issue. Supports normal implementation/verification Attempts and Coordinator-directed integration-only Attempts. Use only when explicitly asked to execute a ready Task; do not publish, review, accept, or close tasks.
 ---
 
 # Task Worker
@@ -19,9 +19,12 @@ Before execution, read:
 4. the Task Package `task.md`
 5. `docs/tasks/issue-lifecycle-protocol.md`
 6. `docs/tasks/execution-anchor-recovery-protocol.md`
-7. every canonical/topic document explicitly required by `task.md`
+7. `docs/tasks/freshness-integration-protocol.md`
+8. every canonical/topic document explicitly required by `task.md`
 
 If this skill conflicts with those sources, follow the higher-authority repository source.
+
+For a Task published before the freshness protocol was adopted, do not use the new default to lower a stricter frozen Task Contract. Explicit strict-main/current-main requirements remain binding until formal Contract Revision.
 
 ## Inputs
 
@@ -54,6 +57,7 @@ no active execution owner exists
 linked task.md resolves
 linked prompt.md resolves
 Task Contract is executable as published
+Freshness / Integration Contract is understood when present
 ```
 
 If any condition fails, stop without making implementation changes.
@@ -88,7 +92,7 @@ For a repository-mutating Attempt:
 
 Do **not** create empty/no-op commits or empty PRs merely to satisfy the anchor rule. Do not post periodic heartbeat comments.
 
-A checkpoint commit is not the final Candidate and does not prove any Claim. Final exact-Candidate Evidence is still governed by `task.md`.
+A checkpoint commit is not the final Task Candidate and does not prove any Claim. Final exact-Candidate Evidence is still governed by `task.md`.
 
 Before long-running Actions/target execution, ensure the candidate/harness identity being exercised is already durable and identifiable by SHA/ref.
 
@@ -103,12 +107,83 @@ Follow `task.md` exactly:
 - Implementation Requirements;
 - Claims / Verification Job Matrix;
 - Success Criteria;
+- Freshness / Integration Contract when present;
 - Evidence Contract;
 - Failure / Blocked Rules.
 
 Do not silently change Success Criteria, add unrelated cleanup, start a different Task, or reinterpret a Runner/Target as a new business Task.
 
 Use the execution plane and target required by the Claim. Generic ARM64 evidence is not phone-target evidence; interactive diagnosis is not automatically Verification PASS.
+
+## Dependency-aware freshness behavior
+
+For `Freshness policy: dependency-aware`:
+
+```text
+main advanced
+!= automatically stale
+```
+
+A normal Worker Attempt should prove the Task's Claims on an exact Task Candidate. Do not continuously chase `main` or repeatedly merge/rebase solely because unrelated commits land while the Task is running.
+
+Before the final `[EXECUTION REPORT]`, record the actual identities available to the Coordinator:
+
+```text
+Task Candidate SHA
+Task-specific Evidence run/job IDs
+Evidence Base / accepted main snapshot actually included when known
+Observed current main SHA at report time
+```
+
+If `main` advanced, Worker may note an initial suspected overlap, but **final freshness classification belongs to Coordinator Review**.
+
+Do not self-trigger a full rerun simply because Current Main != Evidence Base unless:
+
+- the frozen Task uses `Freshness policy: strict-main`; or
+- the Task Contract explicitly requires a semantic authority integration before reporting; or
+- a Coordinator Review already directed a `SEMANTIC_FRESHNESS` or `INTEGRATION_ONLY` Attempt.
+
+## Integration-only Attempt
+
+If the latest Coordinator Review / `[INTEGRATION GATE]` says:
+
+```text
+Revision class: INTEGRATION_ONLY
+```
+
+then this Attempt is intentionally narrow.
+
+Required behavior:
+
+1. reuse the same Issue / branch / PR;
+2. identify the previously accepted `Task Candidate`;
+3. identify the Coordinator-frozen `Integration Base SHA`;
+4. **prefer merging that exact Integration Base into the worker branch** rather than rebasing/re-writing the Task Candidate, so Task Candidate ancestry remains auditable;
+5. do not make unrelated product/implementation changes;
+6. if the merge is clean and does not alter Task-owned semantic implementation, run only the declared `JI*` integration jobs;
+7. produce an exact `Integration Candidate SHA`;
+8. report Task Candidate + Integration Base + Integration Candidate + exact JI Evidence separately.
+
+If merge/conflict resolution touches Task-owned semantic code, changes an accepted authority assumption, or makes the previous Task Candidate Evidence no longer safely reusable:
+
+- do not guess that it is still integration-only;
+- preserve the branch/PR state;
+- report the semantic conflict/problem;
+- let Coordinator reclassify to `SEMANTIC_FRESHNESS` / Contract Revision as appropriate.
+
+Do not claim that a JI-only run re-proved all C1-Cn. Explicitly state which semantic Evidence is reused and which new integration Evidence was produced.
+
+## Semantic-freshness Attempt
+
+If Coordinator says:
+
+```text
+Revision class: SEMANTIC_FRESHNESS
+```
+
+then integrate/reconcile the specified accepted authority and rerun only the Claims/Jobs listed by Coordinator/Task Freshness Contract, unless the Contract requires broader verification.
+
+If the required authority change invalidates Scope/Claims/Success Criteria, stop and report rather than silently rewriting the Task Contract.
 
 ## Operator privilege versus final runtime privilege
 
@@ -121,10 +196,10 @@ An operator may legitimately require privileged setup steps when the Task explic
 Before leaving the Attempt:
 
 1. commit/push or otherwise persist in-scope candidate changes when required;
-2. confirm the final Candidate / PR supersedes any early checkpoint identity;
-3. collect the Evidence required by `task.md`;
+2. confirm the final Task Candidate / Integration Candidate / PR identities supersede any early checkpoint identity as appropriate;
+3. collect the Evidence required by `task.md` and the latest Coordinator Review;
 4. comment the current Issue using the exact `[EXECUTION REPORT]` structure from `docs/tasks/issue-lifecycle-protocol.md`;
-5. include the real Attempt number, base/candidate SHA, PR when applicable, Claim results, Jobs/commands, execution host, Runner/Target, Evidence, problems, and unverified scope;
+5. include the real Attempt number, base/task-candidate/integration-candidate SHA as applicable, PR, Claim results, Jobs/commands, execution host, Runner/Target, Evidence, problems, freshness identities, and unverified scope;
 6. transition the Issue to `status:review`;
 7. release active execution ownership;
 8. re-read the Issue to verify report + status are durable;
@@ -155,11 +230,12 @@ Never bypass a security boundary or lower Success Criteria to avoid BLOCKED.
 When a Coordinator has posted `Decision: REVISE` and returned the same Task to `status:ready`:
 
 - read the previous Attempt report and Coordinator Review;
+- read the revision class (`IMPLEMENTATION | EVIDENCE | SEMANTIC_FRESHNESS | INTEGRATION_ONLY`) when present;
 - confirm whether the Contract is unchanged;
 - inspect and reuse the previous durable branch/PR when it remains valid;
 - begin a new Attempt only after a fresh claim;
-- fix the accepted missing/failed items;
-- re-run all verification required by the current Task Contract, not only the single command that failed, when the Contract requires broader regression evidence.
+- execute only the required revision class;
+- re-run the verification required by the current Task Contract/Coordinator Review, not mechanically every previous job when integration protocol explicitly preserves semantic Evidence.
 
 ## Completion output to the user
 
@@ -170,7 +246,8 @@ Issue: #<issue>
 Attempt: <N>
 Execution outcome: COMPLETED | PARTIAL | FAILED | BLOCKED
 Issue state: review | blocked
-Candidate: <sha or n/a>
+Task Candidate: <sha or n/a>
+Integration Candidate: <sha or n/a>
 Report: posted
 Next authority: Web Coordinator
 ```

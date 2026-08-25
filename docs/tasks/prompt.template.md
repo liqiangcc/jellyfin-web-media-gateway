@@ -42,6 +42,8 @@ Task Contract 可以相同，但 Web ChatGPT、Codex、Manual TV 的启动语法
    - GitHub Issue `#<number>` 及 relevant comments
    - `docs/tasks/<issue>-<slug>/task.md`
    - `docs/tasks/issue-lifecycle-protocol.md`
+   - `docs/tasks/execution-anchor-recovery-protocol.md`
+   - `docs/tasks/freshness-integration-protocol.md`
    - `task.md` 明确引用的 canonical /专题文档
 3. 确认 Issue 当前满足可领取条件：
    - `status:ready`
@@ -49,15 +51,41 @@ Task Contract 可以相同，但 Web ChatGPT、Codex、Manual TV 的启动语法
    - 没有 active owner
    - 当前环境具备 Required Capabilities
 4. claim 后切换为 `status:in-progress`，确定新的 `Attempt N`，再开始写入性工作。
-5. 严格执行 `task.md` 的 Scope、Claims、Success Criteria、Verification Plan 和 Evidence Contract。
-6. 正常结束时先在 Issue 评论标准 `[EXECUTION REPORT]`，再转 `status:review`。
-7. 无法继续时评论标准 `[BLOCKER REPORT]`，再转 `status:blocked`。
-8. 结束当前 Attempt 后释放 active execution ownership。
-9. 停止，不自动开始下一 Task，也不自行开始下一 Attempt。
+5. 严格执行 `task.md` 的 Scope、Claims、Success Criteria、Verification Plan、Freshness / Integration Contract 和 Evidence Contract。
+6. 不要仅因为 `main` SHA 变化就自行宣布旧 Evidence 失效或全量重跑；按 `task.md` 的 Freshness Contract 和 freshness protocol 执行，最终 freshness classification 由 Coordinator Review 决定。
+7. 正常结束时先在 Issue 评论标准 `[EXECUTION REPORT]`，再转 `status:review`。
+8. 无法继续时评论标准 `[BLOCKER REPORT]`，再转 `status:blocked`。
+9. 结束当前 Attempt 后释放 active execution ownership。
+10. 停止，不自动开始下一 Task，也不自行开始下一 Attempt。
 
 如果 Issue 已被其他 Worker claim、状态不再是 `status:ready`，或当前环境不满足 Required Capabilities，则停止，不自行扩大、改写或发布任务。
 
 Worker 不得自行设置 `status:done` 或关闭 Issue。只有 Coordinator 可以通过 `[COORDINATOR REVIEW]` 决定 `ACCEPT / REVISE / BLOCK / SPLIT / NOT_PLANNED`；只有 `[FINAL ACCEPTANCE]` 后才能关闭。
+
+## Freshness / Integration Reminder
+
+对于采用 `Freshness policy: dependency-aware` 的 Task：
+
+```text
+main advanced
+!= automatically stale
+```
+
+Worker 应保留并报告真实：
+
+- Task Candidate SHA；
+- Task-specific exact-SHA Evidence；
+- 自己实际基于/观察到的 accepted main snapshot；
+- 如果 Coordinator 已发布 `[INTEGRATION GATE]`，则还要记录 Integration Base / Integration Candidate / JI Evidence。
+
+如果当前 Attempt 是 `Revision class: INTEGRATION_ONLY`：
+
+- 必须复用原 Issue/branch/PR；
+- 优先把 Coordinator 冻结的 Integration Base 以 merge commit 合入，保留原 Task Candidate ancestry；
+- 只执行声明的 `JI*` integration jobs，除非出现 semantic conflict；
+- conflict 触及 Task-owned semantic surface 时停止按 integration-only 猜测，交回 Coordinator 重新分类。
+
+如果 Task 明确是 `Freshness policy: strict-main`，则继续遵守其冻结的 strict-main 要求；不能用 dependency-aware 默认值降低已发布 Contract。
 
 ## Authority
 
@@ -95,6 +123,7 @@ Codex Skill (when applicable)
 - Success Criteria；
 - Architecture Invariants；
 - Verification Job Matrix；
+- Freshness / Integration Contract；
 - Evidence 判断标准。
 
 如果本文件与 `AGENTS.md`、`task.md` 或 canonical docs 冲突，忽略本文件中的冲突内容，并按更高 authority 执行。

@@ -1,11 +1,11 @@
 ---
 name: task-reviewer
-description: Review one jellyfin-web-media-gateway Task Attempt from its GitHub Issue and Evidence, recover interrupted in-progress ownership when needed, then decide ACCEPT, REVISE, BLOCK, SPLIT, or NOT_PLANNED. Use only when explicitly asked to review, iterate, recover, unblock, or close a task; do not execute the Worker implementation itself.
+description: Review one jellyfin-web-media-gateway Task Attempt from its GitHub Issue and Evidence, recover interrupted in-progress ownership when needed, classify dependency-aware freshness/integration state, then decide ACCEPT, REVISE, BLOCK, SPLIT, or NOT_PLANNED. Use only when explicitly asked to review, iterate, recover, unblock, or close a task; do not execute the Worker implementation itself.
 ---
 
 # Task Reviewer
 
-Perform the Coordinator-side Review / Recovery / Iteration / Closure workflow for one Task.
+Perform the Coordinator-side Review / Recovery / Freshness / Integration / Iteration / Closure workflow for one Task.
 
 ## Authority
 
@@ -17,13 +17,17 @@ Before deciding anything, read:
 4. Task Package `prompt.md`
 5. `docs/tasks/issue-lifecycle-protocol.md`
 6. `docs/tasks/execution-anchor-recovery-protocol.md`
-7. `docs/tasks/handoffs/README.md`
-8. the handoff profile(s) for the Task's current eligible environment(s)
-9. relevant canonical docs
-10. actual candidate commit / PR
-11. all required Actions runs, artifacts, target Evidence, or linked child Task Evidence
+7. `docs/tasks/freshness-integration-protocol.md`
+8. `docs/tasks/handoffs/README.md`
+9. the handoff profile(s) for the Task's current eligible environment(s)
+10. relevant canonical docs
+11. actual candidate commit / PR
+12. all required Actions runs, artifacts, target Evidence, or linked child Task Evidence
+13. live current `main` and compare/patch evidence needed for freshness classification
 
 Do not accept a result from chat summary alone.
+
+For a Task published before the freshness protocol was adopted, do not retroactively lower a stricter frozen Task Contract. Existing explicit strict-main/current-main requirements remain authoritative until formal Contract Revision.
 
 ## In-progress recovery is not Review
 
@@ -67,9 +71,10 @@ Confirm:
 ```text
 Attempt N exists
 Worker report is durable
-Candidate SHA / PR is identified when required
+Task Candidate SHA / PR is identified when required
 required Claim Evidence is resolvable
 Task Contract revision being reviewed is known
+Freshness policy is known
 ```
 
 Keep distinct:
@@ -77,6 +82,8 @@ Keep distinct:
 ```text
 Worker execution outcome
 != Verification claim result
+!= Freshness classification
+!= Integration Gate result
 != Coordinator Task decision
 != Parent Goal / Research Gate decision
 ```
@@ -89,6 +96,112 @@ For every Task Success Criterion and required Claim, classify the current Eviden
 
 Never lower Success Criteria after seeing results merely to manufacture PASS. Missing required runtime/target Evidence remains missing.
 
+First evaluate Task semantics on the exact Task Candidate. Then evaluate current-main freshness separately. Do not mix “the implementation is wrong” with “the implementation is semantically accepted but needs composition proof”.
+
+## Freshness Review
+
+For Tasks using `Freshness policy: dependency-aware`, before the final decision:
+
+1. identify Task Candidate SHA;
+2. identify Evidence Base / accepted main snapshot actually included when required semantic Evidence ran;
+3. live-read Current Main SHA;
+4. compare Evidence Base → Current Main;
+5. inspect changed files/patches when path-only classification is insufficient;
+6. classify using `docs/tasks/freshness-integration-protocol.md`:
+
+```text
+NONE
+UNRELATED
+INTEGRATION_OVERLAP
+SEMANTIC_AUTHORITY
+CONTRACT_INVALIDATING
+```
+
+Record in `[COORDINATOR REVIEW]`:
+
+```text
+Task Candidate:
+Evidence Base:
+Current Main:
+Freshness policy:
+Freshness classification:
+Changed main surface reviewed:
+Semantic Evidence reuse: yes | no | partial
+Affected Claims requiring reverify:
+Integration Gate required: yes | no
+Integration Base / Candidate: <sha or n/a>
+Integration Evidence: <jobs or n/a>
+```
+
+### NONE / UNRELATED
+
+Do not require rebase/full rerun solely because `main` advanced.
+
+Existing exact-Candidate semantic Evidence remains valid when the delta is truly unrelated to the declared semantic/integration surfaces.
+
+A clean, mergeable PR may proceed toward final merge with expected-head protection.
+
+### INTEGRATION_OVERLAP
+
+If Task-specific semantic review otherwise passes:
+
+- preserve accepted semantic Evidence;
+- do not demand full J1/J2/... rerun;
+- open `[INTEGRATION GATE]` using the protocol;
+- freeze `Integration Base = live current main`;
+- specify only the declared `JI*` jobs;
+- return Task to `status:ready` as **Revision class: INTEGRATION_ONLY**;
+- require reuse of the existing Issue/branch/PR.
+
+This is a small new Attempt for auditable ownership/recovery, not a re-opening of accepted semantic Claims.
+
+While the Integration Slot is open, do not merge another Task that touches the protected integration surfaces. Unrelated merges may proceed and do not invalidate the slot.
+
+### SEMANTIC_AUTHORITY
+
+Require integration/reconciliation with the new accepted authority and rerun only mapped affected Claims/Jobs when the Task Freshness Contract supports a safe bounded mapping.
+
+If impact cannot be bounded safely, expand verification conservatively and explain why.
+
+If semantic changes alter Scope/Claims/Success Criteria/Evidence Authority, escalate to Contract Revision instead of ordinary retry.
+
+### CONTRACT_INVALIDATING
+
+Use:
+
+```text
+status:draft
+→ Contract Revision / Publication Gate
+```
+
+Do not disguise it as freshness-only REVISE.
+
+### strict-main
+
+If the frozen Task Contract explicitly uses `Freshness policy: strict-main`, enforce it exactly. The dependency-aware default cannot be used after the fact to lower that Task's published requirement.
+
+## Reviewing an Integration-only Attempt
+
+When the previous Coordinator decision established `[INTEGRATION GATE]` / `Revision class: INTEGRATION_ONLY`, verify:
+
+```text
+Original Task Candidate is preserved/identified
+Integration Base matches the frozen gate SHA
+Integration Candidate includes Task Candidate ancestry (merge preferred)
+no semantic/task-owned conflict changed the accepted Task implementation
+required JI jobs ran on exact Integration Candidate
+JI results PASS
+```
+
+If clean integration preserves Task semantics, reuse the earlier semantic Evidence and do not rerun unrelated Claims.
+
+If conflict resolution or integration changes Task-owned semantic implementation, reclassify as `SEMANTIC_AUTHORITY` and require affected Claim re-verification.
+
+Immediately before merge, re-read Current Main:
+
+- if it only advanced with `UNRELATED` changes, the Integration Slot remains valid;
+- if an overlapping/semantic change was merged, reclassify against the new main before accepting.
+
 ## Coordinator decision
 
 Post `[COORDINATOR REVIEW]` using `docs/tasks/issue-lifecycle-protocol.md` and choose exactly one:
@@ -99,7 +212,16 @@ ACCEPT | REVISE | BLOCK | SPLIT | NOT_PLANNED
 
 ### REVISE
 
-Use when Contract is still correct but implementation/candidate/Evidence is incomplete or failed.
+Use when Contract is still correct but implementation/candidate/Evidence/freshness composition is incomplete.
+
+Set an explicit revision class when useful:
+
+```text
+IMPLEMENTATION
+EVIDENCE
+SEMANTIC_FRESHNESS
+INTEGRATION_ONLY
+```
 
 Then:
 
@@ -116,6 +238,8 @@ prompt.md unchanged unless bootstrap itself is wrong
 Do not create a new Issue for an ordinary retry.
 
 When an existing branch/PR remains valid, explicitly tell Attempt N+1 to reuse it. Do not restart from scratch solely because the Worker/session changed.
+
+For `INTEGRATION_ONLY`, explicitly preserve the previously accepted semantic Claims and list only the JI work required.
 
 Select next-entry profile from `docs/tasks/handoffs/`:
 
@@ -158,20 +282,20 @@ If resolving blocker changes Contract/bootstrap, republish through `task-publish
 
 Use only when new work has an independent Scope, lifecycle/owner, Success Criteria, Evidence Authority, or deliverable.
 
-Do not split merely because different Runner/Target environments are involved.
+Do not split merely because different Runner/Target environments are involved or because integration verification is needed.
 
 Post `[SPLIT]` on parent Issue and publish child Task(s) through `task-publisher`.
 
 ### Contract / bootstrap revision
 
-If Scope, Claims, Success Criteria, decomposition, Evidence Authority, architecture/security premise, or task-specific bootstrap must change, do not encode the change only in Issue comments.
+If Scope, Claims, Success Criteria, decomposition, Evidence Authority, architecture/security premise, Freshness Contract, or task-specific bootstrap must change, do not encode the change only in Issue comments.
 
 Use:
 
 ```text
 status:draft when needed to make package non-claimable
-→ update canonical docs when required
-→ update task.md for Contract changes
+→ update canonical/process docs when required
+→ update task.md for Contract/freshness changes
 → update prompt.md for bootstrap changes
 → task-publisher read-back/publication gate
 → status:ready + eligible env(s)
@@ -185,20 +309,27 @@ Use only when Final Acceptance Gate is satisfied:
 
 ```text
 Task Success Criteria accepted
-+ all required Claims accepted
++ all required semantic Claims accepted
 + required Verification Evidence reviewed
++ freshness classification resolved
++ required Integration Gate PASS when applicable
 + required Candidate / PR accepted
 + no unresolved blocker
 + no required linked child Task still open
 ```
 
-Then:
+Before merge, verify exact expected PR head.
 
-1. post `[COORDINATOR REVIEW]` with `Decision: ACCEPT`;
-2. post `[FINAL ACCEPTANCE]`;
-3. set `status:done`;
-4. close Issue as completed;
-5. re-read Issue to confirm final comment/state/closure.
+Final Acceptance should record both identities when they differ:
+
+```text
+Accepted Task Candidate: <sha>
+Accepted Integration Candidate: <sha or same/n/a>
+Freshness classification at merge: <...>
+Integration Base: <sha or n/a>
+```
+
+Then follow the repository's normal exact-head merge/read-back/Final Acceptance sequence.
 
 A closed Task does not automatically make its Parent Goal / Research Gate PASS.
 
@@ -226,9 +357,10 @@ For normal Review, return durable decision and next action:
 Issue: #<issue>
 Reviewed Attempt: <N>
 Decision: ACCEPT | REVISE | BLOCK | SPLIT | NOT_PLANNED
+Freshness: NONE | UNRELATED | INTEGRATION_OVERLAP | SEMANTIC_AUTHORITY | CONTRACT_INVALIDATING | strict-main
 Issue state: <state>
 Contract changed: yes | no
-Next action: <close | downstream handoff(s) | unblock | child task>
+Next action: <close | integration-only handoff | downstream handoff(s) | unblock | child task>
 ```
 
 For interrupted execution recovery, return:
