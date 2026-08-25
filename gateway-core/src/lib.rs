@@ -841,6 +841,7 @@ async fn entry_handler() -> Response {
 #[derive(Clone, Debug, Deserialize)]
 struct DisplayPageQuery {
     profile: Option<String>,
+    prep: Option<String>,
 }
 
 async fn display_handler(
@@ -852,8 +853,11 @@ async fn display_handler(
         .read()
         .expect("proof paths poisoned")
         .clone();
-    if query.profile.as_deref() == Some("tv") {
+    if query.profile.as_deref() == Some("tv") && query.prep.as_deref() == Some("1") {
         return tv_display_page(paths.display_path, paths.subtitle_path);
+    }
+    if query.profile.as_deref() == Some("tv") {
+        return tv_display_page(None, None);
     }
     let path = paths.display_path.or(paths.mp4_path);
     probe_display_page(path)

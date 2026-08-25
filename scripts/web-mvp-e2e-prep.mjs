@@ -79,6 +79,8 @@ async function run() {
   await display.goto(`${base}/display?profile=tv`, { waitUntil: 'domcontentloaded' });
   const initialRegistration = await waitForRegistration(display);
   if (!initialRegistration.display_id || !initialRegistration.registration_id) throw new Error('Display registration missing');
+  const preSessionMedia = await display.locator('#player').getAttribute('src');
+  if (preSessionMedia) throw new Error('production TV Display preloaded a proof media path before session creation');
   evidence.production_path.push('GET /display?profile=tv → POST /api/v1/displays/register → heartbeat');
   evidence.claims.C1 = { production_display_route: true, proof_path_not_used_for_creation: true };
   evidence.claims.C2 = { display_id: initialRegistration.display_id, registration_id: initialRegistration.registration_id, lease_redacted: true };

@@ -67,7 +67,7 @@ async function testDisplay() {
     if (request.url().includes('/heartbeat')) evidence.requests.heartbeat += 1;
     if (request.url().includes('/stream/') && request.url().includes('subtitle-fixture')) evidence.requests.subtitle += 1;
   });
-  await page.goto(`${base}/display?profile=tv`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${base}/display?profile=tv&prep=1`, { waitUntil: 'domcontentloaded' });
   const first = await waitForRegistration(page);
   if (!first.display_id || !first.registration_id) throw new Error('TV display did not register');
   await page.waitForFunction(() => document.querySelector('#subtitle-track')?.readyState === 2, null, { timeout: 10000 });
