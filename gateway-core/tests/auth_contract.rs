@@ -4,22 +4,13 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::get;
 use gateway_core::{
     AccountState, AuthBoundaryError, CandidateValidation, CleanupResult, EgressPolicy, EgressScope,
-    PendingIntent, PendingPlaybackAction, ScopedSiteHttpClient, SecretMaterial, SessionVault,
-    SiteAccessCapability, SiteAccessError, VaultError,
+    PendingIntent, PendingPlaybackAction, ScopedSiteHttpClient, SessionVault, SiteAccessCapability,
+    SiteAccessContext, SiteAccessError, VaultError,
 };
 use site_adapter_api::SourceLocator;
 use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
-
-fn secret_material(suffix: &str) -> SecretMaterial {
-    SecretMaterial::new(
-        Some(format!("session-cookie-{suffix}")),
-        Some(format!("Bearer session-token-{suffix}")),
-        Some(format!("local-storage-{suffix}")),
-        Some(format!("profile-{suffix}").into_bytes()),
-    )
-}
 
 fn setup_account() -> (SessionVault, gateway_core::SiteSessionRef) {
     let vault = SessionVault::isolated_test();
@@ -27,7 +18,7 @@ fn setup_account() -> (SessionVault, gateway_core::SiteSessionRef) {
         .register_account("site-a", "account-a", "Fixture account")
         .unwrap();
     let candidate = vault
-        .create_candidate_session("site-a", "account-a", secret_material("old"))
+        .create_fixture_candidate_session("site-a", "account-a", "old")
         .unwrap();
     let result = vault
         .validate_and_swap(&candidate, CandidateValidation::Valid)
@@ -45,7 +36,7 @@ fn vault_models_account_state_and_failed_or_cancelled_rotation() {
     );
 
     let failed = vault
-        .create_candidate_session("site-a", "account-a", secret_material("failed"))
+        .create_fixture_candidate_session("site-a", "account-a", "failed")
         .unwrap();
     assert_eq!(
         vault.validate_and_swap(&failed, CandidateValidation::Invalid),
@@ -57,7 +48,7 @@ fn vault_models_account_state_and_failed_or_cancelled_rotation() {
     );
 
     let cancelled = vault
-        .create_candidate_session("site-a", "account-a", secret_material("cancelled"))
+        .create_fixture_candidate_session("site-a", "account-a", "cancelled")
         .unwrap();
     vault.cancel_candidate(&cancelled).unwrap();
     assert_eq!(
@@ -66,17 +57,14 @@ fn vault_models_account_state_and_failed_or_cancelled_rotation() {
     );
 
     let replacement = vault
-        .create_candidate_session("site-a", "account-a", secret_material("new"))
+        .create_fixture_candidate_session("site-a", "account-a", "new")
         .unwrap();
     let swapped = vault
         .validate_and_swap(&replacement, CandidateValidation::Valid)
         .unwrap();
     assert_eq!(swapped.replaced_session, Some(old_active.clone()));
     assert_eq!(swapped.cleanup, CleanupResult::PreviousSessionRemoved);
-    assert_eq!(
-        vault.read_secret(&old_active),
-        Err(VaultError::SessionNotActive)
-    );
+    assert!(!vault.has_session(&old_active));
     assert_eq!(
         vault.account("site-a", "account-a").unwrap().state(),
         AccountState::Valid
@@ -100,7 +88,7 @@ fn vault_keeps_one_active_account_per_site() {
         .register_account("site-a", "account-b", "Second fixture account")
         .unwrap();
     let second_candidate = vault
-        .create_candidate_session("site-a", "account-b", secret_material("second"))
+        .create_fixture_candidate_session("site-a", "account-b", "second")
         .unwrap();
     let swapped = vault
         .validate_and_swap(&second_candidate, CandidateValidation::Valid)
@@ -118,10 +106,7 @@ fn vault_keeps_one_active_account_per_site() {
             .active_session(),
         Some(&swapped.active_session)
     );
-    assert_eq!(
-        vault.read_secret(&first_active),
-        Err(VaultError::SessionNotActive)
-    );
+    assert!(!vault.has_session(&first_active));
 }
 
 #[test]
@@ -136,6 +121,10 @@ fn capability_is_bound_to_site_account_host_expiry_and_active_session() {
         Duration::from_secs(60),
     );
     let media = Url::parse("https://media.example.test/a").unwrap();
+    assert_eq!(
+        capability.authorize("site-a", &media),
+        Err(SiteAccessError::AccountMismatch)
+    );
     assert!(
         vault
             .authorize_capability(&capability, "site-a", Some("account-a"), &media)
@@ -177,7 +166,7 @@ fn capability_is_bound_to_site_account_host_expiry_and_active_session() {
     );
 
     let replacement = vault
-        .create_candidate_session("site-a", "account-a", secret_material("rotated"))
+        .create_fixture_candidate_session("site-a", "account-a", "rotated")
         .unwrap();
     vault
         .validate_and_swap(&replacement, CandidateValidation::Valid)
@@ -216,10 +205,6 @@ fn pending_intent_is_recoverable_metadata_without_secret_fields() {
 
 #[test]
 fn vault_and_capability_diagnostics_redact_secret_sentinels() {
-    let material = secret_material("sentinel");
-    let material_debug = format!("{material:?}");
-    assert!(!material_debug.contains("sentinel"));
-
     let capability = SiteAccessCapability::issue(
         "site-a",
         Some("account-a".into()),
@@ -279,10 +264,12 @@ async fn controlled_http_injects_only_vault_auth_and_rechecks_redirects() {
             &Url::parse(&format!("http://127.0.0.1:{}/", address.port())).unwrap(),
         )
         .unwrap();
+    let egress = Arc::new(policy);
     let client = ScopedSiteHttpClient::new(
-        vault,
-        Arc::new(policy),
+        vault.clone(),
+        egress.clone(),
         EgressScope::ConfiguredLocalService("fixture".into()),
+        SiteAccessContext::issue("site-a", Some("account-a".into())),
     );
     let capability = SiteAccessCapability::issue_for_session(
         "site-a",
@@ -292,10 +279,50 @@ async fn controlled_http_injects_only_vault_auth_and_rechecks_redirects() {
         active.session_id(),
         Duration::from_secs(60),
     );
+    let omitted_account_client = ScopedSiteHttpClient::new(
+        vault.clone(),
+        egress.clone(),
+        EgressScope::ConfiguredLocalService("fixture".into()),
+        SiteAccessContext::issue("site-a", None),
+    );
+    let wrong_account_client = ScopedSiteHttpClient::new(
+        vault.clone(),
+        egress.clone(),
+        EgressScope::ConfiguredLocalService("fixture".into()),
+        SiteAccessContext::issue("site-a", Some("account-b".into())),
+    );
+    let wrong_site_client = ScopedSiteHttpClient::new(
+        vault,
+        egress,
+        EgressScope::ConfiguredLocalService("fixture".into()),
+        SiteAccessContext::issue("site-b", Some("account-a".into())),
+    );
+    let auth_url = Url::parse(&format!("http://127.0.0.1:{}/auth", address.port())).unwrap();
+    assert_eq!(
+        omitted_account_client
+            .request(&capability, reqwest::Method::GET, auth_url.clone())
+            .await,
+        Err(AuthBoundaryError::Capability(
+            SiteAccessError::AccountMismatch
+        ))
+    );
+    assert_eq!(
+        wrong_account_client
+            .request(&capability, reqwest::Method::GET, auth_url.clone())
+            .await,
+        Err(AuthBoundaryError::Capability(
+            SiteAccessError::AccountMismatch
+        ))
+    );
+    assert_eq!(
+        wrong_site_client
+            .request(&capability, reqwest::Method::GET, auth_url)
+            .await,
+        Err(AuthBoundaryError::Capability(SiteAccessError::SiteMismatch))
+    );
     let response = client
         .request(
             &capability,
-            Some("account-a"),
             reqwest::Method::GET,
             Url::parse(&format!("http://127.0.0.1:{}/redirect", address.port())).unwrap(),
         )
@@ -309,7 +336,6 @@ async fn controlled_http_injects_only_vault_auth_and_rechecks_redirects() {
     let invalid_redirect = client
         .request(
             &capability,
-            Some("account-a"),
             reqwest::Method::GET,
             Url::parse(&format!("http://127.0.0.1:{}/bad-redirect", address.port())).unwrap(),
         )

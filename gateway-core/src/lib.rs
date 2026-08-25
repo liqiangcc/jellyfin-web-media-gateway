@@ -26,7 +26,7 @@ pub mod security;
 pub use auth::{
     AccountState, AuthBoundaryError, CandidateValidation, CleanupResult, PendingIntent,
     PendingPlaybackAction, PendingSourceLocator, ScopedHttpResponse, ScopedSiteHttpClient,
-    SecretMaterial, SessionSwapResult, SessionVault, SiteAccount, SiteSessionRef, VaultError,
+    SessionSwapResult, SessionVault, SiteAccessContext, SiteAccount, SiteSessionRef, VaultError,
 };
 pub use security::{
     EgressPolicy, EgressPolicyError, EgressScope, HttpAuthorityError, HttpAuthorityPolicy,

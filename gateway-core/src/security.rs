@@ -464,12 +464,10 @@ impl SiteAccessCapability {
         if self.site_id != site_id {
             return Err(SiteAccessError::SiteMismatch);
         }
-        if let Some(expected_account) = self.account_ref.as_deref() {
-            if let Some(account_ref) = account_ref
-                && account_ref != expected_account
-            {
-                return Err(SiteAccessError::AccountMismatch);
-            }
+        if self.account_ref.as_deref() != account_ref
+            && (self.account_ref.is_some() || account_ref.is_some())
+        {
+            return Err(SiteAccessError::AccountMismatch);
         }
         if !matches!(url.scheme(), "http" | "https")
             || url.username() != ""
@@ -653,22 +651,25 @@ mod tests {
             Duration::from_secs(60),
         );
         assert!(
-            cap.authorize(
+            cap.authorize_for_account(
                 "video-site",
+                Some("account-a"),
                 &Url::parse("https://media.example.test/a").unwrap()
             )
             .is_ok()
         );
         assert_eq!(
-            cap.authorize(
+            cap.authorize_for_account(
                 "other-site",
+                Some("account-a"),
                 &Url::parse("https://media.example.test/a").unwrap()
             ),
             Err(SiteAccessError::SiteMismatch)
         );
         assert_eq!(
-            cap.authorize(
+            cap.authorize_for_account(
                 "video-site",
+                Some("account-a"),
                 &Url::parse("https://other.example.test/a").unwrap()
             ),
             Err(SiteAccessError::HostNotAllowed)

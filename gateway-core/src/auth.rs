@@ -97,7 +97,7 @@ impl SiteAccount {
 /// infrastructure.  Its Debug representation intentionally never includes
 /// field values.
 #[derive(Clone, Eq, PartialEq)]
-pub struct SecretMaterial {
+struct SecretMaterial {
     cookie_header: Option<String>,
     authorization_header: Option<String>,
     local_storage: Option<String>,
@@ -105,7 +105,7 @@ pub struct SecretMaterial {
 }
 
 impl SecretMaterial {
-    pub fn new(
+    fn new(
         cookie_header: Option<String>,
         authorization_header: Option<String>,
         local_storage: Option<String>,
@@ -119,7 +119,7 @@ impl SecretMaterial {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.cookie_header.is_none()
             && self.authorization_header.is_none()
             && self.local_storage.is_none()
@@ -275,7 +275,7 @@ impl SessionVault {
         Ok(account.clone())
     }
 
-    pub fn create_candidate_session(
+    fn create_candidate_session(
         &self,
         site_id: &str,
         account_ref: &str,
@@ -301,6 +301,27 @@ impl SessionVault {
             },
         );
         Ok(reference)
+    }
+
+    /// Creates a deterministic fake session for contract tests without
+    /// exposing a public raw-secret insertion or retrieval API.  Production
+    /// auth flows use the private server-side candidate method above.
+    pub fn create_fixture_candidate_session(
+        &self,
+        site_id: &str,
+        account_ref: &str,
+        fixture_label: &str,
+    ) -> Result<SiteSessionRef, VaultError> {
+        self.create_candidate_session(
+            site_id,
+            account_ref,
+            SecretMaterial::new(
+                Some(format!("session-cookie-{fixture_label}")),
+                Some(format!("Bearer session-token-{fixture_label}")),
+                Some(format!("local-storage-{fixture_label}")),
+                Some(format!("profile-{fixture_label}").into_bytes()),
+            ),
+        )
     }
 
     pub fn validate_and_swap(
@@ -425,9 +446,7 @@ impl SessionVault {
         Ok(result)
     }
 
-    /// This is a trusted-infrastructure-only read.  Plugins and display
-    /// adapters receive a capability/client, never this vault method.
-    pub fn read_secret(&self, session: &SiteSessionRef) -> Result<SecretMaterial, VaultError> {
+    fn read_secret(&self, session: &SiteSessionRef) -> Result<SecretMaterial, VaultError> {
         self.inner
             .lock()
             .expect("session vault poisoned")
@@ -436,6 +455,15 @@ impl SessionVault {
             .filter(|stored| !stored.candidate && stored.reference == *session)
             .map(|stored| stored.material.clone())
             .ok_or(VaultError::SessionNotActive)
+    }
+
+    pub fn has_session(&self, session: &SiteSessionRef) -> bool {
+        self.inner
+            .lock()
+            .expect("session vault poisoned")
+            .sessions
+            .get(session.session_id())
+            .is_some_and(|stored| stored.reference == *session)
     }
 
     pub fn authorize_capability(
@@ -485,6 +513,38 @@ impl SessionVault {
             return Err(AuthBoundaryError::Capability(SiteAccessError::StaleSession));
         }
         Ok(stored.reference.clone())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SiteAccessContext {
+    site_id: String,
+    account_ref: Option<String>,
+    context_id: String,
+}
+
+impl SiteAccessContext {
+    /// Issues an independent server-side request context.  It is intentionally
+    /// separate from the presented capability so a caller cannot self-attest
+    /// the expected site by copying fields from that capability.
+    pub fn issue(site_id: impl Into<String>, account_ref: Option<String>) -> Self {
+        Self {
+            site_id: site_id.into(),
+            account_ref,
+            context_id: Uuid::new_v4().simple().to_string(),
+        }
+    }
+
+    pub fn site_id(&self) -> &str {
+        &self.site_id
+    }
+
+    pub fn account_ref(&self) -> Option<&str> {
+        self.account_ref.as_deref()
+    }
+
+    pub fn context_id(&self) -> &str {
+        &self.context_id
     }
 }
 
@@ -608,21 +668,27 @@ pub struct ScopedSiteHttpClient {
     vault: SessionVault,
     egress: Arc<EgressPolicy>,
     scope: EgressScope,
+    context: SiteAccessContext,
 }
 
 impl ScopedSiteHttpClient {
-    pub fn new(vault: SessionVault, egress: Arc<EgressPolicy>, scope: EgressScope) -> Self {
+    pub fn new(
+        vault: SessionVault,
+        egress: Arc<EgressPolicy>,
+        scope: EgressScope,
+        context: SiteAccessContext,
+    ) -> Self {
         Self {
             vault,
             egress,
             scope,
+            context,
         }
     }
 
     pub async fn request(
         &self,
         capability: &SiteAccessCapability,
-        account_ref: Option<&str>,
         method: Method,
         url: Url,
     ) -> Result<ScopedHttpResponse, AuthBoundaryError> {
@@ -630,8 +696,8 @@ impl ScopedSiteHttpClient {
         for redirect_count in 0..=5 {
             let session = self.vault.authorize_capability(
                 capability,
-                capability.site_id(),
-                account_ref,
+                self.context.site_id(),
+                self.context.account_ref(),
                 &current,
             )?;
             let target = self
@@ -702,4 +768,22 @@ fn safe_response_headers(headers: &HeaderMap) -> HeaderMap {
         }
     }
     safe
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn secret_material_debug_is_redacted_inside_the_vault_boundary() {
+        let material = SecretMaterial::new(
+            Some("cookie-secret-sentinel".into()),
+            Some("Bearer authorization-secret-sentinel".into()),
+            Some("local-storage-secret-sentinel".into()),
+            Some(b"profile-secret-sentinel".to_vec()),
+        );
+        let diagnostic = format!("{material:?}");
+        assert!(!diagnostic.contains("secret-sentinel"));
+        assert!(diagnostic.contains("[REDACTED]"));
+    }
 }
