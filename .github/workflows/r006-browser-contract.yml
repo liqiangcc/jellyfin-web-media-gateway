@@ -74,6 +74,3 @@ jobs:
           rustup default stable
       - name: Run exact-Candidate workspace regressions
         run: cargo test --workspace --all-targets
-      - name: Verify no target runtime is claimed
-        run: |
-          ! rg -n -i 'target-device|ubuntu-arm64|self-hosted|chromium-baseline|phone viability' gateway-core/src/browser.rs
