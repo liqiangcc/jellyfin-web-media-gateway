@@ -79,6 +79,10 @@ try {
   await waitFor('#display-status', value => value === 'Online', 'accepted Web Display status');
   evidence.pages.push({ route: '/control', item: await page.locator('#item').textContent(), display: await page.locator('#display-status').textContent() });
 
+  // The real session may already be playing. Use the server-projected
+  // control availability rather than assuming a fixture playback state, then
+  // exercise both accepted Play and Pause paths.
+  if (!(await page.locator('#play').isEnabled())) await clickAndWait('#pause', 'Command accepted');
   await clickAndWait('#play', 'Command accepted');
   await clickAndWait('#pause', 'Command accepted');
   await page.locator('#seek-position').fill('4200');
