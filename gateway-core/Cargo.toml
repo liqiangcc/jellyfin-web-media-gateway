@@ -6,6 +6,18 @@ license.workspace = true
 rust-version.workspace = true
 publish = false
 
+[features]
+control-ui-harness = []
+
+[[bin]]
+name = "r001-server"
+path = "src/bin/r001-server.rs"
+
+[[bin]]
+name = "control-ui-harness"
+path = "src/bin/control-ui-harness.rs"
+required-features = ["control-ui-harness"]
+
 [dependencies]
 axum.workspace = true
 bytes.workspace = true

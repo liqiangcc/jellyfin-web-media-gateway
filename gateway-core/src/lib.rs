@@ -460,6 +460,30 @@ impl GatewayService {
         }
     }
 
+    /// Create a disposable session and current Web Display only for the
+    /// gated deterministic browser harness. This is deliberately a Rust API,
+    /// not a production route, and is unavailable in normal builds.
+    #[cfg(feature = "control-ui-harness")]
+    pub fn seed_control_ui_harness_session(&self) -> Result<String, DisplaySessionError> {
+        let session_id = self.state.control.seed_harness_session(
+            "control-ui-item",
+            "control-ui-harness-media",
+            "control-ui-display",
+        );
+        self.state.display_sessions.register(
+            &self.state.control,
+            DisplayRegistration {
+                session_id: Some(session_id.clone()),
+                display_id: "control-ui-display".into(),
+                label: "Control UI harness display".into(),
+                capabilities: vec!["video".into(), "audio".into(), "seek".into()],
+                previous_registration_id: None,
+                previous_lease_token: None,
+            },
+        )?;
+        Ok(session_id)
+    }
+
     /// Register a private integration from deployment/admin configuration.
     /// User/plugin URLs cannot create this exception because validation also
     /// requires the named entry and its configured origin.
@@ -587,6 +611,7 @@ impl GatewayService {
             .route("/proof/paths", get(proof_paths_handler))
             .route("/display", get(display_handler))
             .route("/control", get(control_handler))
+            .route("/api/v1/control/{session_id}", get(control_view_handler))
             .route(
                 "/api/v1/sessions/{session_id}",
                 get(control_session_snapshot_handler),
@@ -936,30 +961,144 @@ const DISPLAY_PAGE: &str = r##"<!doctype html>
 </html>"##;
 
 const CONTROL_PAGE: &str = r##"<!doctype html>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Remote Playback Control</title>
-<style>body{font:1.1rem system-ui;max-width:38rem;margin:2rem auto;padding:1rem}button{font:inherit;padding:.8rem 1rem;margin:.4rem 0}pre{white-space:pre-wrap;background:#eee;padding:1rem}</style>
-<h1>Remote Playback Control</h1>
-<p>Send one audible play attempt to the Web Display probe.</p>
-<button id="play" type="button">Play on Display</button>
-<button id="reset" type="button">Reset probe diagnostics</button>
-<pre id="result" aria-live="polite">Ready.</pre>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Control</title>
+<style>
+:root{color-scheme:light dark;font:16px system-ui,sans-serif}body{margin:0;background:#10131a;color:#f4f6fb}
+main{max-width:52rem;margin:0 auto;padding:1.25rem}section{margin:1rem 0;padding:1rem;border:1px solid #3c4658;border-radius:.75rem;background:#171c26}
+h1,h2{margin:.1rem 0 .65rem}p{margin:.45rem 0;color:#c8d1df}dl{display:grid;grid-template-columns:minmax(8rem,auto) 1fr;gap:.4rem .8rem;margin:.5rem 0}dt{color:#9eabc0}dd{margin:0}
+.controls{display:flex;flex-wrap:wrap;gap:.5rem}button{min-height:2.8rem;padding:.6rem .9rem;border:1px solid #8da8d8;border-radius:.4rem;background:#2b4778;color:#fff;font:inherit}button:disabled{opacity:.45;cursor:not-allowed}
+input{max-width:9rem;padding:.65rem;border:1px solid #66748b;border-radius:.4rem;background:#0e1219;color:inherit;font:inherit}.status{min-height:1.5rem}.error{color:#ffb6b6}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+</style></head>
+<body><main>
+<h1>Control</h1><p id="connection" class="status" role="status">Starting…</p>
+<section aria-labelledby="now-playing-heading"><h2 id="now-playing-heading">Now Playing</h2><dl>
+<dt>Item</dt><dd id="item">Not available</dd><dt>State</dt><dd id="playback-state">Not available</dd><dt>Position</dt><dd id="position">Not available</dd>
+</dl><div class="controls" aria-label="Playback controls">
+<button id="play" type="button" data-command="play">Play</button><button id="pause" type="button" data-command="pause">Pause</button>
+<label><span class="sr-only">Seek position in milliseconds</span><input id="seek-position" type="number" min="0" step="1000" value="0"></label><button id="seek" type="button">Seek</button><button id="stop" type="button" data-command="stop">Stop</button>
+</div></section>
+<section aria-labelledby="display-heading"><h2 id="display-heading">Active Display</h2><dl><dt>Display</dt><dd id="display-id">Not available</dd><dt>Status</dt><dd id="display-status">Not available</dd><dt>Observation</dt><dd id="display-observation">Not available</dd><dt>Error</dt><dd id="display-error">None</dd></dl></section>
+<section aria-labelledby="site-heading"><h2 id="site-heading">Site / Account</h2><dl><dt>Site</dt><dd id="site">Unavailable</dd><dt>Account</dt><dd id="account-state">Unknown</dd><dt>Native panel</dt><dd id="panel-status">Not attached</dd></dl></section>
+<section aria-labelledby="action-heading"><h2 id="action-heading">Action required</h2><p id="action-required">None</p></section>
+<p id="feedback" class="status" role="status" aria-live="polite"></p>
+</main>
 <script>
-  const result = document.querySelector('#result');
-  document.querySelector('#play').onclick = async () => {
+(() => {
+  const sessionId = new URLSearchParams(location.search).get('session_id');
+  const viewEndpoint = sessionId ? `/api/v1/control/${encodeURIComponent(sessionId)}` : null;
+  const eventEndpoint = sessionId ? `/api/v1/sessions/${encodeURIComponent(sessionId)}/events` : null;
+  let currentView = null, requestInFlight = false, refreshSequence = 0, eventCursor = null, eventPollInFlight = false;
+  const $ = id => document.querySelector(id);
+  const text = (id, value) => { $(id).textContent = value == null || value === '' ? 'Unavailable' : String(value); };
+  const setConnection = (value, error = false) => { text('#connection', value); $('#connection').classList.toggle('error', error); };
+  const setFeedback = (value, error = false) => { text('#feedback', value || ''); $('#feedback').classList.toggle('error', error); };
+  const boundedCode = payload => payload && typeof payload.code === 'string' ? payload.code : 'COMMAND_REJECTED';
+  const recoveryMessage = code => ({
+    REVISION_CONFLICT: 'This control view was stale. It was refreshed from Gateway.',
+    REQUEST_ID_MISMATCH: 'The command identity was already used differently. The view was refreshed.',
+    SESSION_NOT_FOUND: 'This playback session no longer exists.', DISPLAY_OFFLINE: 'The active display is unavailable; playback state remains authoritative.',
+    SERVER_UNAVAILABLE: 'The active display reported an unavailable service.', COMMAND_REJECTED: 'Gateway rejected the command; the view was refreshed.'
+  })[code] || 'Gateway rejected the request; the view was refreshed.';
+  const render = view => {
+    currentView = view;
+    text('#item', `${view.now_playing.item_id} · revision ${view.now_playing.item_revision}`); text('#playback-state', view.now_playing.state); text('#position', `${view.now_playing.position_ms} ms`);
+    text('#display-id', view.active_display.label ? `${view.active_display.label} (${view.active_display.display_id})` : view.active_display.display_id); text('#display-status', view.active_display.online ? 'Online' : 'Offline');
+    text('#display-observation', view.active_display.observation || 'Unknown'); text('#display-error', view.active_display.error_code || 'None'); text('#site', view.site.label || view.site.site_id || 'Unavailable');
+    text('#account-state', view.site_account_state.state); text('#panel-status', view.native_site_panel.status); text('#action-required', view.action_required ? `${view.action_required.kind}: ${view.action_required.code}` : 'None');
+    $('#action-required').classList.toggle('error', Boolean(view.action_required));
+    [['#play',view.playback_controls.can_play],['#pause',view.playback_controls.can_pause],['#seek',view.playback_controls.can_seek],['#stop',view.playback_controls.can_stop]].forEach(([id,enabled]) => { $(id).disabled = !enabled || requestInFlight; });
+    eventCursor = view.freshness.event_cursor;
+  };
+  const clearView = () => { currentView = null; ['#item','#playback-state','#position','#display-id','#display-status','#display-observation','#display-error','#site','#account-state','#panel-status','#action-required'].forEach(id => text(id, 'Unavailable')); ['#play','#pause','#seek','#stop'].forEach(id => { $(id).disabled = true; }); };
+  const readJson = async response => { try { return await response.json(); } catch (_) { return {}; } };
+  const refresh = async (message = '') => {
+    if (!viewEndpoint) { clearView(); setConnection('Add a bounded session_id query parameter to open a session.', true); return false; }
+    const sequence = ++refreshSequence;
+    try { const response = await fetch(viewEndpoint, {cache:'no-store'}); const payload = await readJson(response); if (sequence !== refreshSequence) return false;
+      if (!response.ok) { clearView(); const code = boundedCode(payload); setConnection(recoveryMessage(code), true); setFeedback(message || recoveryMessage(code), true); return false; }
+      render(payload); setConnection('Connected to Gateway.'); if (message) setFeedback(message); return true;
+    } catch (_) { if (sequence === refreshSequence) { setConnection('Gateway unavailable; reconnecting…', true); setFeedback('The current view was discarded until Gateway responds.', true); } return false; }
+  };
+  const command = async (type, extra = {}) => {
+    if (!currentView || requestInFlight) return; requestInFlight = true; setFeedback('Sending command…'); render(currentView);
     const request_id = `control-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
-    const response = await fetch('/api/v1/display-probe/commands', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({request_id})});
-    result.textContent = JSON.stringify(await response.json(), null, 2);
+    try { const response = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionId)}/commands`, {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({request_id, expected_session_revision:currentView.freshness.playback.session_revision, command:Object.assign({type},extra)})}); const payload = await readJson(response); const code = boundedCode(payload);
+      if (!response.ok) { setFeedback(recoveryMessage(code), true); await refresh(); return; } await refresh('Command accepted; authoritative view refreshed.');
+    } catch (_) { setFeedback('Gateway unavailable; the command result is unknown. Resyncing…', true); await refresh(); } finally { requestInFlight = false; if (currentView) render(currentView); }
   };
-  document.querySelector('#reset').onclick = async () => {
-    const response = await fetch('/api/v1/display-probe/reset', {method:'POST'});
-    result.textContent = JSON.stringify(await response.json(), null, 2);
+  const pollEvents = async () => {
+    if (!eventEndpoint || eventPollInFlight) return; eventPollInFlight = true;
+    try { const after = eventCursor == null ? 0 : eventCursor; const response = await fetch(`${eventEndpoint}?after=${encodeURIComponent(after)}`, {cache:'no-store'}); const payload = await readJson(response);
+      if (!response.ok) { await refresh('Event reconnect requested a fresh view.'); return; } if (payload.snapshot_required || Number(payload.cursor) > Number(eventCursor || 0)) await refresh('Gateway event received; authoritative view refreshed.'); setConnection('Connected to Gateway.');
+    } catch (_) { setConnection('Event stream disconnected; rebuilding…', true); await refresh(); } finally { eventPollInFlight = false; }
   };
-</script>"##;
+  document.querySelectorAll('[data-command]').forEach(button => button.addEventListener('click', () => command(button.dataset.command)));
+  $('#seek').addEventListener('click', () => command('seek', {position_ms:Math.max(0, Number($('#seek-position').value) || 0)}));
+  window.__controlUi = {refresh, pollEvents, getView:() => currentView}; refresh(); window.setInterval(pollEvents, 1000);
+})();
+</script></body></html>"##;
 
 async fn control_handler() -> Response {
     Html(CONTROL_PAGE.to_string()).into_response()
+}
+
+fn control_view_for_session(
+    state: &GatewayState,
+    session_id: &str,
+) -> Result<ControlView, ControlLookupError> {
+    let playback = state.control.snapshot(session_id)?;
+    let event_cursor = state.control.events_after(session_id, 0)?.cursor;
+    let display = state
+        .display_sessions
+        .display_view_input(&state.control, &playback.active_display.display_id)
+        .unwrap_or_default();
+    Ok(ControlView::project(ControlViewInput {
+        playback,
+        event_cursor: Some(event_cursor),
+        site: SiteViewInput::default(),
+        browser: BrowserViewInput::default(),
+        display,
+    }))
+}
+
+async fn control_view_handler(
+    State(state): State<Arc<GatewayState>>,
+    Path(session_id): Path<String>,
+) -> Response {
+    if !valid_control_selector(&session_id) {
+        return control_error_response(
+            StatusCode::BAD_REQUEST,
+            ControlErrorResponse {
+                code: "SESSION_ID_INVALID",
+                message: "session selector is invalid",
+                current_revision: None,
+                transition_id: None,
+            },
+        );
+    }
+    match control_view_for_session(&state, &session_id) {
+        Ok(view) => Json(view).into_response(),
+        Err(ControlLookupError::NotFound) => control_error_response(
+            StatusCode::NOT_FOUND,
+            ControlErrorResponse {
+                code: "SESSION_NOT_FOUND",
+                message: "session was not found",
+                current_revision: None,
+                transition_id: None,
+            },
+        ),
+    }
+}
+
+fn valid_control_selector(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || ".:_-".contains(character))
 }
 
 #[derive(Clone, Debug, Deserialize)]

@@ -1,10 +1,10 @@
 use crate::playback::{Command, CommandEnvelope, CommandError, PlaybackSession, PlaybackState};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-#[cfg(test)]
+#[cfg(any(test, feature = "control-ui-harness"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-#[cfg(test)]
+#[cfg(any(test, feature = "control-ui-harness"))]
 use uuid::Uuid;
 
 pub const MAX_CONTROL_BODY_BYTES: usize = 32 * 1024;
@@ -241,7 +241,7 @@ struct SessionRecord {
 #[derive(Clone, Debug)]
 pub struct ControlService {
     sessions: Arc<RwLock<HashMap<String, Arc<Mutex<SessionRecord>>>>>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "control-ui-harness"))]
     next_session_id: Arc<AtomicU64>,
     #[cfg(test)]
     fail_next_publication: Arc<std::sync::atomic::AtomicBool>,
@@ -262,7 +262,7 @@ impl ControlService {
         );
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "control-ui-harness"))]
             next_session_id: Arc::new(AtomicU64::new(1)),
             #[cfg(test)]
             fail_next_publication: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -274,6 +274,26 @@ impl ControlService {
     /// the service; no HTTP route accepts caller-selected media or sessions.
     #[cfg(test)]
     pub(crate) fn seed_test_session(
+        &self,
+        item_id: impl Into<String>,
+        resolved_media: impl Into<String>,
+        display_id: impl Into<String>,
+    ) -> String {
+        self.seed_session(item_id, resolved_media, display_id)
+    }
+
+    #[cfg(feature = "control-ui-harness")]
+    pub fn seed_harness_session(
+        &self,
+        item_id: impl Into<String>,
+        resolved_media: impl Into<String>,
+        display_id: impl Into<String>,
+    ) -> String {
+        self.seed_session(item_id, resolved_media, display_id)
+    }
+
+    #[cfg(any(test, feature = "control-ui-harness"))]
+    fn seed_session(
         &self,
         item_id: impl Into<String>,
         resolved_media: impl Into<String>,
