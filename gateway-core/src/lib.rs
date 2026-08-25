@@ -13,7 +13,7 @@ use axum::{Json, Router};
 use bytes::Bytes;
 use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
-use site_adapter_api::{ResolvedStream, StreamProtocol};
+use site_adapter_api::{ResolvedStream, SiteAdapterRegistry, StreamProtocol};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -30,6 +30,7 @@ mod control_contract_tests;
 pub mod control_view;
 pub mod display_session;
 pub mod security;
+mod source_session;
 pub use auth::{
     AccountState, AuthBoundaryError, CandidateValidation, CleanupResult, PendingIntent,
     PendingPlaybackAction, PendingSourceLocator, ScopedHttpResponse, ScopedSiteHttpClient,
@@ -56,6 +57,10 @@ pub use display_session::{
 pub use security::{
     EgressPolicy, EgressPolicyError, EgressScope, HttpAuthorityError, HttpAuthorityPolicy,
     SiteAccessCapability, SiteAccessError, ValidatedTarget,
+};
+pub use source_session::{
+    CreateSessionErrorResponse, CreateSessionRequest, CreateSessionResponse, SessionMediaStream,
+    SessionMediaView,
 };
 
 const MAX_MANIFEST_BYTES: usize = 512 * 1024;
@@ -186,6 +191,14 @@ impl CapabilityStore {
             .records
             .len()
     }
+
+    fn revoke(&self, token: &str) {
+        self.inner
+            .lock()
+            .expect("capability store poisoned")
+            .records
+            .remove(token);
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -208,6 +221,7 @@ struct GatewayState {
     probe: Arc<ProbeStore>,
     control: ControlService,
     display_sessions: DisplaySessionService,
+    source_sessions: source_session::SourceSessionService,
 }
 
 #[derive(Clone)]
@@ -423,6 +437,10 @@ fn sanitize_text(value: &str, max: usize) -> String {
 
 impl GatewayService {
     pub fn new(max_capabilities: usize) -> Self {
+        Self::with_registry(max_capabilities, Arc::new(SiteAdapterRegistry::default()))
+    }
+
+    pub fn with_registry(max_capabilities: usize, registry: Arc<SiteAdapterRegistry>) -> Self {
         Self {
             state: Arc::new(GatewayState {
                 store: Arc::new(CapabilityStore::new(max_capabilities)),
@@ -437,6 +455,7 @@ impl GatewayService {
                 probe: Arc::new(ProbeStore::default()),
                 control: ControlService::default(),
                 display_sessions: DisplaySessionService::default(),
+                source_sessions: source_session::SourceSessionService::new(registry),
             }),
         }
     }
@@ -520,8 +539,21 @@ impl GatewayService {
         resource: UpstreamResource,
         ttl: Duration,
     ) -> String {
+        self.issue_path_with_token(binding, resource, ttl).0
+    }
+
+    pub(crate) fn issue_path_with_token(
+        &self,
+        binding: Binding,
+        resource: UpstreamResource,
+        ttl: Duration,
+    ) -> (String, String) {
         let token = self.state.store.issue(binding.clone(), resource, ttl);
-        stream_path(&token, &binding)
+        (stream_path(&token, &binding), token)
+    }
+
+    pub(crate) fn revoke_capability(&self, token: &str) {
+        self.state.store.revoke(token);
     }
 
     pub fn configure_proof_paths(&self, paths: ProofPaths) {
@@ -557,6 +589,18 @@ impl GatewayService {
         self.state.control.clone()
     }
 
+    pub(crate) fn create_session(
+        &self,
+        request: CreateSessionRequest,
+    ) -> source_session::CreationOutcome {
+        self.state.source_sessions.create(
+            self,
+            &self.state.control,
+            &self.state.display_sessions,
+            request,
+        )
+    }
+
     pub fn router(&self) -> Router {
         Router::new()
             .route(
@@ -572,6 +616,7 @@ impl GatewayService {
                 "/api/v1/sessions/{session_id}",
                 get(control_session_snapshot_handler),
             )
+            .route("/api/v1/sessions", post(create_session_handler))
             .route(
                 "/api/v1/sessions/{session_id}/commands",
                 post(control_session_command_handler),
@@ -1090,6 +1135,32 @@ async fn control_session_snapshot_handler(
             },
         ),
     }
+}
+
+async fn create_session_handler(
+    State(state): State<Arc<GatewayState>>,
+    request: Result<Json<CreateSessionRequest>, JsonRejection>,
+) -> Response {
+    let request = match request {
+        Ok(Json(request)) => request,
+        Err(rejection) => {
+            let response = rejection.into_response();
+            if response.status() == StatusCode::PAYLOAD_TOO_LARGE {
+                return response;
+            }
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(CreateSessionErrorResponse {
+                    code: "INVALID_JSON",
+                    message: "session creation body must be valid structured JSON",
+                }),
+            )
+                .into_response();
+        }
+    };
+    GatewayService { state }
+        .create_session(request)
+        .into_response()
 }
 
 async fn control_session_events_handler(
