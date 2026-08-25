@@ -169,6 +169,33 @@ pub fn validate_resolved_media(media: &ResolvedMedia) -> Result<(), String> {
             }
         }
     }
+    for subtitle in &media.subtitles {
+        if subtitle.id.trim().is_empty() || subtitle.id.len() > 128 {
+            return Err("subtitle id must be non-empty and bounded".into());
+        }
+        if !matches!(subtitle.url.scheme(), "http" | "https") {
+            return Err("subtitle URL must use http or https".into());
+        }
+        if !subtitle.content_type.eq_ignore_ascii_case("text/vtt") {
+            return Err("subtitle content type must be text/vtt".into());
+        }
+        if subtitle
+            .language
+            .as_deref()
+            .is_some_and(|value| value.is_empty() || value.len() > 64)
+            || subtitle
+                .label
+                .as_deref()
+                .is_some_and(|value| value.is_empty() || value.len() > 128)
+        {
+            return Err("subtitle language/label is invalid".into());
+        }
+        for (name, value) in &subtitle.public_headers {
+            if is_secret_header(name, value) {
+                return Err(format!("secret-bearing subtitle header: {name}"));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -203,7 +230,9 @@ pub fn assert_error_diagnostics_bounded(sentinels: &[&str]) -> Result<(), Confor
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ResolvedStream, SiteAdapterRegistry, SourceLocator, StreamProtocol};
+    use crate::{
+        ResolvedStream, ResolvedSubtitle, SiteAdapterRegistry, SourceLocator, StreamProtocol,
+    };
     use std::collections::BTreeMap;
     use std::sync::Arc;
     use url::Url;
@@ -256,6 +285,7 @@ mod tests {
                     public_headers: BTreeMap::new(),
                     upstream_access_ref: None,
                 }],
+                subtitles: Vec::new(),
                 protection: MediaProtection::Clear,
             })
         }
@@ -299,6 +329,59 @@ mod tests {
             assert!(is_secret_header(name, value));
         }
         assert!(!is_secret_header("Accept", "video/mp4"));
+    }
+
+    #[test]
+    fn subtitle_contract_rejects_local_unsupported_and_secret_inputs() {
+        let base = ResolvedMedia {
+            title: "fixture".into(),
+            source_site: "fixture-site".into(),
+            streams: vec![ResolvedStream {
+                id: "primary".into(),
+                protocol: StreamProtocol::HttpFile,
+                url: Url::parse("https://example.test/video.mp4").unwrap(),
+                public_headers: BTreeMap::new(),
+                upstream_access_ref: None,
+            }],
+            subtitles: Vec::new(),
+            protection: MediaProtection::Clear,
+        };
+        for subtitle in [
+            ResolvedSubtitle {
+                id: "local".into(),
+                url: Url::parse("file:///tmp/captions.vtt").unwrap(),
+                content_type: "text/vtt".into(),
+                language: None,
+                label: None,
+                public_headers: BTreeMap::new(),
+                upstream_access_ref: None,
+            },
+            ResolvedSubtitle {
+                id: "unsupported".into(),
+                url: Url::parse("https://example.test/captions.srt").unwrap(),
+                content_type: "text/srt".into(),
+                language: None,
+                label: None,
+                public_headers: BTreeMap::new(),
+                upstream_access_ref: None,
+            },
+            ResolvedSubtitle {
+                id: "secret".into(),
+                url: Url::parse("https://example.test/captions.vtt").unwrap(),
+                content_type: "text/vtt".into(),
+                language: None,
+                label: None,
+                public_headers: BTreeMap::from([(
+                    "Authorization".into(),
+                    "Bearer fixture-secret".into(),
+                )]),
+                upstream_access_ref: None,
+            },
+        ] {
+            let mut candidate = base.clone();
+            candidate.subtitles.push(subtitle);
+            assert!(validate_resolved_media(&candidate).is_err());
+        }
     }
 
     #[test]

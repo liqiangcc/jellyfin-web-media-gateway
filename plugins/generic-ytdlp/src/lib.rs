@@ -407,6 +407,7 @@ pub fn parse_machine_output(bytes: &[u8]) -> Result<ResolvedMedia, ParseError> {
         title: output.title,
         source_site: SITE_ID.into(),
         streams,
+        subtitles: Vec::new(),
         protection: MediaProtection::Clear,
     })
 }

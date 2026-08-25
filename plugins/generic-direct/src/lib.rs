@@ -77,6 +77,7 @@ impl SiteAdapter for GenericDirectAdapter {
                 public_headers: BTreeMap::new(),
                 upstream_access_ref: None,
             }],
+            subtitles: Vec::new(),
             protection: MediaProtection::Clear,
         })
     }

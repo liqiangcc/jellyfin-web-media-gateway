@@ -426,7 +426,9 @@ fn failure_for_adapter(error: AdapterError) -> CreationOutcome {
 fn failure_for_gateway(error: GatewayError) -> CreationOutcome {
     let code = match error {
         GatewayError::SecretHeader => "MEDIA_SECRET_REJECTED",
-        GatewayError::InvalidHeader => "MEDIA_INVALID",
+        GatewayError::InvalidHeader
+        | GatewayError::InvalidSubtitle
+        | GatewayError::UnsupportedSubtitleContentType => "MEDIA_INVALID",
     };
     CreationOutcome::Failure {
         status: axum::http::StatusCode::UNPROCESSABLE_ENTITY,
@@ -549,6 +551,7 @@ mod tests {
                 title: "fixture media".into(),
                 source_site: self.site_id().into(),
                 streams,
+                subtitles: vec![],
                 protection: MediaProtection::Clear,
             })
         }

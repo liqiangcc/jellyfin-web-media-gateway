@@ -13,7 +13,7 @@ use axum::{Json, Router};
 use bytes::Bytes;
 use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
-use site_adapter_api::{ResolvedStream, SiteAdapterRegistry, StreamProtocol};
+use site_adapter_api::{ResolvedStream, ResolvedSubtitle, SiteAdapterRegistry, StreamProtocol};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -205,6 +205,7 @@ impl CapabilityStore {
 pub struct ProofPaths {
     pub mp4_path: Option<String>,
     pub display_path: Option<String>,
+    pub subtitle_path: Option<String>,
     pub hls_path: Option<String>,
     pub secret_path: Option<String>,
     pub chain: String,
@@ -218,6 +219,7 @@ struct GatewayState {
     active_streams: Arc<AtomicUsize>,
     proof_paths: Arc<RwLock<ProofPaths>>,
     fixture_mp4: Arc<RwLock<Option<PathBuf>>>,
+    fixture_vtt: Arc<RwLock<Option<PathBuf>>>,
     probe: Arc<ProbeStore>,
     control: ControlService,
     display_sessions: DisplaySessionService,
@@ -233,6 +235,17 @@ pub struct GatewayService {
 pub enum GatewayError {
     InvalidHeader,
     SecretHeader,
+    InvalidSubtitle,
+    UnsupportedSubtitleContentType,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SubtitleTrackView {
+    pub id: String,
+    pub language: Option<String>,
+    pub label: Option<String>,
+    pub format: &'static str,
+    pub gateway_path: String,
 }
 
 const MAX_PROBE_RECORDS: usize = 256;
@@ -452,6 +465,7 @@ impl GatewayService {
                     ..ProofPaths::default()
                 })),
                 fixture_mp4: Arc::new(RwLock::new(None)),
+                fixture_vtt: Arc::new(RwLock::new(None)),
                 probe: Arc::new(ProbeStore::default()),
                 control: ControlService::default(),
                 display_sessions: DisplaySessionService::default(),
@@ -533,6 +547,52 @@ impl GatewayService {
         })
     }
 
+    /// Bind subtitle metadata to the same opaque Gateway capability mechanism
+    /// used by media. The browser receives only the resulting same-origin
+    /// path; upstream URL, headers, and access references remain server-side.
+    pub fn subtitle_track_view(
+        &self,
+        subtitle: &ResolvedSubtitle,
+        binding: Binding,
+        scope: EgressScope,
+        ttl: Duration,
+    ) -> Result<SubtitleTrackView, GatewayError> {
+        if !matches!(subtitle.url.scheme(), "http" | "https") {
+            return Err(GatewayError::InvalidSubtitle);
+        }
+        if !subtitle.content_type.eq_ignore_ascii_case("text/vtt") {
+            return Err(GatewayError::UnsupportedSubtitleContentType);
+        }
+        let mut public_headers = HeaderMap::new();
+        for (name, value) in &subtitle.public_headers {
+            if security::is_secret_header(name, value) {
+                return Err(GatewayError::SecretHeader);
+            }
+            let name =
+                HeaderName::from_bytes(name.as_bytes()).map_err(|_| GatewayError::InvalidHeader)?;
+            let value = HeaderValue::from_str(value).map_err(|_| GatewayError::InvalidHeader)?;
+            public_headers.insert(name, value);
+        }
+        let gateway_path = self.issue_path(
+            binding,
+            UpstreamResource {
+                url: subtitle.url.clone(),
+                protocol: StreamProtocol::HttpFile,
+                public_headers,
+                secret_headers: HeaderMap::new(),
+                egress_scope: scope,
+            },
+            ttl,
+        );
+        Ok(SubtitleTrackView {
+            id: subtitle.id.clone(),
+            language: subtitle.language.clone(),
+            label: subtitle.label.clone(),
+            format: "webvtt",
+            gateway_path,
+        })
+    }
+
     pub fn issue_path(
         &self,
         binding: Binding,
@@ -572,6 +632,14 @@ impl GatewayService {
             .expect("fixture path poisoned") = path;
     }
 
+    pub fn configure_fixture_vtt(&self, path: Option<PathBuf>) {
+        *self
+            .state
+            .fixture_vtt
+            .write()
+            .expect("subtitle fixture path poisoned") = path;
+    }
+
     pub fn active_streams(&self) -> usize {
         self.state.active_streams.load(Ordering::SeqCst)
     }
@@ -603,6 +671,7 @@ impl GatewayService {
 
     pub fn router(&self) -> Router {
         Router::new()
+            .route("/", get(entry_handler))
             .route(
                 "/stream/{token}/{session}/{item}/{revision}/{resource}",
                 get(stream_handler).head(stream_handler),
@@ -653,6 +722,10 @@ impl GatewayService {
             .route(
                 "/fixture/protected.mp4",
                 get(fixture_handler).head(fixture_handler),
+            )
+            .route(
+                "/fixture/subtitles.vtt",
+                get(subtitle_fixture_handler).head(subtitle_fixture_handler),
             )
             .route("/healthz", get(|| async { "ok" }))
             .layer(DefaultBodyLimit::max(MAX_HTTP_BODY_BYTES))
@@ -749,12 +822,27 @@ async fn proof_paths_handler(State(state): State<Arc<GatewayState>>) -> Json<Pro
     )
 }
 
-async fn display_handler(State(state): State<Arc<GatewayState>>) -> Response {
+async fn entry_handler() -> Response {
+    Html(ENTRY_PAGE.to_string()).into_response()
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct DisplayPageQuery {
+    profile: Option<String>,
+}
+
+async fn display_handler(
+    State(state): State<Arc<GatewayState>>,
+    Query(query): Query<DisplayPageQuery>,
+) -> Response {
     let paths = state
         .proof_paths
         .read()
         .expect("proof paths poisoned")
         .clone();
+    if query.profile.as_deref() == Some("tv") {
+        return tv_display_page(paths.display_path, paths.subtitle_path);
+    }
     let path = paths.display_path.or(paths.mp4_path);
     probe_display_page(path)
 }
@@ -785,6 +873,61 @@ fn probe_display_page(path: Option<String>) -> Response {
     };
     Html(DISPLAY_PAGE.replace("__MEDIA_PATH__", &escape_html_attribute(&path))).into_response()
 }
+
+fn tv_display_page(media_path: Option<String>, subtitle_path: Option<String>) -> Response {
+    let media_attribute = media_path
+        .as_deref()
+        .map(|path| format!("src=\"{}\"", escape_html_attribute(path)))
+        .unwrap_or_default();
+    let subtitle_attribute = subtitle_path
+        .as_deref()
+        .map(|path| format!("src=\"{}\"", escape_html_attribute(path)))
+        .unwrap_or_default();
+    Html(
+        TV_DISPLAY_PAGE
+            .replace("__MEDIA_ATTRIBUTE__", &media_attribute)
+            .replace("__SUBTITLE_ATTRIBUTE__", &subtitle_attribute),
+    )
+    .into_response()
+}
+
+const ENTRY_PAGE: &str = r##"<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Web Media Gateway</title>
+<style>:root{font-family:system-ui,sans-serif;color:#172033;background:#f5f7fb}main{max-width:42rem;margin:12vh auto;padding:2rem;background:white;border:1px solid #d9e0ee;border-radius:1rem;box-shadow:0 1rem 3rem #10204012}h1{margin-top:0}nav{display:grid;grid-template-columns:1fr 1fr;gap:1rem}a{display:block;padding:1.2rem;border-radius:.6rem;background:#1e3a68;color:white;text-align:center;text-decoration:none;font-weight:700}a:focus-visible{outline:4px solid #f5b942;outline-offset:3px}#countdown{min-height:1.5rem;color:#52627b}</style></head>
+<body><main><h1>Web Media Gateway</h1><p>Choose where to play. TV Display is the default after five seconds when there is no explicit choice.</p><nav><a id="tv" href="/display?profile=tv">TV Display</a><a id="control" href="/control">Control</a></nav><p id="countdown" role="status" aria-live="polite">TV Display in 5 seconds.</p></main>
+<script>(()=>{let remaining=5;let cancelled=false;const status=document.querySelector('#countdown');const cancel=()=>{if(cancelled)return;cancelled=true;status.textContent='Choose a mode above.';};document.addEventListener('pointerdown',cancel,{once:true});document.addEventListener('keydown',cancel,{once:true});const timer=setInterval(()=>{if(cancelled){clearInterval(timer);return;}remaining-=1;if(remaining>0)status.textContent=`TV Display in ${remaining} second${remaining===1?'':'s'}.`;else{clearInterval(timer);window.location.assign('/display?profile=tv');}},1000);})();</script></body></html>"##;
+
+const TV_DISPLAY_PAGE: &str = r##"<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>TV Web Display</title>
+<style>:root{color-scheme:dark;font-family:system-ui,sans-serif}*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;background:#000}body{overflow:hidden}#display-shell{position:relative;width:100vw;height:100vh;min-height:100dvh;background:#000}#player{width:100%;height:100%;object-fit:contain;background:#000}#overlay{position:absolute;inset:auto 3vw 3vh;max-width:48rem;padding:1rem 1.25rem;border:1px solid #65718a;border-radius:.7rem;background:#101827ee}#overlay.playing{opacity:0;pointer-events:none;transition:opacity .35s}#overlay:hover,#overlay:focus-within{opacity:1;pointer-events:auto}h1{font-size:clamp(1.1rem,2.4vw,2rem);margin:.1rem 0 .4rem}p{margin:.35rem 0}button{min-height:2.8rem;margin:.35rem .35rem .2rem 0;padding:.5rem .8rem;color:#fff;background:#263b62;border:1px solid #8aa9e8;border-radius:.35rem;font:inherit}button:focus-visible{outline:3px solid #ffca55;outline-offset:2px}#diagnostics{max-height:11rem;overflow:auto;white-space:pre-wrap;font-size:.75rem;color:#b8c5d8}.ok{color:#b8f0bd}.warn{color:#ffd58a}</style></head>
+<body><main id="display-shell" class="viewport-immersive"><video id="player" playsinline preload="auto" __MEDIA_ATTRIBUTE__><track id="subtitle-track" kind="subtitles" default __SUBTITLE_ATTRIBUTE__></video><section id="overlay" aria-live="polite"><h1>TV Web Display</h1><p id="status">Waiting for a Gateway playback session.</p><p id="capabilities"></p><button id="activate" type="button">Press OK to play</button><button id="fullscreen" type="button">Try Fullscreen</button><button id="retry" type="button">Reconnect Display</button><details><summary>Display diagnostics</summary><pre id="diagnostics">starting…</pre></details></section></main>
+<script>(()=>{
+  const player=document.querySelector('#player'), shell=document.querySelector('#display-shell'), overlay=document.querySelector('#overlay'), status=document.querySelector('#status'), diagnostics=document.querySelector('#diagnostics'), capabilities=document.querySelector('#capabilities'), track=document.querySelector('#subtitle-track');
+  const storageKey='gateway.tv.display.v1'; let registration=null, heartbeatTimer=null, reconnecting=false, mediaError=null;
+  const safeError=e=>({name:String(e?.name||'UnknownError').slice(0,96),message:String(e?.message||'').replace(/https?:\/\/[^\s]+/g,'[url-redacted]').replace(/(bearer|cookie|authorization)\s*[:=]?\s*[^\s]+/ig,'$1 [redacted]').slice(0,180)});
+  const show=(message,kind='')=>{status.textContent=message;status.className=kind;diagnostics.textContent=`${new Date().toISOString()} ${message}\n`+diagnostics.textContent.slice(0,1800)};
+  const readSaved=()=>{try{const value=JSON.parse(sessionStorage.getItem(storageKey)||'null');return value&&typeof value==='object'?value:null}catch(_){return null}};
+  const save=()=>{if(!registration)return;try{sessionStorage.setItem(storageKey,JSON.stringify({display_id:registration.display_id,registration_id:registration.registration_id,lease_token:registration.lease_token}))}catch(_){}};
+  const displayId=()=>{const old=readSaved();if(old?.display_id&&/^[A-Za-z0-9._:-]{1,128}$/.test(old.display_id))return old.display_id;return `tv-display-${crypto.randomUUID?crypto.randomUUID().replaceAll('-','').slice(0,20):Math.random().toString(36).slice(2,18)}`};
+  const sendCallback=async(errorCode)=>{if(!registration?.context)return;const c=registration.context;await fetch(`/api/v1/displays/${encodeURIComponent(registration.display_id)}/callback`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({lease_token:registration.lease_token,session_id:c.session_id,item_id:c.item_id,item_revision:c.item_revision,session_revision:c.session_revision,display_id:registration.display_id,display_generation:c.display_generation,observation:null,error_code:errorCode})}).catch(()=>{});};
+  const renderContext=()=>{if(registration?.context){show(`Session ready: ${registration.context.state}.`,'ok')}else show('Waiting for a Gateway playback session.','warn')};
+  const heartbeat=()=>{if(heartbeatTimer)clearInterval(heartbeatTimer);if(!registration)return;const delay=Math.max(1000,Math.floor(registration.lease_ttl_ms/3));heartbeatTimer=setInterval(async()=>{try{const response=await fetch(`/api/v1/displays/${encodeURIComponent(registration.display_id)}/heartbeat`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({lease_token:registration.lease_token})});if(!response.ok)throw new Error(`heartbeat ${response.status}`);show(registration.context?'Display connected; session context retained.':'Display connected; waiting for a session.','ok')}catch(error){show(`Display heartbeat retrying (${safeError(error).name}).`,'warn')}},delay)};
+  const register=async()=>{const old=readSaved();const body={display_id:displayId(),label:'TV Web Display',capabilities:['video','audio','subtitles'],previous_registration_id:old?.registration_id||null,previous_lease_token:old?.lease_token||null};try{const response=await fetch('/api/v1/displays/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});if(!response.ok){if(old){sessionStorage.removeItem(storageKey);return register()}throw new Error(`register ${response.status}`)}registration=await response.json();save();capabilities.textContent='Gateway registration active; subtitles: '+(registration.context?'ready':'advertised');renderContext();heartbeat();return true}catch(error){registration=null;show(`Display reconnect waiting (${safeError(error).name}).`,'warn');return false}};
+  const play=async()=>{if(!player.getAttribute('src')){show('No Gateway media is attached yet; waiting for a session.','warn');return}overlay.classList.remove('playing');try{await player.play();show('Playback started.','ok');await sendCallback(null);overlay.classList.add('playing')}catch(error){mediaError=safeError(error);show(`Playback could not start (${mediaError.name}); use OK after interaction.`,'warn');await sendCallback('command_rejected')}};
+  document.querySelector('#activate').addEventListener('click',play);
+  document.querySelector('#retry').addEventListener('click',()=>{if(!reconnecting){reconnecting=true;register().finally(()=>{reconnecting=false})}});
+  document.querySelector('#fullscreen').addEventListener('click',async()=>{if(!document.documentElement.requestFullscreen){show('Fullscreen unavailable; viewport immersive mode remains active.','warn');return}try{await document.documentElement.requestFullscreen();show('Fullscreen enabled.','ok')}catch(error){show(`Fullscreen rejected (${safeError(error).name}); viewport immersive mode remains active.`,'warn')}});
+  document.addEventListener('keydown',event=>{if((event.key==='Enter'||event.key==='OK')&&document.activeElement instanceof HTMLButtonElement)document.activeElement.click()});
+  player.addEventListener('error',()=>show('Gateway media reported an error; waiting for recovery.','warn'));
+  const secure=window.isSecureContext?'secure context enhancements available':'HTTP baseline: secure-context enhancements optional';
+  const wake='wakeLock' in navigator?'Wake Lock available':'Wake Lock unavailable';
+  const sw='serviceWorker' in navigator?'Service Worker available':'Service Worker unavailable';
+  show(`${secure}. ${wake}; ${sw}.`); register();
+  if(track.track) track.track.mode='hidden';
+  if(track.getAttribute('src')==='')track.remove();
+  window.__displayPrep={getRegistration:()=>registration,getStatus:()=>status.textContent,play,reconnect:register};
+  window.addEventListener('pagehide',()=>{if(heartbeatTimer)clearInterval(heartbeatTimer)});
+})();</script></body></html>"##;
 
 fn escape_html_attribute(value: &str) -> String {
     value
@@ -1405,6 +1548,33 @@ async fn fixture_handler(
     ranged_bytes_response(method, &headers, bytes)
 }
 
+async fn subtitle_fixture_handler(
+    State(state): State<Arc<GatewayState>>,
+    method: Method,
+) -> Response {
+    let path = state
+        .fixture_vtt
+        .read()
+        .expect("subtitle fixture path poisoned")
+        .clone();
+    let Some(path) = path else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Ok(bytes) = tokio::fs::read(path).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "text/vtt; charset=utf-8")
+        .header(CONTENT_LENGTH, bytes.len().to_string())
+        .body(if method == Method::HEAD {
+            Body::empty()
+        } else {
+            Body::from(bytes)
+        })
+        .expect("subtitle fixture response")
+}
+
 fn ranged_bytes_response(method: Method, request_headers: &HeaderMap, bytes: Vec<u8>) -> Response {
     let len = bytes.len();
     let mut status = StatusCode::OK;
@@ -1805,6 +1975,68 @@ mod unit {
                 Err(GatewayError::SecretHeader)
             ));
         }
+    }
+
+    #[test]
+    fn subtitle_view_issues_only_an_opaque_gateway_path() {
+        let service = GatewayService::new(8);
+        let subtitle = ResolvedSubtitle {
+            id: "english".into(),
+            url: Url::parse("https://example.test/captions.vtt").unwrap(),
+            content_type: "text/vtt".into(),
+            language: Some("en".into()),
+            label: Some("English".into()),
+            public_headers: BTreeMap::new(),
+            upstream_access_ref: Some("server-only-ref".into()),
+        };
+        let view = service
+            .subtitle_track_view(
+                &subtitle,
+                Binding::new("session", "item", 1, "english"),
+                EgressScope::PublicWeb,
+                Duration::from_secs(30),
+            )
+            .unwrap();
+        assert_eq!(view.format, "webvtt");
+        assert!(view.gateway_path.starts_with("/stream/"));
+        assert!(!view.gateway_path.contains("example.test"));
+        assert!(!view.gateway_path.contains("server-only-ref"));
+    }
+
+    #[test]
+    fn subtitle_view_rejects_unsupported_content_and_secret_headers() {
+        let service = GatewayService::new(8);
+        let mut subtitle = ResolvedSubtitle {
+            id: "bad".into(),
+            url: Url::parse("https://example.test/captions.srt").unwrap(),
+            content_type: "text/srt".into(),
+            language: None,
+            label: None,
+            public_headers: BTreeMap::new(),
+            upstream_access_ref: None,
+        };
+        assert!(matches!(
+            service.subtitle_track_view(
+                &subtitle,
+                Binding::new("session", "item", 1, "bad"),
+                EgressScope::PublicWeb,
+                Duration::from_secs(30),
+            ),
+            Err(GatewayError::UnsupportedSubtitleContentType)
+        ));
+        subtitle.content_type = "text/vtt".into();
+        subtitle
+            .public_headers
+            .insert("Authorization".into(), "Bearer fixture-secret".into());
+        assert!(matches!(
+            service.subtitle_track_view(
+                &subtitle,
+                Binding::new("session", "item", 1, "bad"),
+                EgressScope::PublicWeb,
+                Duration::from_secs(30),
+            ),
+            Err(GatewayError::SecretHeader)
+        ));
     }
 
     #[test]
