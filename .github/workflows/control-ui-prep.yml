@@ -1,0 +1,142 @@
+name: control-ui-prep
+
+on:
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'gateway-core/**'
+      - 'display-adapter-api/**'
+      - 'scripts/control-ui-prep.mjs'
+      - '.github/workflows/control-ui-prep.yml'
+      - 'docs/tasks/47-control-ui-prep/**'
+  push:
+    branches:
+      - 'worker/**'
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: 'Exact candidate commit to verify'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+
+jobs:
+  j1-browser-authority:
+    name: J1 hosted Chromium Control authority and commands
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Confirm exact checkout
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build gated deterministic Control session harness
+        run: cargo build -p gateway-core --features control-ui-harness --bin control-ui-harness
+      - name: Install hosted Chromium fixture dependency
+        run: npm install --no-save playwright-core@1.55.0
+      - name: Start harness and run J1
+        shell: bash
+        run: |
+          ./target/debug/control-ui-harness > control-ui-server.log 2>&1 &
+          echo $! > control-ui-server.pid
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8787/healthz >/dev/null && break; sleep 1; done
+          test -s control-ui-server.log
+          SESSION_ID="$(sed -n 's/^CONTROL_UI_HARNESS_SESSION_ID=//p' control-ui-server.log)"
+          test -n "$SESSION_ID"
+          BASE_URL=http://127.0.0.1:8787 SESSION_ID="$SESSION_ID" node scripts/control-ui-prep.mjs
+      - name: Confirm exact candidate and browser artifact safety
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          ! grep -Eiq 'Bearer[[:space:]]+|Cookie|resolved_media|control-ui-harness-media|password|qr' control-ui-proof.json control-ui-server.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: control-ui-j1-${{ env.CANDIDATE_SHA }}
+          path: |
+            control-ui-proof.json
+            control-ui-server.log
+
+  j2-browser-negatives:
+    name: J2 hosted Chromium conflict reconnect and Secret negatives
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Confirm exact checkout
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run server projection and HTTP security negatives
+        run: |
+          cargo test -p gateway-core control_contract_tests::control_view_endpoint_projects_display_facts_and_has_bounded_selector -- --exact
+          cargo test -p gateway-core control_view::tests::independent_failures_keep_unrelated_sections_available -- --exact
+          cargo test -p gateway-core control_view::tests::pending_intent_and_sensitive_source_boundaries_are_redacted -- --exact
+          cargo test -p gateway-core --test http_security
+          cargo test -p gateway-core --test security_baseline
+      - name: Install hosted Chromium fixture dependency
+        run: npm install --no-save playwright-core@1.55.0
+      - name: Start harness and run J2
+        shell: bash
+        run: |
+          cargo build -p gateway-core --features control-ui-harness --bin control-ui-harness
+          ./target/debug/control-ui-harness > control-ui-server.log 2>&1 &
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8787/healthz >/dev/null && break; sleep 1; done
+          SESSION_ID="$(sed -n 's/^CONTROL_UI_HARNESS_SESSION_ID=//p' control-ui-server.log)"
+          test -n "$SESSION_ID"
+          BASE_URL=http://127.0.0.1:8787 SESSION_ID="$SESSION_ID" node scripts/control-ui-prep.mjs
+      - name: Confirm no browser Secret or fixture material
+        run: |
+          ! grep -Eiq 'Bearer[[:space:]]+|Cookie|resolved_media|control-ui-harness-media|password|qr' control-ui-proof.json control-ui-server.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: control-ui-j2-${{ env.CANDIDATE_SHA }}
+          path: |
+            control-ui-proof.json
+            control-ui-server.log
+
+  j3-regressions:
+    name: J3 workspace and accepted authority regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Confirm exact checkout
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Workspace and authority regressions
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace --all-targets
+          cargo test -p gateway-core --test playback_concurrency
+          cargo test -p gateway-core --test media_gateway
+          cargo test -p gateway-core --test auth_contract
+          cargo test -p gateway-core --test security_baseline
+      - name: Static production seed and Secret boundary guard
+        shell: bash
+        run: |
+          ! rg -n 'route\([^\n]*seed|/api/v1/[^\n]*seed' gateway-core/src/lib.rs
