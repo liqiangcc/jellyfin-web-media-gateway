@@ -81,6 +81,18 @@ pub struct ControlCommandResponse {
     pub event_cursor: u64,
 }
 
+/// A display-owned position observation. The surrounding session and
+/// generation checks are performed by the Web Display lease authority before
+/// this reaches R007.
+pub struct DisplayPositionTelemetry<'a> {
+    pub display_id: &'a str,
+    pub display_generation: u64,
+    pub item_id: &'a str,
+    pub item_revision: u64,
+    pub telemetry_sequence: u64,
+    pub position_ms: u64,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct ControlErrorResponse {
     pub code: &'static str,
@@ -389,6 +401,70 @@ impl ControlService {
             telemetry_sequence,
             position_ms,
         );
+        if accepted {
+            append_event(
+                &mut record,
+                session_id,
+                ControlEventKind::PositionTelemetry,
+                self.event_limit,
+            );
+        }
+        Ok(accepted)
+    }
+
+    /// Trusted display callback hook. R007 remains the authority for active
+    /// display identity and generation; this method only forwards a bounded
+    /// observation to that authority.
+    pub fn apply_display_position_telemetry(
+        &self,
+        session_id: &str,
+        telemetry: DisplayPositionTelemetry<'_>,
+    ) -> Result<bool, ControlLookupError> {
+        let session = self.session(session_id)?;
+        let mut record = session.lock().expect("control session poisoned");
+        let accepted = record.playback.apply_display_position_callback(
+            telemetry.display_id,
+            telemetry.display_generation,
+            telemetry.item_id,
+            telemetry.item_revision,
+            telemetry.telemetry_sequence,
+            telemetry.position_ms,
+        );
+        if accepted {
+            append_event(
+                &mut record,
+                session_id,
+                ControlEventKind::PositionTelemetry,
+                self.event_limit,
+            );
+        }
+        Ok(accepted)
+    }
+
+    /// Trusted handoff-candidate callback hook. It records only the candidate
+    /// observation in R007; it cannot commit `active_display`.
+    pub fn apply_candidate_position_telemetry(
+        &self,
+        session_id: &str,
+        telemetry: DisplayPositionTelemetry<'_>,
+    ) -> Result<bool, ControlLookupError> {
+        let session = self.session(session_id)?;
+        let mut record = session.lock().expect("control session poisoned");
+        let Some(ticket) = record.playback.active_handoff().cloned() else {
+            return Ok(false);
+        };
+        if ticket.target_display_id != telemetry.display_id
+            || ticket.candidate_generation != telemetry.display_generation
+        {
+            return Ok(false);
+        }
+        let accepted = telemetry.item_id == ticket.item_id
+            && telemetry.item_revision == ticket.item_revision
+            && record.playback.apply_candidate_callback(
+                &ticket,
+                telemetry.telemetry_sequence,
+                telemetry.position_ms,
+            );
         if accepted {
             append_event(
                 &mut record,

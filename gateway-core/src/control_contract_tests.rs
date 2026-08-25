@@ -400,3 +400,212 @@ async fn command_input_is_bounded_structured_and_does_not_accept_url_authority()
         StatusCode::PAYLOAD_TOO_LARGE
     );
 }
+
+#[tokio::test]
+async fn web_display_http_registration_lease_context_and_callback_are_generation_safe() {
+    let service = service();
+    let session_id = service
+        .control()
+        .seed_test_session("item-a", "media-not-public", "display-a");
+    let registered = json_body(
+        service
+            .router()
+            .oneshot(json_post(
+                "/api/v1/displays/register",
+                json!({
+                    "session_id": session_id,
+                    "display_id": "display-a",
+                    "label": "Living room",
+                    "capabilities": ["video", "audio"]
+                }),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(registered["page_lease_epoch"], 1);
+    assert_ne!(registered["registration_id"], "display-a");
+    let lease = registered["lease_token"].as_str().unwrap().to_owned();
+    let context = &registered["context"];
+    assert_eq!(context["display_id"], "display-a");
+    assert_eq!(context["display_generation"], 1);
+
+    let context_response = service
+        .router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/displays/display-a/context")
+                .header(header::HOST, HOST)
+                .header("x-display-lease", &lease)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(context_response.status(), StatusCode::OK);
+
+    let callback_body = json!({
+        "lease_token": lease,
+        "session_id": context["session_id"],
+        "item_id": context["item_id"],
+        "item_revision": context["item_revision"],
+        "session_revision": context["session_revision"],
+        "display_id": context["display_id"],
+        "display_generation": context["display_generation"],
+        "telemetry_sequence": 1,
+        "position_ms": 12000,
+        "observation": "playing"
+    });
+    let callback_response = service
+        .router()
+        .oneshot(json_post(
+            "/api/v1/displays/display-a/callback",
+            callback_body.clone(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(callback_response.status(), StatusCode::OK);
+    let callback_result = json_body(callback_response).await;
+    assert!(callback_result["accepted"].as_bool().unwrap());
+    assert_eq!(callback_result["telemetry_accepted"], true);
+
+    let stale_item = service
+        .router()
+        .oneshot(json_post(
+            "/api/v1/displays/display-a/callback",
+            json!({
+                "lease_token": registered["lease_token"],
+                "session_id": context["session_id"],
+                "item_id": "old-item",
+                "item_revision": context["item_revision"],
+                "session_revision": context["session_revision"],
+                "display_id": context["display_id"],
+                "display_generation": context["display_generation"],
+                "telemetry_sequence": 2,
+                "position_ms": 30000,
+                "observation": "playing"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(stale_item.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(stale_item).await["code"], "STALE_DISPLAY_CONTEXT");
+    assert_eq!(
+        service.control().snapshot(&session_id).unwrap().position_ms,
+        12000
+    );
+
+    let reconnected = json_body(
+        service
+            .router()
+            .oneshot(json_post(
+                "/api/v1/displays/register",
+                json!({
+                    "session_id": session_id,
+                    "display_id": "display-a",
+                    "label": "Living room refreshed",
+                    "capabilities": ["video"],
+                    "previous_registration_id": registered["registration_id"],
+                    "previous_lease_token": registered["lease_token"]
+                }),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(reconnected["page_lease_epoch"], 2);
+    let old_callback = service
+        .router()
+        .oneshot(json_post(
+            "/api/v1/displays/display-a/callback",
+            callback_body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(old_callback.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        service.control().snapshot(&session_id).unwrap().position_ms,
+        12000
+    );
+}
+
+#[tokio::test]
+async fn web_display_can_register_before_session_and_attach_by_context_lookup() {
+    let service = service();
+    let registered = json_body(
+        service
+            .router()
+            .oneshot(json_post(
+                "/api/v1/displays/register",
+                json!({
+                    "display_id": "idle-display",
+                    "label": "Idle browser",
+                    "capabilities": ["video", "audio", "subtitles"]
+                }),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(registered["context"].is_null());
+    let session_id =
+        service
+            .control()
+            .seed_test_session("item-a", "media-not-public", "idle-display");
+    let context = service
+        .router()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/displays/idle-display/context?session_id={session_id}"
+                ))
+                .header(header::HOST, HOST)
+                .header(
+                    "x-display-lease",
+                    registered["lease_token"].as_str().unwrap(),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(context.status(), StatusCode::OK);
+    let context = json_body(context).await;
+    assert_eq!(context["session_id"], session_id);
+    assert_eq!(context["media_capabilities"], json!(["video", "audio"]));
+}
+
+#[tokio::test]
+async fn web_display_http_routes_reuse_origin_and_body_security() {
+    let service = service();
+    let cross_origin = Request::builder()
+        .method("POST")
+        .uri("/api/v1/displays/register")
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, "https://attacker.example")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    assert_eq!(
+        service
+            .router()
+            .oneshot(cross_origin)
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+
+    let oversized = Request::builder()
+        .method("POST")
+        .uri("/api/v1/displays/register")
+        .header(header::HOST, HOST)
+        .header(header::ORIGIN, ORIGIN)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("x".repeat(40 * 1024)))
+        .unwrap();
+    assert_eq!(
+        service.router().oneshot(oversized).await.unwrap().status(),
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+}
