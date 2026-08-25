@@ -107,7 +107,7 @@ async function run() {
   evidence.claims.C4 = { rendering_session: rendering.session_id, item_revision: rendering.item_revision, safe_gateway_path: true };
   evidence.claims.C5 = { media_request_count: evidence.requests.gateway_media, browser_media_path: safeUrl(mediaPath) };
 
-  for (const [command, expectedState] of [['play', 'playing'], ['pause', 'paused'], ['seek', 'paused'], ['stop', 'stopped']]) {
+  for (const [command, expectedState] of [['pause', 'paused'], ['play', 'playing'], ['seek', 'playing'], ['stop', 'stopped']]) {
     if (command === 'seek') await control.locator('#seek-position').fill('1200');
     await control.locator(`#${command}`).click();
     await control.waitForFunction(state => document.querySelector('#playback-state')?.textContent === state, expectedState, { timeout: 10000 });
