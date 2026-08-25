@@ -27,6 +27,7 @@ pub mod browser;
 pub mod control;
 #[cfg(test)]
 mod control_contract_tests;
+pub mod control_view;
 pub mod security;
 pub use auth::{
     AccountState, AuthBoundaryError, CandidateValidation, CleanupResult, PendingIntent,
@@ -38,6 +39,13 @@ pub use control::{
     ControlDisplaySnapshot, ControlErrorResponse, ControlEvent, ControlEventKind,
     ControlEventsResponse, ControlHandoffSnapshot, ControlItemSnapshot, ControlLookupError,
     ControlService, ControlSnapshot, ControlValidationError,
+};
+pub use control_view::{
+    ActionRequiredKind, ActionRequiredView, ActiveDisplayView, BrowserViewInput,
+    ControlFreshnessView, ControlView, ControlViewInput, DisplayErrorInput, DisplayViewInput,
+    NativePanelInput, NativePanelStatus, NativeSitePanelView, NowPlayingView, PendingActionView,
+    PendingIntentInput, PlaybackContextView, PlaybackControlsView, PlaybackFreshnessView,
+    PlaybackObservationView, SiteAccountStateView, SiteView, SiteViewInput,
 };
 pub use security::{
     EgressPolicy, EgressPolicyError, EgressScope, HttpAuthorityError, HttpAuthorityPolicy,

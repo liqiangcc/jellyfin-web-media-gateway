@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 axum.workspace = true
 bytes.workspace = true
+display-adapter-api = { path = "../display-adapter-api" }
 futures-util.workspace = true
 generic-direct = { path = "../plugins/generic-direct" }
 reqwest.workspace = true
