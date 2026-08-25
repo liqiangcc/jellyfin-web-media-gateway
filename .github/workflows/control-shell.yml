@@ -1,6 +1,9 @@
 name: control-shell
 
 on:
+  push:
+    branches:
+      - "worker/**"
   pull_request:
     paths:
       - ".github/workflows/control-shell.yml"
