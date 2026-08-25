@@ -169,6 +169,10 @@ impl PlaybackSession {
         self.handoff.as_ref().map(|transition| &transition.ticket)
     }
 
+    pub fn has_request_id(&self, request_id: &str) -> bool {
+        self.request_records.contains_key(request_id)
+    }
+
     pub fn candidate_position_ms(&self) -> Option<u64> {
         self.handoff
             .as_ref()

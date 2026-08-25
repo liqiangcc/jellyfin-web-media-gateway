@@ -1,4 +1,5 @@
 use axum::body::Body;
+use axum::extract::rejection::JsonRejection;
 use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::header::{
     ACCEPT_RANGES, AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG,
@@ -23,11 +24,20 @@ use uuid::Uuid;
 
 pub mod auth;
 pub mod browser;
+pub mod control;
+#[cfg(test)]
+mod control_contract_tests;
 pub mod security;
 pub use auth::{
     AccountState, AuthBoundaryError, CandidateValidation, CleanupResult, PendingIntent,
     PendingPlaybackAction, PendingSourceLocator, ScopedHttpResponse, ScopedSiteHttpClient,
     SessionSwapResult, SessionVault, SiteAccessContext, SiteAccount, SiteSessionRef, VaultError,
+};
+pub use control::{
+    ControlCommand, ControlCommandError, ControlCommandRequest, ControlCommandResponse,
+    ControlDisplaySnapshot, ControlErrorResponse, ControlEvent, ControlEventKind,
+    ControlEventsResponse, ControlHandoffSnapshot, ControlItemSnapshot, ControlLookupError,
+    ControlService, ControlSnapshot, ControlValidationError,
 };
 pub use security::{
     EgressPolicy, EgressPolicyError, EgressScope, HttpAuthorityError, HttpAuthorityPolicy,
@@ -182,6 +192,7 @@ struct GatewayState {
     proof_paths: Arc<RwLock<ProofPaths>>,
     fixture_mp4: Arc<RwLock<Option<PathBuf>>>,
     probe: Arc<ProbeStore>,
+    control: ControlService,
 }
 
 #[derive(Clone)]
@@ -409,6 +420,7 @@ impl GatewayService {
                 })),
                 fixture_mp4: Arc::new(RwLock::new(None)),
                 probe: Arc::new(ProbeStore::default()),
+                control: ControlService::default(),
             }),
         }
     }
@@ -500,6 +512,11 @@ impl GatewayService {
         self.state.store.max_entries
     }
 
+    #[cfg(test)]
+    pub(crate) fn control(&self) -> ControlService {
+        self.state.control.clone()
+    }
+
     pub fn router(&self) -> Router {
         Router::new()
             .route(
@@ -510,6 +527,18 @@ impl GatewayService {
             .route("/proof/paths", get(proof_paths_handler))
             .route("/display", get(display_handler))
             .route("/control", get(control_handler))
+            .route(
+                "/api/v1/sessions/{session_id}",
+                get(control_session_snapshot_handler),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/commands",
+                post(control_session_command_handler),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/events",
+                get(control_session_events_handler),
+            )
             .route("/api/v1/display-probe/state", get(probe_state_handler))
             .route("/api/v1/display-probe/events", get(probe_events_handler))
             .route(
@@ -857,6 +886,91 @@ const CONTROL_PAGE: &str = r##"<!doctype html>
 
 async fn control_handler() -> Response {
     Html(CONTROL_PAGE.to_string()).into_response()
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ControlEventsQuery {
+    after: Option<u64>,
+}
+
+async fn control_session_snapshot_handler(
+    State(state): State<Arc<GatewayState>>,
+    Path(session_id): Path<String>,
+) -> Response {
+    match state.control.snapshot(&session_id) {
+        Ok(snapshot) => Json(snapshot).into_response(),
+        Err(ControlLookupError::NotFound) => control_error_response(
+            StatusCode::NOT_FOUND,
+            ControlErrorResponse {
+                code: "SESSION_NOT_FOUND",
+                message: "session was not found",
+                current_revision: None,
+                transition_id: None,
+            },
+        ),
+    }
+}
+
+async fn control_session_events_handler(
+    State(state): State<Arc<GatewayState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<ControlEventsQuery>,
+) -> Response {
+    match state
+        .control
+        .events_after(&session_id, query.after.unwrap_or(0))
+    {
+        Ok(events) => Json(events).into_response(),
+        Err(ControlLookupError::NotFound) => control_error_response(
+            StatusCode::NOT_FOUND,
+            ControlErrorResponse {
+                code: "SESSION_NOT_FOUND",
+                message: "session was not found",
+                current_revision: None,
+                transition_id: None,
+            },
+        ),
+    }
+}
+
+async fn control_session_command_handler(
+    State(state): State<Arc<GatewayState>>,
+    Path(session_id): Path<String>,
+    request: Result<Json<ControlCommandRequest>, JsonRejection>,
+) -> Response {
+    let request = match request {
+        Ok(Json(request)) => request,
+        Err(rejection) => {
+            let response = rejection.into_response();
+            if response.status() == StatusCode::PAYLOAD_TOO_LARGE {
+                return response;
+            }
+            return control_error_response(
+                StatusCode::BAD_REQUEST,
+                ControlErrorResponse {
+                    code: "INVALID_JSON",
+                    message: "command body must be valid structured JSON",
+                    current_revision: None,
+                    transition_id: None,
+                },
+            );
+        }
+    };
+    match state.control.execute_command(&session_id, request) {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => {
+            let status = match &error {
+                ControlCommandError::NotFound => StatusCode::NOT_FOUND,
+                ControlCommandError::Validation(_) => StatusCode::BAD_REQUEST,
+                ControlCommandError::Playback(_) => StatusCode::CONFLICT,
+            };
+            control_error_response(status, error.response())
+        }
+    }
+}
+
+fn control_error_response(status: StatusCode, error: ControlErrorResponse) -> Response {
+    (status, Json(error)).into_response()
 }
 
 async fn probe_state_handler(State(state): State<Arc<GatewayState>>) -> Json<ProbeStateSnapshot> {
