@@ -22,10 +22,16 @@ use url::Url;
 use uuid::Uuid;
 
 pub mod browser;
+pub mod auth;
 pub mod security;
+pub use auth::{
+    AccountState, AuthBoundaryError, CandidateValidation, CleanupResult, PendingIntent,
+    PendingPlaybackAction, PendingSourceLocator, ScopedHttpResponse, ScopedSiteHttpClient,
+    SessionSwapResult, SessionVault, SiteAccessContext, SiteAccount, SiteSessionRef, VaultError,
+};
 pub use security::{
     EgressPolicy, EgressPolicyError, EgressScope, HttpAuthorityError, HttpAuthorityPolicy,
-    ValidatedTarget,
+    SiteAccessCapability, SiteAccessError, ValidatedTarget,
 };
 
 const MAX_MANIFEST_BYTES: usize = 512 * 1024;

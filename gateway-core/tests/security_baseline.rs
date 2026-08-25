@@ -106,22 +106,25 @@ fn site_capability_isolated_by_site_host_and_expiry() {
     );
     assert!(
         capability
-            .authorize(
+            .authorize_for_account(
                 "site-a",
+                Some("account-a"),
                 &Url::parse("https://media.example.test/a").unwrap()
             )
             .is_ok()
     );
     assert_eq!(
-        capability.authorize(
+        capability.authorize_for_account(
             "site-b",
+            Some("account-a"),
             &Url::parse("https://media.example.test/a").unwrap()
         ),
         Err(SiteAccessError::SiteMismatch)
     );
     assert_eq!(
-        capability.authorize(
+        capability.authorize_for_account(
             "site-a",
+            Some("account-a"),
             &Url::parse("https://other.example.test/a").unwrap()
         ),
         Err(SiteAccessError::HostNotAllowed)
