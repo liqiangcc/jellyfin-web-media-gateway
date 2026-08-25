@@ -1,10 +1,10 @@
 use crate::playback::{Command, CommandEnvelope, CommandError, PlaybackSession, PlaybackState};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-#[cfg(test)]
+#[cfg(any(test, feature = "control-ui-harness"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-#[cfg(test)]
+#[cfg(any(test, feature = "control-ui-harness"))]
 use uuid::Uuid;
 
 pub const MAX_CONTROL_BODY_BYTES: usize = 32 * 1024;
@@ -224,6 +224,13 @@ pub enum ControlLookupError {
     NotFound,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ControlPublicationError {
+    AlreadyExists,
+    #[cfg(test)]
+    InjectedFailure,
+}
+
 #[derive(Debug)]
 struct SessionRecord {
     playback: PlaybackSession,
@@ -234,8 +241,10 @@ struct SessionRecord {
 #[derive(Clone, Debug)]
 pub struct ControlService {
     sessions: Arc<RwLock<HashMap<String, Arc<Mutex<SessionRecord>>>>>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "control-ui-harness"))]
     next_session_id: Arc<AtomicU64>,
+    #[cfg(test)]
+    fail_next_publication: Arc<std::sync::atomic::AtomicBool>,
     event_limit: usize,
 }
 
@@ -253,8 +262,10 @@ impl ControlService {
         );
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "control-ui-harness"))]
             next_session_id: Arc::new(AtomicU64::new(1)),
+            #[cfg(test)]
+            fail_next_publication: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             event_limit,
         }
     }
@@ -263,6 +274,26 @@ impl ControlService {
     /// the service; no HTTP route accepts caller-selected media or sessions.
     #[cfg(test)]
     pub(crate) fn seed_test_session(
+        &self,
+        item_id: impl Into<String>,
+        resolved_media: impl Into<String>,
+        display_id: impl Into<String>,
+    ) -> String {
+        self.seed_session(item_id, resolved_media, display_id)
+    }
+
+    #[cfg(feature = "control-ui-harness")]
+    pub fn seed_harness_session(
+        &self,
+        item_id: impl Into<String>,
+        resolved_media: impl Into<String>,
+        display_id: impl Into<String>,
+    ) -> String {
+        self.seed_session(item_id, resolved_media, display_id)
+    }
+
+    #[cfg(any(test, feature = "control-ui-harness"))]
+    fn seed_session(
         &self,
         item_id: impl Into<String>,
         resolved_media: impl Into<String>,
@@ -290,6 +321,48 @@ impl ControlService {
             .expect("control sessions poisoned")
             .insert(session_id.clone(), Arc::new(Mutex::new(record)));
         session_id
+    }
+
+    /// Publish a fully prepared session. Callers must obtain all external
+    /// capabilities before entering this method; the single map insertion is
+    /// the PlaybackSession publication boundary.
+    pub(crate) fn publish_prepared_session(
+        &self,
+        session_id: String,
+        item_id: String,
+        media_descriptor: String,
+        display_id: String,
+    ) -> Result<ControlSnapshot, ControlPublicationError> {
+        #[cfg(test)]
+        if self.fail_next_publication.swap(false, Ordering::SeqCst) {
+            return Err(ControlPublicationError::InjectedFailure);
+        }
+
+        let mut sessions = self.sessions.write().expect("control sessions poisoned");
+        if sessions.contains_key(&session_id) {
+            return Err(ControlPublicationError::AlreadyExists);
+        }
+        let record = SessionRecord {
+            playback: PlaybackSession::new(item_id, media_descriptor, display_id),
+            next_cursor: 0,
+            events: VecDeque::with_capacity(self.event_limit),
+        };
+        let snapshot = snapshot_from_playback(&session_id, &record.playback);
+        sessions.insert(session_id, Arc::new(Mutex::new(record)));
+        Ok(snapshot)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_publication(&self) {
+        self.fail_next_publication.store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn session_count(&self) -> usize {
+        self.sessions
+            .read()
+            .expect("control sessions poisoned")
+            .len()
     }
 
     fn session(&self, session_id: &str) -> Result<Arc<Mutex<SessionRecord>>, ControlLookupError> {

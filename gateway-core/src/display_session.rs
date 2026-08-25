@@ -336,6 +336,29 @@ impl DisplaySessionService {
         self.register_at(control, input, Instant::now())
     }
 
+    /// Validate only the server-owned registration/liveness facts needed by
+    /// source-session creation. This deliberately does not accept or expose
+    /// a page lease, page epoch, session attachment, or Playback generation.
+    pub(crate) fn validate_live_selector(
+        &self,
+        display_id: &str,
+    ) -> Result<(), DisplaySessionError> {
+        validate_identifier(display_id, "display_id")?;
+        let registry = self.inner.lock().expect("display registry poisoned");
+        let registration_id = registry
+            .registration_by_display
+            .get(display_id)
+            .ok_or(DisplaySessionError::RegistrationNotFound)?;
+        let record = registry
+            .records
+            .get(registration_id)
+            .ok_or(DisplaySessionError::RegistrationNotFound)?;
+        if record.expires_at <= Instant::now() {
+            return Err(DisplaySessionError::LeaseExpired);
+        }
+        Ok(())
+    }
+
     fn register_at(
         &self,
         control: &ControlService,

@@ -108,6 +108,62 @@ async fn sessions_are_isolated_and_snapshot_is_canonical_non_secret_view() {
 }
 
 #[tokio::test]
+async fn control_view_endpoint_projects_display_facts_and_has_bounded_selector() {
+    let service = service();
+    let session_id =
+        service
+            .control()
+            .seed_test_session("item-a", "control-secret-media", "display-a");
+    let registered = service
+        .router()
+        .oneshot(json_post(
+            "/api/v1/displays/register",
+            json!({
+                "session_id": session_id,
+                "display_id": "display-a",
+                "label": "Living room browser",
+                "capabilities": ["video", "audio", "seek"]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(registered.status(), StatusCode::OK);
+
+    let view = service
+        .router()
+        .oneshot(get(&format!("/api/v1/control/{session_id}")))
+        .await
+        .unwrap();
+    assert_eq!(view.status(), StatusCode::OK);
+    let view = json_body(view).await;
+    assert_eq!(view["now_playing"]["item_id"], "item-a");
+    assert_eq!(view["freshness"]["playback"]["session_revision"], 0);
+    assert_eq!(view["active_display"]["display_id"], "display-a");
+    assert_eq!(view["active_display"]["adapter_type"], "web");
+    assert_eq!(view["active_display"]["online"], true);
+    assert_eq!(view["active_display"]["label"], "Living room browser");
+    let text = view.to_string();
+    assert!(!text.contains("control-secret-media"));
+    assert!(!text.contains("resolved_media"));
+
+    let invalid = service
+        .router()
+        .oneshot(get("/api/v1/control/invalid%2Fselector"))
+        .await
+        .unwrap();
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(invalid).await["code"], "SESSION_ID_INVALID");
+
+    let missing = service
+        .router()
+        .oneshot(get("/api/v1/control/s-missing"))
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    assert_eq!(json_body(missing).await["code"], "SESSION_NOT_FOUND");
+}
+
+#[tokio::test]
 async fn http_commands_preserve_r007_idempotency_cas_and_event_semantics() {
     let service = service();
     let session_id = service

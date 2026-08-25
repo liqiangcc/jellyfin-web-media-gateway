@@ -1,0 +1,107 @@
+name: source-session-prep
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/source-session-prep.yml"
+      - "gateway-core/**"
+      - "site-adapter-api/**"
+      - "plugins/**"
+      - "display-adapter-api/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/check-core-site-boundary.sh"
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: "Exact candidate commit to verify"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-session-prep-${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+
+jobs:
+  j1-source-session-happy-path:
+    name: J1 source resolution and atomic session happy path
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Validate candidate identity
+        shell: bash
+        run: |
+          [[ "${CANDIDATE_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Confirm exact checkout
+        run: test "$(git rev-parse HEAD)" = "${CANDIDATE_SHA}"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Run source-session happy path and control compatibility
+        run: |
+          cargo test -p gateway-core --lib source_session::tests::generic_source_creates_real_session_and_reuses_existing_control_surface -- --exact --nocapture
+          cargo test -p gateway-core --lib source_session::tests::creation_idempotency_and_injection_boundaries_are_deterministic -- --exact --nocapture
+
+  j2-source-session-negatives:
+    name: J2 source-session rollback, idempotency, and security negatives
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Validate candidate identity
+        shell: bash
+        run: |
+          [[ "${CANDIDATE_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Confirm exact checkout
+        run: test "$(git rev-parse HEAD)" = "${CANDIDATE_SHA}"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Run deterministic negative cases
+        run: |
+          cargo test -p gateway-core --lib source_session::tests::invalid_display_and_source_are_rejected_without_publication -- --exact --nocapture
+          cargo test -p gateway-core --lib source_session::tests::registry_ambiguity_and_invalid_adapter_output_are_not_bypassed -- --exact --nocapture
+          cargo test -p gateway-core --lib source_session::tests::preparation_failure_revokes_already_issued_capabilities -- --exact --nocapture
+          cargo test -p gateway-core --lib source_session::tests::publication_failure_revokes_prepared_capabilities_and_publishes_nothing -- --exact --nocapture
+          cargo test -p gateway-core --lib source_session::tests::resolved_secret_reference_is_rejected_before_capability_issue -- --exact --nocapture
+          cargo test -p gateway-core --test http_security -- --nocapture
+
+  j3-source-session-regressions:
+    name: J3 workspace, authority, and architecture regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Validate candidate identity
+        shell: bash
+        run: |
+          [[ "${CANDIDATE_SHA}" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Confirm exact checkout
+        run: test "$(git rev-parse HEAD)" = "${CANDIDATE_SHA}"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: Format, lint, workspace, and accepted authority tests
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace --all-targets
+      - name: Stable Core site-boundary guard
+        run: bash scripts/check-core-site-boundary.sh
