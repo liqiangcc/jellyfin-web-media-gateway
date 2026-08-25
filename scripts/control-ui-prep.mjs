@@ -100,6 +100,11 @@ try {
     throw new Error('forbidden or secret-like browser state was observed');
   }
 
+  // Establish a local playing view so the stale command below remains a
+  // server-projectedly valid Pause even after the competing command advances
+  // the authoritative revision.
+  await clickAndWait('#play', 'Command accepted');
+
   // Hold the UI at an old view while a competing command advances the
   // server revision. The event response is bounded to the old cursor so the
   // UI must discover the conflict through the existing command API.
@@ -107,7 +112,7 @@ try {
   await page.route(`**/api/v1/sessions/${sessionId}/events*`, async route => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ session_id: sessionId, cursor: oldView.freshness.event_cursor, events: [], snapshot_required: false, reason: null }) });
   });
-  const competing = await command('browser-competing-command', oldView.freshness.playback.session_revision, { type: 'play' });
+  const competing = await command('browser-competing-command', oldView.freshness.playback.session_revision, { type: 'pause' });
   if (!competing.response.ok()) throw new Error(`competing command failed: ${competing.body.code}`);
   await clickAndWait('#pause', 'stale');
   evidence.negatives.revisionConflict = true;
