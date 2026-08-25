@@ -21,6 +21,7 @@ use uuid::Uuid;
 const MAX_REQUEST_ID_BYTES: usize = 128;
 const MAX_SOURCE_BYTES: usize = 4096;
 const MAX_STREAM_ID_BYTES: usize = 128;
+const MAX_CREATION_RECORDS: usize = 1024;
 const MEDIA_CAPABILITY_TTL: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Clone, Debug, Deserialize)]
@@ -142,6 +143,15 @@ impl SourceSessionService {
                 },
             };
         }
+        if creations.len() >= MAX_CREATION_RECORDS {
+            return CreationOutcome::Failure {
+                status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                error: CreateSessionErrorResponse {
+                    code: "CREATE_REQUEST_STORE_FULL",
+                    message: "session creation idempotency capacity is temporarily full",
+                },
+            };
+        }
 
         let outcome = self.create_fresh(gateway, control, displays, &request);
         creations.insert(
@@ -177,6 +187,15 @@ impl SourceSessionService {
             return CreationOutcome::Failure {
                 status: axum::http::StatusCode::UNPROCESSABLE_ENTITY,
                 error,
+            };
+        }
+        if media.streams.len() > gateway.max_capabilities() {
+            return CreationOutcome::Failure {
+                status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                error: CreateSessionErrorResponse {
+                    code: "MEDIA_CAPABILITY_LIMIT",
+                    message: "resolved media requires more Gateway capabilities than available",
+                },
             };
         }
 
@@ -222,22 +241,17 @@ impl SourceSessionService {
             }
         };
 
-        if control
-            .publish_prepared_session(
-                session_id.clone(),
-                item_id.clone(),
-                descriptor,
-                request.display_id.clone(),
-            )
-            .is_err()
-        {
-            revoke_all(gateway, &issued_tokens);
-            return internal_failure();
-        }
-
-        let snapshot = match control.snapshot(&session_id) {
+        let snapshot = match control.publish_prepared_session(
+            session_id.clone(),
+            item_id.clone(),
+            descriptor,
+            request.display_id.clone(),
+        ) {
             Ok(snapshot) => snapshot,
-            Err(_) => return internal_failure(),
+            Err(_) => {
+                revoke_all(gateway, &issued_tokens);
+                return internal_failure();
+            }
         };
         CreationOutcome::Success(CreateSessionResponse {
             request_id: request.request_id.clone(),
@@ -439,7 +453,11 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode, header};
     use generic_direct::GenericDirectAdapter;
-    use site_adapter_api::SiteAdapterRegistry;
+    use site_adapter_api::{
+        AdapterError, MediaProtection, RecognizeResult, ResolvedMedia, ResolvedStream, SiteAdapter,
+        SiteAdapterRegistry, SourceLocator, StreamProtocol,
+    };
+    use std::collections::BTreeMap;
     use std::sync::Arc;
     use tower::ServiceExt;
     use url::Url;
@@ -448,9 +466,101 @@ mod tests {
     const ORIGIN: &str = "http://127.0.0.1:8787";
     const SOURCE: &str = "https://example.test/video.mp4";
 
+    #[derive(Clone, Copy)]
+    enum FixtureMode {
+        InvalidRecognition,
+        Ambiguous,
+        Rollback,
+        SecretReference,
+    }
+
+    struct FixtureAdapter {
+        plugin: &'static str,
+        priority: u16,
+        mode: FixtureMode,
+    }
+
+    impl SiteAdapter for FixtureAdapter {
+        fn site_id(&self) -> &'static str {
+            "fixture"
+        }
+
+        fn plugin_id(&self) -> &'static str {
+            self.plugin
+        }
+
+        fn recognize(&self, input: &str) -> Result<RecognizeResult, AdapterError> {
+            let matched = input.starts_with("fixture://");
+            if !matched {
+                return Ok(RecognizeResult {
+                    matched: false,
+                    site_id: self.site_id().into(),
+                    plugin_id: self.plugin_id().into(),
+                    priority: self.priority,
+                    locator: None,
+                });
+            }
+            let locator = match self.mode {
+                FixtureMode::InvalidRecognition => SourceLocator {
+                    site_id: self.site_id().into(),
+                    plugin_id: "foreign-plugin".into(),
+                    locator_version: 1,
+                    opaque_payload: input.into(),
+                },
+                _ => SourceLocator {
+                    site_id: self.site_id().into(),
+                    plugin_id: self.plugin_id().into(),
+                    locator_version: 1,
+                    opaque_payload: input.into(),
+                },
+            };
+            Ok(RecognizeResult {
+                matched: true,
+                site_id: self.site_id().into(),
+                plugin_id: self.plugin_id().into(),
+                priority: self.priority,
+                locator: Some(locator),
+            })
+        }
+
+        fn resolve(&self, _locator: &SourceLocator) -> Result<ResolvedMedia, AdapterError> {
+            let stream = |id: &str, headers: BTreeMap<String, String>| ResolvedStream {
+                id: id.into(),
+                protocol: StreamProtocol::HttpFile,
+                url: Url::parse("https://example.test/fixture.mp4").unwrap(),
+                public_headers: headers,
+                upstream_access_ref: None,
+            };
+            let streams = match self.mode {
+                FixtureMode::Rollback => vec![
+                    stream("primary", BTreeMap::new()),
+                    stream(
+                        "broken",
+                        BTreeMap::from([("invalid header".into(), "value".into())]),
+                    ),
+                ],
+                FixtureMode::SecretReference => vec![ResolvedStream {
+                    upstream_access_ref: Some("fixture-secret-ref".into()),
+                    ..stream("primary", BTreeMap::new())
+                }],
+                _ => vec![stream("primary", BTreeMap::new())],
+            };
+            Ok(ResolvedMedia {
+                title: "fixture media".into(),
+                source_site: self.site_id().into(),
+                streams,
+                protection: MediaProtection::Clear,
+            })
+        }
+    }
+
     fn service() -> GatewayService {
         let mut registry = SiteAdapterRegistry::default();
         registry.register(Arc::new(GenericDirectAdapter)).unwrap();
+        service_with_registry(registry)
+    }
+
+    fn service_with_registry(registry: SiteAdapterRegistry) -> GatewayService {
         let service = GatewayService::with_registry(8, Arc::new(registry));
         service
             .configure_http_authority(Url::parse(ORIGIN).unwrap())
@@ -629,5 +739,168 @@ mod tests {
         assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(json(failed).await["code"], "SESSION_CREATE_FAILED");
         assert_eq!(service.capability_count(), 0);
+        assert_eq!(service.control().session_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn invalid_display_and_source_are_rejected_without_publication() {
+        let service = service();
+        let missing_display = service
+            .router()
+            .oneshot(post(
+                "/api/v1/sessions",
+                serde_json::json!({
+                    "request_id": "missing-display",
+                    "source": SOURCE,
+                    "display_id": "not-registered"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(missing_display.status(), StatusCode::NOT_FOUND);
+        assert_eq!(service.control().session_count(), 0);
+        assert_eq!(service.capability_count(), 0);
+
+        register_display(&service).await;
+        let no_match = service
+            .router()
+            .oneshot(post(
+                "/api/v1/sessions",
+                serde_json::json!({
+                    "request_id": "no-match",
+                    "source": "https://example.test/page",
+                    "display_id": "display-a"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(no_match.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(json(no_match).await["code"], "SOURCE_NOT_RECOGNIZED");
+        assert_eq!(service.control().session_count(), 0);
+        assert_eq!(service.capability_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn registry_ambiguity_and_invalid_adapter_output_are_not_bypassed() {
+        let mut ambiguous_registry = SiteAdapterRegistry::default();
+        ambiguous_registry
+            .register(Arc::new(FixtureAdapter {
+                plugin: "fixture-a",
+                priority: 10,
+                mode: FixtureMode::Ambiguous,
+            }))
+            .unwrap();
+        ambiguous_registry
+            .register(Arc::new(FixtureAdapter {
+                plugin: "fixture-b",
+                priority: 10,
+                mode: FixtureMode::Ambiguous,
+            }))
+            .unwrap();
+        let service = service_with_registry(ambiguous_registry);
+        register_display(&service).await;
+        let ambiguous = service
+            .router()
+            .oneshot(post(
+                "/api/v1/sessions",
+                serde_json::json!({
+                    "request_id": "ambiguous",
+                    "source": "fixture://ambiguous",
+                    "display_id": "display-a"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(ambiguous.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(json(ambiguous).await["code"], "SOURCE_AMBIGUOUS");
+
+        let mut invalid_registry = SiteAdapterRegistry::default();
+        invalid_registry
+            .register(Arc::new(FixtureAdapter {
+                plugin: "fixture-invalid",
+                priority: 10,
+                mode: FixtureMode::InvalidRecognition,
+            }))
+            .unwrap();
+        let service = service_with_registry(invalid_registry);
+        register_display(&service).await;
+        let invalid = service
+            .router()
+            .oneshot(post(
+                "/api/v1/sessions",
+                serde_json::json!({
+                    "request_id": "invalid-output",
+                    "source": "fixture://invalid",
+                    "display_id": "display-a"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(invalid.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(json(invalid).await["code"], "SOURCE_UNSUPPORTED");
+        assert_eq!(service.control().session_count(), 0);
+        assert_eq!(service.capability_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn preparation_failure_revokes_already_issued_capabilities() {
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(FixtureAdapter {
+                plugin: "fixture-rollback",
+                priority: 10,
+                mode: FixtureMode::Rollback,
+            }))
+            .unwrap();
+        let service = service_with_registry(registry);
+        register_display(&service).await;
+        let failed = service
+            .router()
+            .oneshot(post(
+                "/api/v1/sessions",
+                serde_json::json!({
+                    "request_id": "prepare-rollback",
+                    "source": "fixture://rollback",
+                    "display_id": "display-a"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(failed.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(json(failed).await["code"], "MEDIA_INVALID");
+        assert_eq!(service.capability_count(), 0);
+        assert_eq!(service.control().session_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn resolved_secret_reference_is_rejected_before_capability_issue() {
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(FixtureAdapter {
+                plugin: "fixture-secret",
+                priority: 10,
+                mode: FixtureMode::SecretReference,
+            }))
+            .unwrap();
+        let service = service_with_registry(registry);
+        register_display(&service).await;
+        let failed = service
+            .router()
+            .oneshot(post(
+                "/api/v1/sessions",
+                serde_json::json!({
+                    "request_id": "secret-reference",
+                    "source": "fixture://secret",
+                    "display_id": "display-a"
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(failed.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body = json(failed).await;
+        assert_eq!(body["code"], "MEDIA_INVALID");
+        assert!(!body.to_string().contains("fixture-secret-ref"));
+        assert_eq!(service.capability_count(), 0);
+        assert_eq!(service.control().session_count(), 0);
     }
 }

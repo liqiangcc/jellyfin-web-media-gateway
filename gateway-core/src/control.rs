@@ -312,7 +312,7 @@ impl ControlService {
         item_id: String,
         media_descriptor: String,
         display_id: String,
-    ) -> Result<(), ControlPublicationError> {
+    ) -> Result<ControlSnapshot, ControlPublicationError> {
         #[cfg(test)]
         if self.fail_next_publication.swap(false, Ordering::SeqCst) {
             return Err(ControlPublicationError::InjectedFailure);
@@ -327,13 +327,22 @@ impl ControlService {
             next_cursor: 0,
             events: VecDeque::with_capacity(self.event_limit),
         };
+        let snapshot = snapshot_from_playback(&session_id, &record.playback);
         sessions.insert(session_id, Arc::new(Mutex::new(record)));
-        Ok(())
+        Ok(snapshot)
     }
 
     #[cfg(test)]
     pub(crate) fn fail_next_publication(&self) {
         self.fail_next_publication.store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn session_count(&self) -> usize {
+        self.sessions
+            .read()
+            .expect("control sessions poisoned")
+            .len()
     }
 
     fn session(&self, session_id: &str) -> Result<Arc<Mutex<SessionRecord>>, ControlLookupError> {
