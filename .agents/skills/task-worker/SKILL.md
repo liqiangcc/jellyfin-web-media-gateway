@@ -18,7 +18,8 @@ Before execution, read:
 3. the Task Package `prompt.md`
 4. the Task Package `task.md`
 5. `docs/tasks/issue-lifecycle-protocol.md`
-6. every canonical/topic document explicitly required by `task.md`
+6. `docs/tasks/execution-anchor-recovery-protocol.md`
+7. every canonical/topic document explicitly required by `task.md`
 
 If this skill conflicts with those sources, follow the higher-authority repository source.
 
@@ -73,6 +74,26 @@ Claim using the repository's live Issue state mechanism:
 
 If the claim cannot be confirmed, stop. Do not execute concurrently on an unconfirmed claim.
 
+## Durable execution anchor
+
+After claim, follow `docs/tasks/execution-anchor-recovery-protocol.md`.
+
+For a repository-mutating Attempt:
+
+1. work on the Task-specific/existing worker branch rather than an unrelated branch;
+2. once the first **coherent in-scope** change exists, commit and push it;
+3. if the Task normally delivers through a PR and work will continue, create or reuse a draft PR as soon as it is useful for recovery/review;
+4. if the Attempt remains in progress after the first durable anchor exists, post exactly one `[EXECUTION CHECKPOINT]` with branch / durable commit / draft PR / workflow anchor;
+5. continue implementation and verification normally.
+
+Do **not** create empty/no-op commits or empty PRs merely to satisfy the anchor rule. Do not post periodic heartbeat comments.
+
+A checkpoint commit is not the final Candidate and does not prove any Claim. Final exact-Candidate Evidence is still governed by `task.md`.
+
+Before long-running Actions/target execution, ensure the candidate/harness identity being exercised is already durable and identifiable by SHA/ref.
+
+Attempts that were already `status:in-progress` before the execution-anchor protocol was introduced are not retroactively invalidated for lacking a checkpoint.
+
 ## Execute only the Task Contract
 
 Follow `task.md` exactly:
@@ -100,13 +121,14 @@ An operator may legitimately require privileged setup steps when the Task explic
 Before leaving the Attempt:
 
 1. commit/push or otherwise persist in-scope candidate changes when required;
-2. collect the Evidence required by `task.md`;
-3. comment the current Issue using the exact `[EXECUTION REPORT]` structure from `docs/tasks/issue-lifecycle-protocol.md`;
-4. include the real Attempt number, base/candidate SHA, PR when applicable, Claim results, Jobs/commands, execution host, Runner/Target, Evidence, problems, and unverified scope;
-5. transition the Issue to `status:review`;
-6. release active execution ownership;
-7. re-read the Issue to verify report + status are durable;
-8. stop.
+2. confirm the final Candidate / PR supersedes any early checkpoint identity;
+3. collect the Evidence required by `task.md`;
+4. comment the current Issue using the exact `[EXECUTION REPORT]` structure from `docs/tasks/issue-lifecycle-protocol.md`;
+5. include the real Attempt number, base/candidate SHA, PR when applicable, Claim results, Jobs/commands, execution host, Runner/Target, Evidence, problems, and unverified scope;
+6. transition the Issue to `status:review`;
+7. release active execution ownership;
+8. re-read the Issue to verify report + status are durable;
+9. stop.
 
 Worker execution outcome is not Coordinator acceptance.
 
@@ -117,13 +139,14 @@ Do not set `status:done`, close the Issue, or immediately start Attempt N+1.
 If a required permission, GitHub capability, device, Runner, Secret-at-runtime, network condition, dependency, or target capability is unavailable:
 
 1. preserve a safe state;
-2. clean temporary resources when required;
-3. comment the Issue using `[BLOCKER REPORT]` from `docs/tasks/issue-lifecycle-protocol.md`;
-4. state exactly what was completed, where execution stopped, Evidence, minimal resume condition, and cleanup/safe state;
-5. transition to `status:blocked`;
-6. release active execution ownership unless the repository explicitly requires ownership for blocker recovery;
-7. re-read the Issue to verify the report/status;
-8. stop.
+2. preserve/reuse any existing durable branch / commit / draft PR / Evidence anchor;
+3. clean temporary resources when required;
+4. comment the Issue using `[BLOCKER REPORT]` from `docs/tasks/issue-lifecycle-protocol.md`;
+5. state exactly what was completed, where execution stopped, Evidence, minimal resume condition, cleanup/safe state, and reusable durable anchor;
+6. transition to `status:blocked`;
+7. release active execution ownership unless the repository explicitly requires ownership for blocker recovery;
+8. re-read the Issue to verify the report/status;
+9. stop.
 
 Never bypass a security boundary or lower Success Criteria to avoid BLOCKED.
 
@@ -133,6 +156,7 @@ When a Coordinator has posted `Decision: REVISE` and returned the same Task to `
 
 - read the previous Attempt report and Coordinator Review;
 - confirm whether the Contract is unchanged;
+- inspect and reuse the previous durable branch/PR when it remains valid;
 - begin a new Attempt only after a fresh claim;
 - fix the accepted missing/failed items;
 - re-run all verification required by the current Task Contract, not only the single command that failed, when the Contract requires broader regression evidence.
@@ -151,4 +175,4 @@ Report: posted
 Next authority: Web Coordinator
 ```
 
-The Issue is the recoverable handoff. Chat text is not the state authority.
+The Issue plus durable branch/PR/Evidence anchor is the recoverable handoff. Chat text is not the state authority.

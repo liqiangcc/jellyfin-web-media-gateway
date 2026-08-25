@@ -1,11 +1,11 @@
 ---
 name: task-reviewer
-description: Review one jellyfin-web-media-gateway Task Attempt from its GitHub Issue and Evidence, then decide ACCEPT, REVISE, BLOCK, SPLIT, or NOT_PLANNED. Use only when explicitly asked to review, iterate, unblock, or close a task; do not execute the Worker implementation itself.
+description: Review one jellyfin-web-media-gateway Task Attempt from its GitHub Issue and Evidence, recover interrupted in-progress ownership when needed, then decide ACCEPT, REVISE, BLOCK, SPLIT, or NOT_PLANNED. Use only when explicitly asked to review, iterate, recover, unblock, or close a task; do not execute the Worker implementation itself.
 ---
 
 # Task Reviewer
 
-Perform the Coordinator-side Review / Iteration / Closure workflow for one Task.
+Perform the Coordinator-side Review / Recovery / Iteration / Closure workflow for one Task.
 
 ## Authority
 
@@ -16,13 +16,47 @@ Before deciding anything, read:
 3. Task Package `task.md`
 4. Task Package `prompt.md`
 5. `docs/tasks/issue-lifecycle-protocol.md`
-6. `docs/tasks/handoffs/README.md`
-7. the handoff profile(s) for the Task's current eligible environment(s)
-8. relevant canonical docs
-9. actual candidate commit / PR
-10. all required Actions runs, artifacts, target Evidence, or linked child Task Evidence
+6. `docs/tasks/execution-anchor-recovery-protocol.md`
+7. `docs/tasks/handoffs/README.md`
+8. the handoff profile(s) for the Task's current eligible environment(s)
+9. relevant canonical docs
+10. actual candidate commit / PR
+11. all required Actions runs, artifacts, target Evidence, or linked child Task Evidence
 
 Do not accept a result from chat summary alone.
+
+## In-progress recovery is not Review
+
+A Task that is still `status:in-progress` without a completed Worker report is not a normal Review unit.
+
+If the active Worker/session is known to have terminated or ownership is otherwise concretely stale, follow `docs/tasks/execution-anchor-recovery-protocol.md` instead of fabricating an `[EXECUTION REPORT]` or Coordinator Review.
+
+Before recovery inspect:
+
+```text
+Issue + comments
+worker branch / commits
+draft/open PR
+Actions runs/jobs/artifacts
+current main
+current Task Contract
+```
+
+Elapsed wall-clock time alone is not sufficient proof that ownership is stale. Missing PR/checkpoint alone is also not proof.
+
+When recovery is justified:
+
+1. post `[COORDINATOR RECOVERY]` with the interrupted Attempt N and durable anchor found;
+2. preserve existing branch/PR/Evidence when reusable;
+3. release stale active ownership;
+4. choose `status:ready`, `status:draft`, or `status:blocked` according to the unchanged/changed Contract and external conditions;
+5. if returning to ready, the next claim starts **Attempt N+1**;
+6. instruct the replacement Worker to reuse the durable branch/PR rather than starting over;
+7. verify the target Worker queue and emit the correct environment-specific handoff.
+
+Do not assign a replacement Worker into the same interrupted Attempt number, and do not create a duplicate business Issue merely because the Worker changed.
+
+Attempts that were already in progress before the execution-anchor protocol was introduced are not noncompliant merely because they lack `[EXECUTION CHECKPOINT]`.
 
 ## Review unit
 
@@ -46,6 +80,8 @@ Worker execution outcome
 != Coordinator Task decision
 != Parent Goal / Research Gate decision
 ```
+
+A draft PR or early checkpoint is only a recovery anchor; it is not automatically the final Candidate or accepted Evidence.
 
 ## Evaluate against frozen Contract
 
@@ -78,6 +114,8 @@ prompt.md unchanged unless bootstrap itself is wrong
 ```
 
 Do not create a new Issue for an ordinary retry.
+
+When an existing branch/PR remains valid, explicitly tell Attempt N+1 to reuse it. Do not restart from scratch solely because the Worker/session changed.
 
 Select next-entry profile from `docs/tasks/handoffs/`:
 
@@ -182,7 +220,7 @@ If reopening returns the Task to ready, verify eligible queues and emit environm
 
 ## Completion output
 
-Return durable decision and next action:
+For normal Review, return durable decision and next action:
 
 ```text
 Issue: #<issue>
@@ -191,6 +229,18 @@ Decision: ACCEPT | REVISE | BLOCK | SPLIT | NOT_PLANNED
 Issue state: <state>
 Contract changed: yes | no
 Next action: <close | downstream handoff(s) | unblock | child task>
+```
+
+For interrupted execution recovery, return:
+
+```text
+Issue: #<issue>
+Interrupted Attempt: <N>
+Recovery: recorded
+Durable anchor: <branch/commit/PR/evidence or none>
+Issue state: ready | draft | blocked
+Next Attempt: <N+1 or n/a>
+Next action: <handoff | contract revision | unblock>
 ```
 
 Whenever the Task returns to `status:ready`, always include one directly copyable handoff block for every currently eligible environment.

@@ -12,10 +12,17 @@ Coordinator 在发布后输出：
 $task-worker Execute Issue #<issue> using `docs/tasks/<issue>-<slug>/prompt.md`.
 ```
 
+`$task-worker` 会读取：
+
+- `docs/tasks/issue-lifecycle-protocol.md`
+- `docs/tasks/execution-anchor-recovery-protocol.md`
+
+因此新的 repository-mutation Attempt 在 first coherent in-scope commit 后应尽早 push durable branch，并在适合时建立 draft PR / 单次 `[EXECUTION CHECKPOINT]`；不使用周期性 heartbeat。
+
 Skill 不可见时 fallback：
 
 ```text
-在 Codex Cloud 的 liqiangcc/jellyfin-web-media-gateway 工作区同步最新仓库，读取 `AGENTS.md`、Issue #<issue>、`docs/tasks/<issue>-<slug>/prompt.md` 和其引用的 task.md，确认 status:ready + env:cloud + no active owner 后执行当前 Task，并按 Issue lifecycle 回报结果。
+在 Codex Cloud 的 liqiangcc/jellyfin-web-media-gateway 工作区同步最新仓库，读取 `AGENTS.md`、Issue #<issue>、`docs/tasks/<issue>-<slug>/prompt.md` 和其引用的 task.md，以及 `docs/tasks/issue-lifecycle-protocol.md`、`docs/tasks/execution-anchor-recovery-protocol.md`。确认 status:ready + env:cloud + no active owner 后执行当前 Task；如果会修改仓库，在 first coherent in-scope commit 后尽早 push 可恢复 branch，适合时建立 draft PR，并按协议最多留一次 `[EXECUTION CHECKPOINT]`。Attempt 结束后按 Issue lifecycle 回报结果。
 ```
 
 路由例外：
