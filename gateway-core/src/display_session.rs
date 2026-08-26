@@ -216,6 +216,7 @@ impl From<&DisplaySessionError> for DisplaySessionErrorResponse {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DisplaySessionError {
     SessionNotFound,
+    AmbiguousDisplay,
     SessionNotAttached,
     InvalidIdentifier(&'static str),
     InvalidLabel,
@@ -233,6 +234,7 @@ impl DisplaySessionError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::SessionNotFound => "SESSION_NOT_FOUND",
+            Self::AmbiguousDisplay => "DISPLAY_SESSION_AMBIGUOUS",
             Self::SessionNotAttached => "SESSION_NOT_ATTACHED",
             Self::InvalidIdentifier(_) => "IDENTIFIER_INVALID",
             Self::InvalidLabel => "LABEL_INVALID",
@@ -250,6 +252,9 @@ impl DisplaySessionError {
     pub fn message(&self) -> &'static str {
         match self {
             Self::SessionNotFound => "playback session was not found",
+            Self::AmbiguousDisplay => {
+                "more than one playback session is authoritative for this display"
+            }
             Self::SessionNotAttached => "display is not attached to a playback session",
             Self::InvalidIdentifier(_) => "identifier is invalid",
             Self::InvalidLabel => "display label is invalid",
@@ -266,8 +271,11 @@ impl DisplaySessionError {
 }
 
 impl From<ControlLookupError> for DisplaySessionError {
-    fn from(_: ControlLookupError) -> Self {
-        Self::SessionNotFound
+    fn from(error: ControlLookupError) -> Self {
+        match error {
+            ControlLookupError::NotFound => Self::SessionNotFound,
+            ControlLookupError::AmbiguousDisplay => Self::AmbiguousDisplay,
+        }
     }
 }
 

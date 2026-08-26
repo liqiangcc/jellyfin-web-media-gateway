@@ -222,11 +222,13 @@ impl ControlCommandRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ControlLookupError {
     NotFound,
+    AmbiguousDisplay,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ControlPublicationError {
     AlreadyExists,
+    DisplayAlreadyInUse,
     #[cfg(test)]
     InjectedFailure,
 }
@@ -342,6 +344,12 @@ impl ControlService {
         if sessions.contains_key(&session_id) {
             return Err(ControlPublicationError::AlreadyExists);
         }
+        if sessions.values().any(|session| {
+            let record = session.lock().expect("control session poisoned");
+            record.playback.active_display().display_id == display_id
+        }) {
+            return Err(ControlPublicationError::DisplayAlreadyInUse);
+        }
         let record = SessionRecord {
             playback: PlaybackSession::new(item_id, media_descriptor, display_id),
             next_cursor: 0,
@@ -394,6 +402,9 @@ impl ControlService {
             let record = session.lock().expect("control session poisoned");
             let snapshot = snapshot_from_playback(session_id, &record.playback);
             if snapshot.active_display.display_id == display_id {
+                if match_snapshot.is_some() {
+                    return Err(ControlLookupError::AmbiguousDisplay);
+                }
                 match_snapshot = Some(snapshot);
             }
         }

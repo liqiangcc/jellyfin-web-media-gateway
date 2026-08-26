@@ -243,6 +243,22 @@ async fn hosted_product_composes_live_display_source_session_and_rendering_view(
     assert!(!browser_view.contains("example.test/video.mp4"));
     assert!(!browser_view.contains("resolved_media"));
 
+    let busy = service
+        .router()
+        .oneshot(json_post(
+            "/api/v1/sessions",
+            json!({
+                "request_id": "hosted-create-2",
+                "source": "https://example.test/another-video.mp4",
+                "display_id": "tv-e2e"
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(busy.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(busy).await["code"], "DISPLAY_BUSY");
+    assert_eq!(service.control().session_count(), 1);
+
     let stale = Request::builder()
         .uri(format!(
             "/api/v1/displays/tv-e2e/rendering?session_id={session_id}"
@@ -253,6 +269,45 @@ async fn hosted_product_composes_live_display_source_session_and_rendering_view(
     assert_eq!(
         service.router().oneshot(stale).await.unwrap().status(),
         StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn ambiguous_display_reconnect_returns_bounded_conflict() {
+    let service = service();
+    let registered = json_body(
+        service
+            .router()
+            .oneshot(json_post(
+                "/api/v1/displays/register",
+                json!({
+                    "display_id": "ambiguous-display",
+                    "label": "Legacy browser",
+                    "capabilities": ["video", "audio"]
+                }),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let control = service.control();
+    control.seed_test_session("item-a", "media-a", "ambiguous-display");
+    control.seed_test_session("item-b", "media-b", "ambiguous-display");
+
+    let rendering = Request::builder()
+        .uri("/api/v1/displays/ambiguous-display/rendering")
+        .header(header::HOST, HOST)
+        .header(
+            "x-display-lease",
+            registered["lease_token"].as_str().unwrap(),
+        )
+        .body(Body::empty())
+        .unwrap();
+    let rendering = service.router().oneshot(rendering).await.unwrap();
+    assert_eq!(rendering.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(rendering).await["code"],
+        "DISPLAY_SESSION_AMBIGUOUS"
     );
 }
 

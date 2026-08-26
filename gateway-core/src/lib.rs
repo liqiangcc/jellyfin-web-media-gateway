@@ -1281,6 +1281,15 @@ async fn control_view_handler(
                 transition_id: None,
             },
         ),
+        Err(ControlLookupError::AmbiguousDisplay) => control_error_response(
+            StatusCode::CONFLICT,
+            ControlErrorResponse {
+                code: "DISPLAY_SESSION_AMBIGUOUS",
+                message: "more than one playback session is authoritative for this display",
+                current_revision: None,
+                transition_id: None,
+            },
+        ),
     }
 }
 
@@ -1321,6 +1330,15 @@ async fn control_session_snapshot_handler(
             ControlErrorResponse {
                 code: "SESSION_NOT_FOUND",
                 message: "session was not found",
+                current_revision: None,
+                transition_id: None,
+            },
+        ),
+        Err(ControlLookupError::AmbiguousDisplay) => control_error_response(
+            StatusCode::CONFLICT,
+            ControlErrorResponse {
+                code: "DISPLAY_SESSION_AMBIGUOUS",
+                message: "more than one playback session is authoritative for this display",
                 current_revision: None,
                 transition_id: None,
             },
@@ -1369,6 +1387,15 @@ async fn control_session_events_handler(
             ControlErrorResponse {
                 code: "SESSION_NOT_FOUND",
                 message: "session was not found",
+                current_revision: None,
+                transition_id: None,
+            },
+        ),
+        Err(ControlLookupError::AmbiguousDisplay) => control_error_response(
+            StatusCode::CONFLICT,
+            ControlErrorResponse {
+                code: "DISPLAY_SESSION_AMBIGUOUS",
+                message: "more than one playback session is authoritative for this display",
                 current_revision: None,
                 transition_id: None,
             },
@@ -1556,9 +1583,9 @@ fn display_session_error_response(error: DisplaySessionError) -> Response {
         DisplaySessionError::LeaseInvalid | DisplaySessionError::LeaseExpired => {
             StatusCode::UNAUTHORIZED
         }
-        DisplaySessionError::AlreadyRegistered | DisplaySessionError::StaleContext => {
-            StatusCode::CONFLICT
-        }
+        DisplaySessionError::AlreadyRegistered
+        | DisplaySessionError::AmbiguousDisplay
+        | DisplaySessionError::StaleContext => StatusCode::CONFLICT,
         DisplaySessionError::StaleTelemetry => StatusCode::CONFLICT,
         DisplaySessionError::InvalidIdentifier(_)
         | DisplaySessionError::InvalidLabel

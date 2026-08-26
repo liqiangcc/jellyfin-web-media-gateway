@@ -5,7 +5,7 @@
 //! registration/liveness stays behind `DisplaySessionService`; Playback
 //! authority stays behind `ControlService`.
 
-use crate::control::ControlService;
+use crate::control::{ControlPublicationError, ControlService};
 use crate::display_session::{DisplaySessionError, DisplaySessionService};
 use crate::{Binding, EgressScope, GatewayError, GatewayService};
 use axum::response::{IntoResponse, Response};
@@ -266,6 +266,10 @@ impl SourceSessionService {
             request.display_id.clone(),
         ) {
             Ok(snapshot) => snapshot,
+            Err(ControlPublicationError::DisplayAlreadyInUse) => {
+                revoke_all(gateway, &issued_tokens);
+                return failure_for_display_in_use();
+            }
             Err(_) => {
                 revoke_all(gateway, &issued_tokens);
                 return internal_failure();
@@ -418,6 +422,16 @@ fn failure_for_display(error: DisplaySessionError) -> CreationOutcome {
     CreationOutcome::Failure {
         status,
         error: CreateSessionErrorResponse { code, message },
+    }
+}
+
+fn failure_for_display_in_use() -> CreationOutcome {
+    CreationOutcome::Failure {
+        status: axum::http::StatusCode::CONFLICT,
+        error: CreateSessionErrorResponse {
+            code: "DISPLAY_BUSY",
+            message: "display already has an authoritative playback session",
+        },
     }
 }
 
