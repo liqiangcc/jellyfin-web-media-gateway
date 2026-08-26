@@ -101,7 +101,16 @@ jobs:
           fi
           kill "$pid" 2>/dev/null || true
           wait "$pid" 2>/dev/null || true
-          rm -rf "$profile"
+          cleaned=''
+          for _ in $(seq 1 30); do
+            if rm -rf "$profile" 2>/dev/null; then
+              cleaned=1
+              break
+            fi
+            sleep 0.1
+          done
+          test "$cleaned" = 1
+          test ! -e "$profile"
       - name: Run real lifecycle/navigation smoke
         run: cargo test -p gateway-core --lib browser_chromium::tests::real_chromium_lifecycle_navigation_events_and_cleanup -- --exact --nocapture
 
@@ -181,4 +190,4 @@ jobs:
       - name: Run deterministic Browser contract suite
         run: cargo test -p gateway-core --lib browser::tests -- --nocapture
       - name: Run exact-Candidate workspace regressions
-        run: cargo test --workspace --all-targets
+        run: cargo test --workspace --all-targets -- --test-threads=1
