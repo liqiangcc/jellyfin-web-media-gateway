@@ -40,6 +40,7 @@ P0 至少关注：Media Path、TV audible autoplay、ARM64 resource、Playback c
 - `security.md`
 - `development-environments.md`：Web Coordinator / Web Worker、Implementation / Verification、capability routing。
 - `runner-execution-architecture.md`：GitHub Actions execution bus、GitHub-hosted x64/ARM64、Ubuntu ARM64 Target Runner、安全与路由。
+- `planning-priority.md`：当前执行优先级；环境就绪 → 功能闭环 → 真实场景兼容 → 性能/容量 → 生产加固。
 
 ### ADR — WHY
 
@@ -78,6 +79,7 @@ Cloud **不部署 Runner**。
 - `../AGENTS.md`：长期 Agent 规则。
 - `development-environments.md`：Web-first、工作/环境解耦、Evidence 路由。
 - `runner-execution-architecture.md`：Actions/Runner 自动执行架构。
+- `planning-priority.md`：当前项目执行优先级。
 - `tasks/README.md`：Issue + task 协议。
 - `tasks/task.template.md`：Execution Plane / Runner / Target / Trust Gate 模板。
 - `codex/README.md`：外部 Codex fallback。
