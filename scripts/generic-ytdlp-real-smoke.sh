@@ -20,12 +20,8 @@ repo_root=$(cd -- "$script_dir/.." && pwd)
 work_dir=$(mktemp -d "${TMPDIR:-/tmp}/generic-ytdlp-real-smoke.XXXXXX")
 trap 'rm -rf -- "$work_dir"' EXIT HUP INT TERM
 
-# This setup is isolated and user-writable. It deliberately uses --target
-# instead of requiring python3-venv or any package manager. It is not
-# extractor traffic: the real extraction below still gets every HTTP(S)
-# request through R008Broker.
-site_dir="$work_dir/site-packages"
 setup_log="$work_dir/setup.log"
+cache_helper="$script_dir/generic-ytdlp-runtime-cache.py"
 python_bin=$(command -v python3 || true)
 if [[ -z "$python_bin" || ! -x "$python_bin" ]]; then
   printf '%s\n' \
@@ -41,11 +37,9 @@ if [[ -z "$python_bin" || ! -x "$python_bin" ]]; then
   exit 75
 fi
 
-unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
-"$python_bin" -m pip install --target "$site_dir" \
-  --disable-pip-version-check --no-cache-dir --no-deps \
-  'yt-dlp @ git+https://github.com/yt-dlp/yt-dlp.git@3a08beaf031ab68f966401ead017ac81fe8486cf' \
-  >"$setup_log" 2>&1 || {
+cache_info=$(
+  "$python_bin" "$cache_helper" prepare 2>"$setup_log"
+) || {
   printf '%s\n' \
     'result: BLOCKED' \
     'plugin: generic-ytdlp' \
@@ -59,21 +53,8 @@ unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
   exit 75
 }
 
-PYTHONPATH="$site_dir" "$python_bin" - "$site_dir" >"$setup_log" 2>&1 <<'PY' || {
-import json
-import pathlib
-import sys
-
-site_dir = pathlib.Path(sys.argv[1])
-import yt_dlp
-from importlib import metadata
-
-assert yt_dlp.version.__version__ == "2026.08.19"
-dist = metadata.distribution("yt-dlp")
-direct_url = json.loads((pathlib.Path(dist._path) / "direct_url.json").read_text())
-assert direct_url["vcs_info"]["commit_id"] == "3a08beaf031ab68f966401ead017ac81fe8486cf"
-assert str(site_dir) in str(pathlib.Path(dist._path).parent)
-PY
+mapfile -t cache_lines <<<"$cache_info"
+if [[ "${#cache_lines[@]}" -ne 2 || ( "${cache_lines[0]}" != "hit" && "${cache_lines[0]}" != "prepared" ) || -z "${cache_lines[1]}" ]]; then
   printf '%s\n' \
     'result: BLOCKED' \
     'plugin: generic-ytdlp' \
@@ -85,18 +66,22 @@ PY
     'title_length: n/a' \
     'process_error: FROZEN_RUNTIME_VERIFY'
   exit 75
-}
+fi
+runtime_cache="${cache_lines[0]}"
+site_dir="${cache_lines[1]}"
 
 cd -- "$repo_root"
+# Setup-only proxy/network state must not enter the extractor process. The
+# worker itself also uses env_clear and only receives the inherited R008 fd.
+unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
 set +e
-output=$(YTDLP_PREP_PYTHON="$python_bin" \
-  YTDLP_PREP_PYTHONPATH="$site_dir" \
+output=$(YTDLP_PREP_PYTHONPATH="$site_dir" \
   cargo run --quiet -p generic-ytdlp --features runtime-prep \
-    --bin generic-ytdlp-real-smoke -- "$1" 2>"$setup_log")
+  --bin generic-ytdlp-real-smoke -- "$1" 2>"$setup_log")
 status=$?
 set -e
 if [[ -n "$output" ]]; then
-  printf '%s\n' "$output"
+  printf '%s\nruntime_cache: %s\n' "$output" "$runtime_cache"
 else
   printf '%s\n' \
     'result: FAIL' \
@@ -107,6 +92,7 @@ else
     'protocol: n/a' \
     'stream_count: 0' \
     'title_length: n/a' \
-    'process_error: HARNESS_EXECUTION'
+    'process_error: HARNESS_EXECUTION' \
+    "runtime_cache: $runtime_cache"
 fi
 exit "$status"

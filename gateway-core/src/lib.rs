@@ -678,6 +678,22 @@ impl GatewayService {
         )
     }
 
+    pub(crate) fn execute_control_command(
+        &self,
+        session_id: &str,
+        request: ControlCommandRequest,
+    ) -> Result<ControlCommandResponse, ControlCommandError> {
+        if request.command.is_navigation() {
+            return self.state.source_sessions.navigate(
+                self,
+                &self.state.control,
+                session_id,
+                request,
+            );
+        }
+        self.state.control.execute_command(session_id, request)
+    }
+
     pub fn router(&self) -> Router {
         Router::new()
             .route("/", get(entry_handler))
@@ -1428,7 +1444,7 @@ async fn control_session_command_handler(
             );
         }
     };
-    match state.control.execute_command(&session_id, request) {
+    match (GatewayService { state }).execute_control_command(&session_id, request) {
         Ok(result) => Json(result).into_response(),
         Err(error) => {
             let status = match &error {

@@ -20,12 +20,10 @@ fn main() -> ExitCode {
         return blocked("INVALID_ARGUMENTS", 64);
     }
 
-    let Some(python) = env::var_os("YTDLP_PREP_PYTHON").map(PathBuf::from) else {
-        return blocked("FROZEN_RUNTIME_UNAVAILABLE", 75);
-    };
-    if !python.is_file() {
-        return blocked("FROZEN_RUNTIME_UNAVAILABLE", 75);
-    }
+    // The smoke entrypoint owns the fixed interpreter selection. Callers may
+    // provide only the prepared cache path; they cannot select a Python
+    // executable for the worker.
+    let python = PathBuf::from("python3");
     let Some(sandbox) = sandbox_path() else {
         return blocked("SANDBOX_UNAVAILABLE", 75);
     };

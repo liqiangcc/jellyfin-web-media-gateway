@@ -1,3 +1,4 @@
+use site_adapter_api::{NavigationDirection, SourceLocator};
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -13,6 +14,17 @@ pub struct PlaybackItem {
     pub item_revision: u64,
     pub resolved_media: String,
     pub media_generation: u64,
+    pub source_locator: Option<SourceLocator>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NavigationTicket {
+    pub session_id: String,
+    pub expected_session_revision: u64,
+    pub expected_item_id: String,
+    pub expected_item_revision: u64,
+    pub direction: NavigationDirection,
+    pub target_locator: SourceLocator,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,6 +57,8 @@ pub enum Command {
     Pause,
     Seek(u64),
     Stop,
+    NextItem,
+    PreviousItem,
     BeginHandoff { target_display_id: String },
 }
 
@@ -67,6 +81,10 @@ pub enum CommandError {
     RevisionConflict { current_revision: u64 },
     RequestIdMismatch,
     HandoffInProgress { transition_id: u64 },
+    NavigationUnsupported,
+    NavigationNoTarget,
+    NavigationPreparationFailed,
+    NavigationStale,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,6 +126,15 @@ impl PlaybackSession {
         resolved_media: impl Into<String>,
         display_id: impl Into<String>,
     ) -> Self {
+        Self::new_with_source_locator(item_id, resolved_media, display_id, None)
+    }
+
+    pub fn new_with_source_locator(
+        item_id: impl Into<String>,
+        resolved_media: impl Into<String>,
+        display_id: impl Into<String>,
+        source_locator: Option<SourceLocator>,
+    ) -> Self {
         Self {
             session_revision: 0,
             state: PlaybackState::Playing,
@@ -116,6 +143,7 @@ impl PlaybackSession {
                 item_revision: 1,
                 resolved_media: resolved_media.into(),
                 media_generation: 0,
+                source_locator,
             },
             position_ms: 0,
             telemetry_sequence: 0,
@@ -148,6 +176,10 @@ impl PlaybackSession {
 
     pub fn resolved_media(&self) -> &str {
         &self.current_item.resolved_media
+    }
+
+    pub fn current_source_locator(&self) -> Option<&SourceLocator> {
+        self.current_item.source_locator.as_ref()
     }
 
     pub fn media_generation(&self) -> u64 {
@@ -234,6 +266,9 @@ impl PlaybackSession {
                 self.bump_session_revision();
                 None
             }
+            Command::NextItem | Command::PreviousItem => {
+                return Err(CommandError::NavigationUnsupported);
+            }
             Command::BeginHandoff { target_display_id } => {
                 if let Some(active) = &self.handoff {
                     return Err(CommandError::HandoffInProgress {
@@ -278,6 +313,15 @@ impl PlaybackSession {
     }
 
     pub fn switch_item(&mut self, item_id: impl Into<String>, resolved_media: impl Into<String>) {
+        self.switch_item_with_locator(item_id, resolved_media, None);
+    }
+
+    pub fn switch_item_with_locator(
+        &mut self,
+        item_id: impl Into<String>,
+        resolved_media: impl Into<String>,
+        source_locator: Option<SourceLocator>,
+    ) {
         let item_revision = self
             .current_item
             .item_revision
@@ -288,11 +332,167 @@ impl PlaybackSession {
             item_revision,
             resolved_media: resolved_media.into(),
             media_generation: 0,
+            source_locator,
         };
         self.position_ms = 0;
         self.telemetry_sequence = 0;
         self.handoff = None;
         self.bump_session_revision();
+    }
+
+    pub fn request_outcome(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<Option<Result<CommandResult, CommandError>>, CommandError> {
+        let fingerprint = RequestFingerprint {
+            expected_session_revision: envelope.expected_session_revision,
+            command: envelope.command.clone(),
+        };
+        self.request_records
+            .get(&envelope.request_id)
+            .map(|record| {
+                if record.fingerprint == fingerprint {
+                    Ok(record.outcome.clone())
+                } else {
+                    Err(CommandError::RequestIdMismatch)
+                }
+            })
+            .transpose()
+    }
+
+    pub fn navigation_ticket(
+        &self,
+        session_id: impl Into<String>,
+        direction: NavigationDirection,
+        target_locator: SourceLocator,
+    ) -> NavigationTicket {
+        NavigationTicket {
+            session_id: session_id.into(),
+            expected_session_revision: self.session_revision,
+            expected_item_id: self.current_item.item_id.clone(),
+            expected_item_revision: self.current_item.item_revision,
+            direction,
+            target_locator,
+        }
+    }
+
+    pub fn validate_navigation_request(
+        &self,
+        envelope: &CommandEnvelope,
+    ) -> Result<(), CommandError> {
+        if let Some(outcome) = self.request_outcome(envelope)? {
+            return outcome.map(|_| ());
+        }
+        if let Some(expected) = envelope.expected_session_revision
+            && expected != self.session_revision
+        {
+            return Err(CommandError::RevisionConflict {
+                current_revision: self.session_revision,
+            });
+        }
+        if !matches!(envelope.command, Command::NextItem | Command::PreviousItem) {
+            return Err(CommandError::NavigationUnsupported);
+        }
+        if self.current_item.source_locator.is_none() {
+            return Err(CommandError::NavigationUnsupported);
+        }
+        Ok(())
+    }
+
+    pub fn commit_prepared_navigation(
+        &mut self,
+        envelope: CommandEnvelope,
+        ticket: &NavigationTicket,
+        item_id: impl Into<String>,
+        resolved_media: impl Into<String>,
+    ) -> Result<CommandResult, CommandError> {
+        if let Some(outcome) = self.request_outcome(&envelope)? {
+            return outcome;
+        }
+        let direction = match envelope.command {
+            Command::NextItem => NavigationDirection::Next,
+            Command::PreviousItem => NavigationDirection::Previous,
+            _ => return Err(CommandError::NavigationUnsupported),
+        };
+        if ticket.direction != direction
+            || ticket.expected_session_revision != self.session_revision
+            || ticket.expected_item_id != self.current_item.item_id
+            || ticket.expected_item_revision != self.current_item.item_revision
+            || envelope
+                .expected_session_revision
+                .is_some_and(|expected| expected != ticket.expected_session_revision)
+        {
+            let error = CommandError::NavigationStale;
+            self.remember_outcome(&envelope, Err(error.clone()));
+            return Err(error);
+        }
+        if let Some(expected) = envelope.expected_session_revision
+            && expected != self.session_revision
+        {
+            let error = CommandError::RevisionConflict {
+                current_revision: self.session_revision,
+            };
+            self.remember_outcome(&envelope, Err(error.clone()));
+            return Err(error);
+        }
+        if self.current_item.source_locator.is_none() {
+            let error = CommandError::NavigationUnsupported;
+            self.remember_outcome(&envelope, Err(error.clone()));
+            return Err(error);
+        }
+
+        let item_revision = self
+            .current_item
+            .item_revision
+            .checked_add(1)
+            .expect("item revision overflow");
+        self.current_item = PlaybackItem {
+            item_id: item_id.into(),
+            item_revision,
+            resolved_media: resolved_media.into(),
+            media_generation: 0,
+            source_locator: Some(ticket.target_locator.clone()),
+        };
+        self.position_ms = 0;
+        self.telemetry_sequence = 0;
+        self.handoff = None;
+        self.bump_session_revision();
+        let result = CommandResult {
+            request_id: envelope.request_id.clone(),
+            session_revision: self.session_revision,
+            transition: None,
+        };
+        self.remember_outcome(&envelope, Ok(result.clone()));
+        Ok(result)
+    }
+
+    pub fn remember_navigation_failure(
+        &mut self,
+        envelope: &CommandEnvelope,
+        error: CommandError,
+    ) -> Result<CommandResult, CommandError> {
+        if let Some(outcome) = self.request_outcome(envelope)? {
+            return outcome;
+        }
+        self.remember_outcome(envelope, Err(error.clone()));
+        Err(error)
+    }
+
+    fn remember_outcome(
+        &mut self,
+        envelope: &CommandEnvelope,
+        outcome: Result<CommandResult, CommandError>,
+    ) {
+        self.request_records.insert(
+            envelope.request_id.clone(),
+            RequestRecord {
+                fingerprint: RequestFingerprint {
+                    expected_session_revision: envelope.expected_session_revision,
+                    command: envelope.command.clone(),
+                },
+                outcome,
+            },
+        );
     }
 
     pub fn apply_position_callback(

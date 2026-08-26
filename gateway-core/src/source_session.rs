@@ -5,13 +5,18 @@
 //! registration/liveness stays behind `DisplaySessionService`; Playback
 //! authority stays behind `ControlService`.
 
-use crate::control::ControlService;
+use crate::control::{
+    ControlCommandError, ControlCommandRequest, ControlCommandResponse, ControlService,
+    NavigationStart,
+};
 use crate::display_session::{DisplaySessionError, DisplaySessionService};
+use crate::playback::{Command, CommandError, NavigationTicket};
 use crate::{Binding, EgressScope, GatewayError, GatewayService};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use site_adapter_api::{
-    AdapterError, MediaProtection, ResolvedMedia, SiteAdapterRegistry, StreamProtocol,
+    AdapterError, MediaProtection, NavigationDirection, ResolvedMedia, SiteAdapterRegistry,
+    StreamProtocol,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -128,6 +133,27 @@ impl SourceSessionService {
             && media.item_revision == snapshot.current_item.item_revision
             && media.media_generation == snapshot.current_item.media_generation)
             .then_some(media)
+    }
+
+    /// Publish a media projection without allowing a delayed preparation to
+    /// roll the projection back after a newer Playback item has committed.
+    ///
+    /// Playback commits and this projection live behind separate authorities,
+    /// so publication must be monotonic as well as protected by the map lock.
+    /// `item_revision` is the per-session authority for item transitions;
+    /// equal revisions are never replaced by a later navigation publication.
+    fn publish_media_view(&self, view: SessionMediaView) {
+        let mut media_views = self
+            .media_views
+            .write()
+            .expect("source media views poisoned");
+        if media_views
+            .get(&view.session_id)
+            .is_some_and(|current| current.item_revision >= view.item_revision)
+        {
+            return;
+        }
+        media_views.insert(view.session_id.clone(), view);
     }
 
     pub(crate) fn create(
@@ -264,6 +290,7 @@ impl SourceSessionService {
             item_id.clone(),
             descriptor,
             request.display_id.clone(),
+            locator.clone(),
         ) {
             Ok(snapshot) => snapshot,
             Err(_) => {
@@ -271,10 +298,7 @@ impl SourceSessionService {
                 return internal_failure();
             }
         };
-        self.media_views
-            .write()
-            .expect("source media views poisoned")
-            .insert(session_id.clone(), media_view.clone());
+        self.publish_media_view(media_view.clone());
         if displays
             .set_current_rendering_session(&request.display_id, &session_id)
             .is_err()
@@ -296,6 +320,163 @@ impl SourceSessionService {
             media: media_view,
         }))
     }
+
+    pub(crate) fn navigate(
+        &self,
+        gateway: &GatewayService,
+        control: &ControlService,
+        session_id: &str,
+        request: ControlCommandRequest,
+    ) -> Result<ControlCommandResponse, ControlCommandError> {
+        let start = control.begin_navigation(session_id, request)?;
+        let NavigationStart::Prepare { envelope, snapshot } = start else {
+            let NavigationStart::Replay(outcome) = start else {
+                unreachable!("navigation start must be prepare or replay")
+            };
+            return control.replay_navigation(session_id, outcome);
+        };
+        let direction = match &envelope.command {
+            Command::NextItem => NavigationDirection::Next,
+            Command::PreviousItem => NavigationDirection::Previous,
+            _ => {
+                return Err(ControlCommandError::Playback(
+                    CommandError::NavigationUnsupported,
+                ));
+            }
+        };
+        let context = match self.registry.navigation(&snapshot.source_locator) {
+            Ok(context) => context,
+            Err(AdapterError::UnsupportedNavigation) => {
+                return control.remember_navigation_failure(
+                    session_id,
+                    &envelope,
+                    CommandError::NavigationUnsupported,
+                );
+            }
+            Err(_) => {
+                return control.remember_navigation_failure(
+                    session_id,
+                    &envelope,
+                    CommandError::NavigationPreparationFailed,
+                );
+            }
+        };
+        let Some(target_locator) = direction.select(&context).cloned() else {
+            return control.remember_navigation_failure(
+                session_id,
+                &envelope,
+                CommandError::NavigationNoTarget,
+            );
+        };
+        let media = match self.registry.resolve(&target_locator) {
+            Ok(media) => media,
+            Err(_) => {
+                return control.remember_navigation_failure(
+                    session_id,
+                    &envelope,
+                    CommandError::NavigationPreparationFailed,
+                );
+            }
+        };
+        if validate_media(&media).is_err() || media.streams.len() > gateway.max_capabilities() {
+            return control.remember_navigation_failure(
+                session_id,
+                &envelope,
+                CommandError::NavigationPreparationFailed,
+            );
+        }
+
+        let item_id = format!("i-{}", Uuid::new_v4().simple());
+        let prepared = match prepare_media(
+            gateway,
+            &media,
+            session_id,
+            &item_id,
+            snapshot.item_revision.saturating_add(1),
+        ) {
+            Ok(prepared) => prepared,
+            Err((error, tokens)) => {
+                revoke_all(gateway, &tokens);
+                return control.remember_navigation_failure(session_id, &envelope, error);
+            }
+        };
+        let ticket = NavigationTicket {
+            session_id: snapshot.session_id.clone(),
+            expected_session_revision: snapshot.session_revision,
+            expected_item_id: snapshot.item_id,
+            expected_item_revision: snapshot.item_revision,
+            direction,
+            target_locator,
+        };
+        let result = control.commit_prepared_navigation(
+            session_id,
+            envelope,
+            &ticket,
+            item_id,
+            prepared.descriptor.clone(),
+        );
+        match result {
+            Ok(result) => {
+                self.publish_media_view(prepared.view);
+                Ok(result)
+            }
+            Err(error) => {
+                revoke_all(gateway, &prepared.tokens);
+                Err(error)
+            }
+        }
+    }
+}
+
+struct PreparedMedia {
+    view: SessionMediaView,
+    descriptor: String,
+    tokens: Vec<String>,
+}
+
+fn prepare_media(
+    gateway: &GatewayService,
+    media: &ResolvedMedia,
+    session_id: &str,
+    item_id: &str,
+    item_revision: u64,
+) -> Result<PreparedMedia, (CommandError, Vec<String>)> {
+    let mut issued_tokens = Vec::with_capacity(media.streams.len());
+    let mut streams = Vec::with_capacity(media.streams.len());
+    for stream in &media.streams {
+        let resource = match GatewayService::resource_from_resolved(stream, EgressScope::PublicWeb)
+        {
+            Ok(resource) => resource,
+            Err(_) => return Err((CommandError::NavigationPreparationFailed, issued_tokens)),
+        };
+        let binding = Binding::new(session_id, item_id, item_revision, &stream.id);
+        let (gateway_path, token) =
+            gateway.issue_path_with_token(binding, resource, MEDIA_CAPABILITY_TTL);
+        issued_tokens.push(token);
+        streams.push(SessionMediaStream {
+            id: stream.id.clone(),
+            protocol: protocol_name(stream.protocol).into(),
+            gateway_path,
+        });
+    }
+    let view = SessionMediaView {
+        session_id: session_id.into(),
+        item_id: item_id.into(),
+        item_revision,
+        media_generation: 0,
+        title: sanitize_metadata(&media.title, 256),
+        source_site: sanitize_metadata(&media.source_site, 128),
+        streams,
+    };
+    let descriptor = match serde_json::to_string(&view) {
+        Ok(descriptor) => descriptor,
+        Err(_) => return Err((CommandError::NavigationPreparationFailed, issued_tokens)),
+    };
+    Ok(PreparedMedia {
+        view,
+        descriptor,
+        tokens: issued_tokens,
+    })
 }
 
 fn validate_request(request: &CreateSessionRequest) -> Result<(), CreateSessionErrorResponse> {
@@ -483,6 +664,7 @@ fn internal_failure() -> CreationOutcome {
 
 #[cfg(test)]
 mod tests {
+    use super::{SessionMediaView, SourceSessionService};
     use crate::GatewayService;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode, header};
@@ -506,6 +688,7 @@ mod tests {
         Ambiguous,
         Rollback,
         SecretReference,
+        Navigation,
     }
 
     struct FixtureAdapter {
@@ -585,6 +768,30 @@ mod tests {
                 streams,
                 subtitles: vec![],
                 protection: MediaProtection::Clear,
+            })
+        }
+
+        fn navigation(
+            &self,
+            locator: &SourceLocator,
+        ) -> Result<site_adapter_api::NavigationContext, AdapterError> {
+            if !matches!(self.mode, FixtureMode::Navigation) {
+                return Err(AdapterError::UnsupportedNavigation);
+            }
+            let make_locator = |payload: &str| SourceLocator {
+                site_id: self.site_id().into(),
+                plugin_id: self.plugin_id().into(),
+                locator_version: 1,
+                opaque_payload: payload.into(),
+            };
+            Ok(site_adapter_api::NavigationContext {
+                previous: (locator.opaque_payload != "fixture://start")
+                    .then(|| make_locator("fixture://previous")),
+                next: (locator.opaque_payload == "fixture://start"
+                    || locator.opaque_payload == "fixture://middle")
+                    .then(|| make_locator("fixture://end")),
+                collection_id: Some("fixture-collection".into()),
+                current_index: Some(1),
             })
         }
     }
@@ -937,5 +1144,187 @@ mod tests {
         assert!(!body.to_string().contains("fixture-secret-ref"));
         assert_eq!(service.capability_count(), 0);
         assert_eq!(service.control().session_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn navigation_prepares_before_commit_and_reuses_control_authority() {
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(FixtureAdapter {
+                plugin: "fixture-navigation",
+                priority: 10,
+                mode: FixtureMode::Navigation,
+            }))
+            .unwrap();
+        let service = service_with_registry(registry);
+        register_display(&service).await;
+        let created = json(
+            service
+                .router()
+                .oneshot(post(
+                    "/api/v1/sessions",
+                    serde_json::json!({
+                        "request_id": "navigation-create",
+                        "source": "fixture://middle",
+                        "display_id": "display-a"
+                    }),
+                ))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(created["item_revision"], 1);
+        let session_id = created["session_id"].as_str().unwrap().to_owned();
+        let path = format!("/api/v1/sessions/{session_id}/commands");
+        let next = service
+            .router()
+            .oneshot(post(
+                &path,
+                serde_json::json!({
+                    "request_id": "navigation-next",
+                    "expected_session_revision": 0,
+                    "command": {"type": "next_item"}
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(next.status(), StatusCode::OK);
+        let next_body = json(next).await;
+        assert_eq!(next_body["session_revision"], 1);
+        assert_eq!(next_body["snapshot"]["current_item"]["item_revision"], 2);
+        assert_eq!(next_body["snapshot"]["position_ms"], 0);
+
+        let duplicate = service
+            .router()
+            .oneshot(post(
+                &path,
+                serde_json::json!({
+                    "request_id": "navigation-next",
+                    "expected_session_revision": 0,
+                    "command": {"type": "next_item"}
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(duplicate.status(), StatusCode::OK);
+        let duplicate_body = json(duplicate).await;
+        assert_eq!(duplicate_body["session_revision"], 1);
+        assert_eq!(
+            duplicate_body["snapshot"]["current_item"]["item_revision"],
+            2
+        );
+
+        let mismatch = service
+            .router()
+            .oneshot(post(
+                &path,
+                serde_json::json!({
+                    "request_id": "navigation-next",
+                    "expected_session_revision": 0,
+                    "command": {"type": "previous_item"}
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(mismatch.status(), StatusCode::CONFLICT);
+        assert_eq!(json(mismatch).await["code"], "REQUEST_ID_MISMATCH");
+        assert_eq!(
+            service
+                .control()
+                .snapshot(&session_id)
+                .unwrap()
+                .session_revision,
+            1
+        );
+
+        let edge = service
+            .router()
+            .oneshot(post(
+                &path,
+                serde_json::json!({
+                    "request_id": "navigation-edge",
+                    "expected_session_revision": 1,
+                    "command": {"type": "next_item"}
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(edge.status(), StatusCode::CONFLICT);
+        assert_eq!(json(edge).await["code"], "NAVIGATION_NO_TARGET");
+        assert_eq!(
+            service
+                .control()
+                .snapshot(&session_id)
+                .unwrap()
+                .current_item
+                .item_revision,
+            2
+        );
+
+        let previous = service
+            .router()
+            .oneshot(post(
+                &path,
+                serde_json::json!({
+                    "request_id": "navigation-previous",
+                    "expected_session_revision": 1,
+                    "command": {"type": "previous_item"}
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(previous.status(), StatusCode::OK);
+        let previous_body = json(previous).await;
+        assert_eq!(previous_body["session_revision"], 2);
+        assert_eq!(
+            previous_body["snapshot"]["current_item"]["item_revision"],
+            3
+        );
+    }
+
+    #[test]
+    fn reversed_post_commit_publication_keeps_latest_media_projection() {
+        // This models two successful Playback commits whose projections are
+        // published in reverse order. It is intentionally deterministic: the
+        // publication boundary itself must reject the older item revision.
+        let service = SourceSessionService::new(Arc::new(SiteAdapterRegistry::default()));
+        let view = |item_id: &str, item_revision: u64| SessionMediaView {
+            session_id: "session-navigation".into(),
+            item_id: item_id.into(),
+            item_revision,
+            media_generation: 0,
+            title: format!("title-{item_revision}"),
+            source_site: "fixture".into(),
+            streams: vec![],
+        };
+
+        let newer = view("item-newer", 3);
+        let older = view("item-older", 2);
+        service.publish_media_view(newer);
+        service.publish_media_view(older);
+
+        let snapshot = crate::ControlSnapshot {
+            session_id: "session-navigation".into(),
+            session_revision: 2,
+            state: "playing",
+            current_item: crate::ControlItemSnapshot {
+                item_id: "item-newer".into(),
+                item_revision: 3,
+                media_generation: 0,
+            },
+            position_ms: 0,
+            telemetry_sequence: 0,
+            active_display: crate::ControlDisplaySnapshot {
+                display_id: "display-a".into(),
+                generation: 0,
+            },
+            handoff: None,
+        };
+        let published = service
+            .media_for_snapshot(&snapshot)
+            .expect("latest projection remains available");
+        assert_eq!(published.item_id, "item-newer");
+        assert_eq!(published.item_revision, 3);
+        assert_eq!(published.title, "title-3");
     }
 }
