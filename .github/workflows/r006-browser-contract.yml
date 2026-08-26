@@ -59,6 +59,15 @@ jobs:
           PY
           )"
           log="$profile/stderr.log"
+          mkdir "$profile/tmp" "$profile/config" "$profile/cache"
+          env -i \
+            HOME="$profile" \
+            TMPDIR="$profile/tmp" \
+            XDG_CONFIG_HOME="$profile/config" \
+            XDG_CACHE_HOME="$profile/cache" \
+            LANG=C.UTF-8 \
+            LC_ALL=C.UTF-8 \
+            PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
           "$browser" \
             --headless=new \
             --disable-gpu \
