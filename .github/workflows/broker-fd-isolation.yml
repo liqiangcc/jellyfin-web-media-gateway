@@ -71,7 +71,7 @@ jobs:
         run: |
           cargo fmt --all -- --check
           cargo clippy --workspace --all-targets -- -D warnings
-          cargo test --workspace --all-targets
+          cargo test --workspace --all-targets -- --test-threads=1
           cargo test -p gateway-egress --all-targets
           cargo test -p generic-ytdlp --features runtime-prep --test runtime -- --nocapture
           cargo test -p generic-ytdlp --features runtime-prep --bin ytdlp-sandbox -- --nocapture
