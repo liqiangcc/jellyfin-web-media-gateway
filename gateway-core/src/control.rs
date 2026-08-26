@@ -222,6 +222,7 @@ impl ControlCommandRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ControlLookupError {
     NotFound,
+    AmbiguousDisplay,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -378,6 +379,29 @@ impl ControlService {
         let session = self.session(session_id)?;
         let record = session.lock().expect("control session poisoned");
         Ok(snapshot_from_playback(session_id, &record.playback))
+    }
+
+    /// Return the current Playback snapshot for the session whose active
+    /// display has the requested server-owned identity. This is a read-only
+    /// lookup used by Web Display reconnect; it does not select or mutate a
+    /// display authority.
+    pub(crate) fn snapshot_for_active_display(
+        &self,
+        display_id: &str,
+    ) -> Result<ControlSnapshot, ControlLookupError> {
+        let sessions = self.sessions.read().expect("control sessions poisoned");
+        let mut match_snapshot = None;
+        for (session_id, session) in sessions.iter() {
+            let record = session.lock().expect("control session poisoned");
+            let snapshot = snapshot_from_playback(session_id, &record.playback);
+            if snapshot.active_display.display_id == display_id {
+                if match_snapshot.is_some() {
+                    return Err(ControlLookupError::AmbiguousDisplay);
+                }
+                match_snapshot = Some(snapshot);
+            }
+        }
+        match_snapshot.ok_or(ControlLookupError::NotFound)
     }
 
     pub fn events_after(

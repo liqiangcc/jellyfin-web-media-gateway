@@ -87,6 +87,14 @@ pub struct DisplayHeartbeatResponse {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct LiveDisplayView {
+    pub display_id: String,
+    pub label: String,
+    pub capabilities: Vec<String>,
+    pub online: bool,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct DisplayContextResponse {
     pub registration_id: String,
     pub session_id: String,
@@ -208,6 +216,7 @@ impl From<&DisplaySessionError> for DisplaySessionErrorResponse {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DisplaySessionError {
     SessionNotFound,
+    AmbiguousDisplay,
     SessionNotAttached,
     InvalidIdentifier(&'static str),
     InvalidLabel,
@@ -225,6 +234,7 @@ impl DisplaySessionError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::SessionNotFound => "SESSION_NOT_FOUND",
+            Self::AmbiguousDisplay => "DISPLAY_SESSION_AMBIGUOUS",
             Self::SessionNotAttached => "SESSION_NOT_ATTACHED",
             Self::InvalidIdentifier(_) => "IDENTIFIER_INVALID",
             Self::InvalidLabel => "LABEL_INVALID",
@@ -242,6 +252,9 @@ impl DisplaySessionError {
     pub fn message(&self) -> &'static str {
         match self {
             Self::SessionNotFound => "playback session was not found",
+            Self::AmbiguousDisplay => {
+                "more than one playback session is authoritative for this display"
+            }
             Self::SessionNotAttached => "display is not attached to a playback session",
             Self::InvalidIdentifier(_) => "identifier is invalid",
             Self::InvalidLabel => "display label is invalid",
@@ -258,8 +271,11 @@ impl DisplaySessionError {
 }
 
 impl From<ControlLookupError> for DisplaySessionError {
-    fn from(_: ControlLookupError) -> Self {
-        Self::SessionNotFound
+    fn from(error: ControlLookupError) -> Self {
+        match error {
+            ControlLookupError::NotFound => Self::SessionNotFound,
+            ControlLookupError::AmbiguousDisplay => Self::AmbiguousDisplay,
+        }
     }
 }
 
@@ -305,6 +321,10 @@ impl fmt::Debug for DisplayRecord {
 struct Registry {
     records: HashMap<String, DisplayRecord>,
     registration_by_display: HashMap<String, String>,
+    /// G3 integration state: the server-owned session currently rendered by
+    /// a logical display. This is deliberately separate from Playback's
+    /// active_display/display_generation authority and from page lease state.
+    current_rendering_session_by_display: HashMap<String, String>,
 }
 
 #[derive(Clone)]
@@ -423,6 +443,9 @@ impl DisplaySessionService {
                     }
                     registry.records.remove(&existing_id);
                     registry.registration_by_display.remove(&input.display_id);
+                    registry
+                        .current_rendering_session_by_display
+                        .remove(&input.display_id);
                 }
                 let registration_id = new_token();
                 let record = DisplayRecord {
@@ -470,6 +493,44 @@ impl DisplaySessionService {
         lease_token: &str,
     ) -> Result<DisplayHeartbeatResponse, DisplaySessionError> {
         self.heartbeat_at(display_id, lease_token, Instant::now())
+    }
+
+    /// Return only bounded selector metadata for live Web Displays. Lease
+    /// tokens, page epochs and Playback generations are deliberately absent.
+    pub fn live_displays(&self) -> Vec<LiveDisplayView> {
+        let now = Instant::now();
+        let registry = self.inner.lock().expect("display registry poisoned");
+        let mut displays: Vec<_> = registry
+            .records
+            .values()
+            .filter(|record| record.expires_at > now)
+            .map(|record| LiveDisplayView {
+                display_id: record.display_id.clone(),
+                label: record.label.clone(),
+                capabilities: record.capabilities.clone(),
+                online: true,
+            })
+            .collect();
+        displays.sort_by(|left, right| left.display_id.cmp(&right.display_id));
+        displays
+    }
+
+    /// Record which published PlaybackSession the product currently renders
+    /// on this logical Display. This is G3 composition state only: it does
+    /// not alter Playback's active display or display generation and is never
+    /// supplied by the browser.
+    pub(crate) fn set_current_rendering_session(
+        &self,
+        display_id: &str,
+        session_id: &str,
+    ) -> Result<(), DisplaySessionError> {
+        validate_identifier(display_id, "display_id")?;
+        validate_identifier(session_id, "session_id")?;
+        let mut registry = self.inner.lock().expect("display registry poisoned");
+        registry
+            .current_rendering_session_by_display
+            .insert(display_id.to_owned(), session_id.to_owned());
+        Ok(())
     }
 
     fn heartbeat_at(
@@ -521,6 +582,35 @@ impl DisplaySessionService {
         session_id: Option<&str>,
     ) -> Result<DisplayContextResponse, DisplaySessionError> {
         self.context_at(control, display_id, lease_token, session_id, Instant::now())
+    }
+
+    /// Attach a live page to the session currently authoritative for its
+    /// display. The session and display facts still come from Playback; the
+    /// registry only records the page's server-side attachment for callbacks.
+    pub fn context_for_active_display(
+        &self,
+        control: &ControlService,
+        display_id: &str,
+        lease_token: &str,
+    ) -> Result<DisplayContextResponse, DisplaySessionError> {
+        validate_identifier(display_id, "display_id")?;
+        let current_session = self
+            .inner
+            .lock()
+            .expect("display registry poisoned")
+            .current_rendering_session_by_display
+            .get(display_id)
+            .cloned();
+        let session_id = match current_session {
+            Some(session_id) => session_id,
+            None => {
+                control
+                    .snapshot_for_active_display(display_id)
+                    .map_err(DisplaySessionError::from)?
+                    .session_id
+            }
+        };
+        self.context_for_session(control, display_id, lease_token, Some(&session_id))
     }
 
     fn context_at(

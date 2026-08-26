@@ -52,7 +52,8 @@ pub use control_view::{
 pub use display_session::{
     DisplayCallback, DisplayCallbackResponse, DisplayContextResponse, DisplayHeartbeatResponse,
     DisplayRegistration, DisplayRegistrationResponse, DisplaySessionError,
-    DisplaySessionErrorResponse, DisplaySessionService, WebDisplayErrorCode, WebDisplayObservation,
+    DisplaySessionErrorResponse, DisplaySessionService, LiveDisplayView, WebDisplayErrorCode,
+    WebDisplayObservation,
 };
 pub use security::{
     EgressPolicy, EgressPolicyError, EgressScope, HttpAuthorityError, HttpAuthorityPolicy,
@@ -246,6 +247,12 @@ pub struct SubtitleTrackView {
     pub label: Option<String>,
     pub format: &'static str,
     pub gateway_path: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DisplayRenderingResponse {
+    context: DisplayContextResponse,
+    media: SessionMediaView,
 }
 
 const MAX_PROBE_RECORDS: usize = 256;
@@ -695,6 +702,7 @@ impl GatewayService {
                 get(control_session_events_handler),
             )
             .route("/api/v1/displays/register", post(display_register_handler))
+            .route("/api/v1/displays", get(live_displays_handler))
             .route(
                 "/api/v1/displays/{display_id}/heartbeat",
                 post(display_heartbeat_handler),
@@ -702,6 +710,10 @@ impl GatewayService {
             .route(
                 "/api/v1/displays/{display_id}/context",
                 get(display_context_handler),
+            )
+            .route(
+                "/api/v1/displays/{display_id}/rendering",
+                get(display_rendering_handler),
             )
             .route(
                 "/api/v1/displays/{display_id}/callback",
@@ -829,6 +841,7 @@ async fn entry_handler() -> Response {
 #[derive(Clone, Debug, Deserialize)]
 struct DisplayPageQuery {
     profile: Option<String>,
+    prep: Option<String>,
 }
 
 async fn display_handler(
@@ -840,8 +853,11 @@ async fn display_handler(
         .read()
         .expect("proof paths poisoned")
         .clone();
-    if query.profile.as_deref() == Some("tv") {
+    if query.profile.as_deref() == Some("tv") && query.prep.as_deref() == Some("1") {
         return tv_display_page(paths.display_path, paths.subtitle_path);
+    }
+    if query.profile.as_deref() == Some("tv") {
+        return tv_display_page(None, None);
     }
     let path = paths.display_path.or(paths.mp4_path);
     probe_display_page(path)
@@ -903,7 +919,7 @@ const TV_DISPLAY_PAGE: &str = r##"<!doctype html>
 <body><main id="display-shell" class="viewport-immersive"><video id="player" playsinline preload="auto" __MEDIA_ATTRIBUTE__><track id="subtitle-track" kind="subtitles" default __SUBTITLE_ATTRIBUTE__></video><section id="overlay" aria-live="polite"><h1>TV Web Display</h1><p id="status">Waiting for a Gateway playback session.</p><p id="capabilities"></p><button id="activate" type="button">Press OK to play</button><button id="fullscreen" type="button">Try Fullscreen</button><button id="retry" type="button">Reconnect Display</button><details><summary>Display diagnostics</summary><pre id="diagnostics">starting…</pre></details></section></main>
 <script>(()=>{
   const player=document.querySelector('#player'), shell=document.querySelector('#display-shell'), overlay=document.querySelector('#overlay'), status=document.querySelector('#status'), diagnostics=document.querySelector('#diagnostics'), capabilities=document.querySelector('#capabilities'), track=document.querySelector('#subtitle-track');
-  const storageKey='gateway.tv.display.v1'; let registration=null, heartbeatTimer=null, reconnecting=false, mediaError=null;
+  const storageKey='gateway.tv.display.v1'; let registration=null, heartbeatTimer=null, renderingTimer=null, reconnecting=false, mediaError=null;
   const safeError=e=>({name:String(e?.name||'UnknownError').slice(0,96),message:String(e?.message||'').replace(/https?:\/\/[^\s]+/g,'[url-redacted]').replace(/(bearer|cookie|authorization)\s*[:=]?\s*[^\s]+/ig,'$1 [redacted]').slice(0,180)});
   const show=(message,kind='')=>{status.textContent=message;status.className=kind;diagnostics.textContent=`${new Date().toISOString()} ${message}\n`+diagnostics.textContent.slice(0,1800)};
   const readSaved=()=>{try{const value=JSON.parse(sessionStorage.getItem(storageKey)||'null');return value&&typeof value==='object'?value:null}catch(_){return null}};
@@ -911,8 +927,9 @@ const TV_DISPLAY_PAGE: &str = r##"<!doctype html>
   const displayId=()=>{const old=readSaved();if(old?.display_id&&/^[A-Za-z0-9._:-]{1,128}$/.test(old.display_id))return old.display_id;return `tv-display-${crypto.randomUUID?crypto.randomUUID().replaceAll('-','').slice(0,20):Math.random().toString(36).slice(2,18)}`};
   const sendCallback=async(errorCode)=>{if(!registration?.context)return;const c=registration.context;await fetch(`/api/v1/displays/${encodeURIComponent(registration.display_id)}/callback`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({lease_token:registration.lease_token,session_id:c.session_id,item_id:c.item_id,item_revision:c.item_revision,session_revision:c.session_revision,display_id:registration.display_id,display_generation:c.display_generation,observation:null,error_code:errorCode})}).catch(()=>{});};
   const renderContext=()=>{if(registration?.context){show(`Session ready: ${registration.context.state}.`,'ok')}else show('Waiting for a Gateway playback session.','warn')};
-  const heartbeat=()=>{if(heartbeatTimer)clearInterval(heartbeatTimer);if(!registration)return;const delay=Math.max(1000,Math.floor(registration.lease_ttl_ms/3));heartbeatTimer=setInterval(async()=>{try{const response=await fetch(`/api/v1/displays/${encodeURIComponent(registration.display_id)}/heartbeat`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({lease_token:registration.lease_token})});if(!response.ok)throw new Error(`heartbeat ${response.status}`);show(registration.context?'Display connected; session context retained.':'Display connected; waiting for a session.','ok')}catch(error){show(`Display heartbeat retrying (${safeError(error).name}).`,'warn')}},delay)};
-  const register=async()=>{const old=readSaved();const body={display_id:displayId(),label:'TV Web Display',capabilities:['video','audio','subtitles'],previous_registration_id:old?.registration_id||null,previous_lease_token:old?.lease_token||null};try{const response=await fetch('/api/v1/displays/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});if(!response.ok){if(old){sessionStorage.removeItem(storageKey);return register()}throw new Error(`register ${response.status}`)}registration=await response.json();save();capabilities.textContent='Gateway registration active; subtitles: '+(registration.context?'ready':'advertised');renderContext();heartbeat();return true}catch(error){registration=null;show(`Display reconnect waiting (${safeError(error).name}).`,'warn');return false}};
+  const fetchRendering=async()=>{if(!registration)return;try{const response=await fetch(`/api/v1/displays/${encodeURIComponent(registration.display_id)}/rendering`,{headers:{'x-display-lease':registration.lease_token},cache:'no-store'});if(response.status===404){registration.context=null;renderContext();return}if(!response.ok)throw new Error(`rendering ${response.status}`);const rendering=await response.json();registration.context=rendering.context;const stream=rendering.media?.streams?.find(item=>item.protocol==='http_file')||rendering.media?.streams?.[0];if(stream?.gateway_path&&player.src!==new URL(stream.gateway_path,location.href).href){player.src=stream.gateway_path;player.load()}capabilities.textContent=`Gateway media ready: ${rendering.media.title||'current item'}`;renderContext()}catch(error){show(`Display rendering reconnecting (${safeError(error).name}).`,'warn')}};
+  const heartbeat=()=>{if(heartbeatTimer)clearInterval(heartbeatTimer);if(!registration)return;const delay=Math.max(1000,Math.floor(registration.lease_ttl_ms/3));heartbeatTimer=setInterval(async()=>{try{const response=await fetch(`/api/v1/displays/${encodeURIComponent(registration.display_id)}/heartbeat`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({lease_token:registration.lease_token})});if(!response.ok)throw new Error(`heartbeat ${response.status}`);await fetchRendering();show(registration.context?'Display connected; session context retained.':'Display connected; waiting for a session.','ok')}catch(error){show(`Display heartbeat retrying (${safeError(error).name}).`,'warn')}},delay)};
+  const register=async()=>{const old=readSaved();const body={display_id:displayId(),label:'TV Web Display',capabilities:['video','audio','subtitles'],previous_registration_id:old?.registration_id||null,previous_lease_token:old?.lease_token||null};try{const response=await fetch('/api/v1/displays/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});if(!response.ok){if(old){sessionStorage.removeItem(storageKey);return register()}throw new Error(`register ${response.status}`)}registration=await response.json();save();capabilities.textContent='Gateway registration active; subtitles: '+(registration.context?'ready':'advertised');renderContext();await fetchRendering();heartbeat();if(renderingTimer)clearInterval(renderingTimer);renderingTimer=setInterval(fetchRendering,1000);return true}catch(error){registration=null;show(`Display reconnect waiting (${safeError(error).name}).`,'warn');return false}};
   const play=async()=>{if(!player.getAttribute('src')){show('No Gateway media is attached yet; waiting for a session.','warn');return}overlay.classList.remove('playing');try{await player.play();show('Playback started.','ok');await sendCallback(null);overlay.classList.add('playing')}catch(error){mediaError=safeError(error);show(`Playback could not start (${mediaError.name}); use OK after interaction.`,'warn');await sendCallback('command_rejected')}};
   document.querySelector('#activate').addEventListener('click',play);
   document.querySelector('#retry').addEventListener('click',()=>{if(!reconnecting){reconnecting=true;register().finally(()=>{reconnecting=false})}});
@@ -925,8 +942,8 @@ const TV_DISPLAY_PAGE: &str = r##"<!doctype html>
   show(`${secure}. ${wake}; ${sw}.`); register();
   if(track.track) track.track.mode='hidden';
   if(track.getAttribute('src')==='')track.remove();
-  window.__displayPrep={getRegistration:()=>registration,getStatus:()=>status.textContent,play,reconnect:register};
-  window.addEventListener('pagehide',()=>{if(heartbeatTimer)clearInterval(heartbeatTimer)});
+  window.__displayPrep={getRegistration:()=>registration,getStatus:()=>status.textContent,play,reconnect:register,getRendering:()=>registration?.context||null};
+  window.addEventListener('pagehide',()=>{if(heartbeatTimer)clearInterval(heartbeatTimer);if(renderingTimer)clearInterval(renderingTimer)});
 })();</script></body></html>"##;
 
 fn escape_html_attribute(value: &str) -> String {
@@ -1117,6 +1134,7 @@ input{max-width:9rem;padding:.65rem;border:1px solid #66748b;border-radius:.4rem
 </style></head>
 <body><main>
 <h1>Control</h1><p id="connection" class="status" role="status">Starting…</p>
+<section id="source-entry" aria-labelledby="source-heading"><h2 id="source-heading">Start playback</h2><p>Choose a live Web Display and submit a bounded direct media URL.</p><form id="source-form"><label for="display-selector">Display</label><select id="display-selector" required><option value="">Loading live displays…</option></select><label for="source-input">Media source</label><input id="source-input" name="source" type="url" required maxlength="4096" placeholder="https://media.example/video.mp4"><button id="create-session" type="submit">Create playback session</button></form><p id="source-status" class="status" role="status"></p></section>
 <section aria-labelledby="now-playing-heading"><h2 id="now-playing-heading">Now Playing</h2><dl>
 <dt>Item</dt><dd id="item">Not available</dd><dt>State</dt><dd id="playback-state">Not available</dd><dt>Position</dt><dd id="position">Not available</dd>
 </dl><div class="controls" aria-label="Playback controls">
@@ -1143,7 +1161,7 @@ input{max-width:9rem;padding:.65rem;border:1px solid #66748b;border-radius:.4rem
     REVISION_CONFLICT: 'This control view was stale. It was refreshed from Gateway.',
     REQUEST_ID_MISMATCH: 'The command identity was already used differently. The view was refreshed.',
     SESSION_NOT_FOUND: 'This playback session no longer exists.', DISPLAY_OFFLINE: 'The active display is unavailable; playback state remains authoritative.',
-    SERVER_UNAVAILABLE: 'The active display reported an unavailable service.', COMMAND_REJECTED: 'Gateway rejected the command; the view was refreshed.'
+    SERVER_UNAVAILABLE: 'The active display reported an unavailable service.', DISPLAY_NOT_FOUND: 'That Display is no longer live; choose another.', DISPLAY_OFFLINE: 'The selected Display is offline; playback state was not created.', SOURCE_NOT_RECOGNIZED: 'The source was not recognized as supported media.', SOURCE_UNSUPPORTED: 'The registered adapter could not prepare that source.', COMMAND_REJECTED: 'Gateway rejected the command; the view was refreshed.'
   })[code] || 'Gateway rejected the request; the view was refreshed.';
   const render = view => {
     currentView = view;
@@ -1157,6 +1175,35 @@ input{max-width:9rem;padding:.65rem;border:1px solid #66748b;border-radius:.4rem
   };
   const clearView = () => { currentView = null; ['#item','#playback-state','#position','#display-id','#display-status','#display-observation','#display-error','#site','#account-state','#panel-status','#action-required'].forEach(id => text(id, 'Unavailable')); ['#play','#pause','#seek','#stop'].forEach(id => { $(id).disabled = true; }); };
   const readJson = async response => { try { return await response.json(); } catch (_) { return {}; } };
+  const listDisplays = async () => {
+    const selector = $('#display-selector');
+    if (!selector) return;
+    try {
+      const response = await fetch('/api/v1/displays', {cache:'no-store'});
+      const displays = await readJson(response);
+      if (!response.ok || !Array.isArray(displays)) throw new Error('display list unavailable');
+      selector.replaceChildren();
+      for (const display of displays.filter(item => item && item.online && typeof item.display_id === 'string')) {
+        const option = document.createElement('option'); option.value = display.display_id; option.textContent = `${display.label || 'Web Display'} (${display.display_id})`; selector.append(option);
+      }
+      if (!selector.options.length) { const option = document.createElement('option'); option.value = ''; option.textContent = 'No live Web Displays'; selector.append(option); }
+      $('#create-session').disabled = !selector.value;
+    } catch (_) { selector.replaceChildren(new Option('Display discovery unavailable', '')); $('#create-session').disabled = true; }
+  };
+  const createSession = async event => {
+    event.preventDefault();
+    const source = $('#source-input').value.trim(); const display_id = $('#display-selector').value;
+    if (!source || !display_id) { setFeedback('Choose a live Display and enter a media source.', true); return; }
+    const request_id = `session-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+    $('#create-session').disabled = true; $('#source-status').textContent = 'Preparing source through Gateway…';
+    try {
+      const response = await fetch('/api/v1/sessions', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({request_id, source, display_id})});
+      const payload = await readJson(response);
+      if (!response.ok) { const code = boundedCode(payload); $('#source-status').textContent = recoveryMessage(code); $('#source-status').classList.add('error'); await listDisplays(); return; }
+      window.location.assign(`/control?session_id=${encodeURIComponent(payload.session_id)}`);
+    } catch (_) { $('#source-status').textContent = 'Gateway unavailable; no session was created.'; $('#source-status').classList.add('error'); }
+    finally { if (document.body.contains($('#create-session'))) $('#create-session').disabled = false; }
+  };
   const refresh = async (message = '') => {
     if (!viewEndpoint) { clearView(); setConnection('Add a bounded session_id query parameter to open a session.', true); return false; }
     const sequence = ++refreshSequence;
@@ -1180,7 +1227,8 @@ input{max-width:9rem;padding:.65rem;border:1px solid #66748b;border-radius:.4rem
   };
   document.querySelectorAll('[data-command]').forEach(button => button.addEventListener('click', () => command(button.dataset.command)));
   $('#seek').addEventListener('click', () => command('seek', {position_ms:Math.max(0, Number($('#seek-position').value) || 0)}));
-  window.__controlUi = {refresh, pollEvents, getView:() => currentView}; refresh(); window.setInterval(pollEvents, 1000);
+  $('#source-form')?.addEventListener('submit', createSession); $('#display-selector')?.addEventListener('change', () => { $('#create-session').disabled = !$('#display-selector').value; });
+  window.__controlUi = {refresh, pollEvents, getView:() => currentView, listDisplays}; refresh(); if (!sessionId) listDisplays(); window.setInterval(pollEvents, 1000);
 })();
 </script></body></html>"##;
 
@@ -1233,6 +1281,15 @@ async fn control_view_handler(
                 transition_id: None,
             },
         ),
+        Err(ControlLookupError::AmbiguousDisplay) => control_error_response(
+            StatusCode::CONFLICT,
+            ControlErrorResponse {
+                code: "DISPLAY_SESSION_AMBIGUOUS",
+                message: "more than one playback session is authoritative for this display",
+                current_revision: None,
+                transition_id: None,
+            },
+        ),
     }
 }
 
@@ -1273,6 +1330,15 @@ async fn control_session_snapshot_handler(
             ControlErrorResponse {
                 code: "SESSION_NOT_FOUND",
                 message: "session was not found",
+                current_revision: None,
+                transition_id: None,
+            },
+        ),
+        Err(ControlLookupError::AmbiguousDisplay) => control_error_response(
+            StatusCode::CONFLICT,
+            ControlErrorResponse {
+                code: "DISPLAY_SESSION_AMBIGUOUS",
+                message: "more than one playback session is authoritative for this display",
                 current_revision: None,
                 transition_id: None,
             },
@@ -1321,6 +1387,15 @@ async fn control_session_events_handler(
             ControlErrorResponse {
                 code: "SESSION_NOT_FOUND",
                 message: "session was not found",
+                current_revision: None,
+                transition_id: None,
+            },
+        ),
+        Err(ControlLookupError::AmbiguousDisplay) => control_error_response(
+            StatusCode::CONFLICT,
+            ControlErrorResponse {
+                code: "DISPLAY_SESSION_AMBIGUOUS",
+                message: "more than one playback session is authoritative for this display",
                 current_revision: None,
                 transition_id: None,
             },
@@ -1382,6 +1457,12 @@ async fn display_register_handler(
     }
 }
 
+async fn live_displays_handler(
+    State(state): State<Arc<GatewayState>>,
+) -> Json<Vec<LiveDisplayView>> {
+    Json(state.display_sessions.live_displays())
+}
+
 async fn display_heartbeat_handler(
     State(state): State<Arc<GatewayState>>,
     Path(display_id): Path<String>,
@@ -1423,6 +1504,48 @@ async fn display_context_handler(
     }
 }
 
+async fn display_rendering_handler(
+    State(state): State<Arc<GatewayState>>,
+    Path(display_id): Path<String>,
+    Query(query): Query<DisplayContextQuery>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(lease_token) = headers
+        .get(DISPLAY_LEASE_HEADER)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return display_session_error_response(DisplaySessionError::LeaseInvalid);
+    };
+
+    let context = match query.session_id.as_deref() {
+        Some(session_id) => state.display_sessions.context_for_session(
+            &state.control,
+            &display_id,
+            lease_token,
+            Some(session_id),
+        ),
+        None => state.display_sessions.context_for_active_display(
+            &state.control,
+            &display_id,
+            lease_token,
+        ),
+    };
+    let context = match context {
+        Ok(context) => context,
+        Err(error) => return display_session_error_response(error),
+    };
+    if !context.is_current_display {
+        return display_session_error_response(DisplaySessionError::StaleContext);
+    }
+    let Ok(snapshot) = state.control.snapshot(&context.session_id) else {
+        return display_session_error_response(DisplaySessionError::SessionNotFound);
+    };
+    let Some(media) = state.source_sessions.media_for_snapshot(&snapshot) else {
+        return display_session_error_response(DisplaySessionError::SessionNotFound);
+    };
+    Json(DisplayRenderingResponse { context, media }).into_response()
+}
+
 async fn display_callback_handler(
     State(state): State<Arc<GatewayState>>,
     Path(display_id): Path<String>,
@@ -1460,9 +1583,9 @@ fn display_session_error_response(error: DisplaySessionError) -> Response {
         DisplaySessionError::LeaseInvalid | DisplaySessionError::LeaseExpired => {
             StatusCode::UNAUTHORIZED
         }
-        DisplaySessionError::AlreadyRegistered | DisplaySessionError::StaleContext => {
-            StatusCode::CONFLICT
-        }
+        DisplaySessionError::AlreadyRegistered
+        | DisplaySessionError::AmbiguousDisplay
+        | DisplaySessionError::StaleContext => StatusCode::CONFLICT,
         DisplaySessionError::StaleTelemetry => StatusCode::CONFLICT,
         DisplaySessionError::InvalidIdentifier(_)
         | DisplaySessionError::InvalidLabel

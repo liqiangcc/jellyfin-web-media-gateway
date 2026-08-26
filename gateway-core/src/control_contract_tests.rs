@@ -3,6 +3,7 @@ use crate::{
 };
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
+use generic_direct::GenericDirectAdapter;
 use serde_json::{Value, json};
 use std::path::Path;
 use std::sync::Arc;
@@ -15,6 +16,16 @@ const ORIGIN: &str = "http://127.0.0.1:8787";
 
 fn service() -> GatewayService {
     let service = GatewayService::new(8);
+    service
+        .configure_http_authority(Url::parse(ORIGIN).unwrap())
+        .unwrap();
+    service
+}
+
+fn generic_service() -> GatewayService {
+    let mut registry = site_adapter_api::SiteAdapterRegistry::default();
+    registry.register(Arc::new(GenericDirectAdapter)).unwrap();
+    let service = GatewayService::with_registry(8, Arc::new(registry));
     service
         .configure_http_authority(Url::parse(ORIGIN).unwrap())
         .unwrap();
@@ -161,6 +172,173 @@ async fn control_view_endpoint_projects_display_facts_and_has_bounded_selector()
         .unwrap();
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     assert_eq!(json_body(missing).await["code"], "SESSION_NOT_FOUND");
+}
+
+#[tokio::test]
+async fn hosted_product_composes_live_display_source_session_and_rendering_view() {
+    let service = generic_service();
+    let registered = json_body(
+        service
+            .router()
+            .oneshot(json_post(
+                "/api/v1/displays/register",
+                json!({
+                    "display_id": "tv-e2e",
+                    "label": "Hosted TV",
+                    "capabilities": ["video", "audio", "subtitles"]
+                }),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let lease = registered["lease_token"].as_str().unwrap();
+
+    let displays = service
+        .router()
+        .oneshot(get("/api/v1/displays"))
+        .await
+        .unwrap();
+    assert_eq!(displays.status(), StatusCode::OK);
+    let displays = json_body(displays).await;
+    assert_eq!(displays[0]["display_id"], "tv-e2e");
+    assert!(displays[0].get("lease_token").is_none());
+
+    let created = json_body(
+        service
+            .router()
+            .oneshot(json_post(
+                "/api/v1/sessions",
+                json!({
+                    "request_id": "hosted-create-1",
+                    "source": "https://example.test/video.mp4",
+                    "display_id": "tv-e2e"
+                }),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert!(created["session_id"].as_str().unwrap().starts_with("s-"));
+    let session_id = created["session_id"].as_str().unwrap();
+    let media_path = created["media"]["streams"][0]["gateway_path"]
+        .as_str()
+        .unwrap();
+    assert!(media_path.starts_with("/stream/"));
+
+    let rendering = Request::builder()
+        .uri("/api/v1/displays/tv-e2e/rendering")
+        .header(header::HOST, HOST)
+        .header("x-display-lease", lease)
+        .body(Body::empty())
+        .unwrap();
+    let rendering = service.router().oneshot(rendering).await.unwrap();
+    assert_eq!(rendering.status(), StatusCode::OK);
+    let rendering = json_body(rendering).await;
+    assert_eq!(rendering["context"]["session_id"], session_id);
+    assert_eq!(rendering["context"]["item_revision"], 1);
+    assert_eq!(rendering["media"]["session_id"], session_id);
+    assert_eq!(rendering["media"]["streams"][0]["gateway_path"], media_path);
+    let browser_view = rendering.to_string();
+    assert!(!browser_view.contains("example.test/video.mp4"));
+    assert!(!browser_view.contains("resolved_media"));
+
+    let stop = service
+        .router()
+        .oneshot(json_post(
+            &format!("/api/v1/sessions/{session_id}/commands"),
+            json!({
+                "request_id": "hosted-stop-a",
+                "expected_session_revision": 0,
+                "command": {"type": "stop"}
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(stop.status(), StatusCode::OK);
+
+    let created_b = json_body(
+        service
+            .router()
+            .oneshot(json_post(
+                "/api/v1/sessions",
+                json!({
+                    "request_id": "hosted-create-2",
+                    "source": "https://example.test/another-video.mp4",
+                    "display_id": "tv-e2e"
+                }),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let session_b = created_b["session_id"].as_str().unwrap();
+    assert_ne!(session_b, session_id);
+    assert_eq!(service.control().session_count(), 2);
+
+    let rendering_b = Request::builder()
+        .uri("/api/v1/displays/tv-e2e/rendering")
+        .header(header::HOST, HOST)
+        .header("x-display-lease", lease)
+        .body(Body::empty())
+        .unwrap();
+    let rendering_b = service.router().oneshot(rendering_b).await.unwrap();
+    assert_eq!(rendering_b.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(rendering_b).await["context"]["session_id"],
+        session_b
+    );
+
+    let stale = Request::builder()
+        .uri(format!(
+            "/api/v1/displays/tv-e2e/rendering?session_id={session_id}"
+        ))
+        .header(header::HOST, HOST)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        service.router().oneshot(stale).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[tokio::test]
+async fn ambiguous_display_reconnect_returns_bounded_conflict() {
+    let service = service();
+    let registered = json_body(
+        service
+            .router()
+            .oneshot(json_post(
+                "/api/v1/displays/register",
+                json!({
+                    "display_id": "ambiguous-display",
+                    "label": "Legacy browser",
+                    "capabilities": ["video", "audio"]
+                }),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let control = service.control();
+    control.seed_test_session("item-a", "media-a", "ambiguous-display");
+    control.seed_test_session("item-b", "media-b", "ambiguous-display");
+
+    let rendering = Request::builder()
+        .uri("/api/v1/displays/ambiguous-display/rendering")
+        .header(header::HOST, HOST)
+        .header(
+            "x-display-lease",
+            registered["lease_token"].as_str().unwrap(),
+        )
+        .body(Body::empty())
+        .unwrap();
+    let rendering = service.router().oneshot(rendering).await.unwrap();
+    assert_eq!(rendering.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        json_body(rendering).await["code"],
+        "DISPLAY_SESSION_AMBIGUOUS"
+    );
 }
 
 #[tokio::test]
