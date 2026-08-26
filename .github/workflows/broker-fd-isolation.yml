@@ -55,6 +55,17 @@ jobs:
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           test "$(uname -m)" = x86_64
           rustc -vV 2>/dev/null | grep -q 'host: x86_64-unknown-linux-gnu'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Prepare exact frozen runtime for integration tests
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          export XDG_CACHE_HOME="$RUNNER_TEMP/generic-ytdlp-cache"
+          cache_info="$(python scripts/generic-ytdlp-runtime-cache.py prepare)"
+          mapfile -t cache_lines <<<"$cache_info"
+          test "${cache_lines[0]}" = prepared
+          printf 'YTDLP_SOURCE=%s\n' "${cache_lines[1]}" >> "$GITHUB_ENV"
       - name: Run required full and focused regressions
         shell: bash --noprofile --norc -euo pipefail {0}
         run: |
@@ -87,6 +98,17 @@ jobs:
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           test "$(uname -m)" = aarch64
           rustc -vV 2>/dev/null | grep -q 'host: aarch64-unknown-linux-gnu'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Prepare exact frozen runtime for native tests
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          export XDG_CACHE_HOME="$RUNNER_TEMP/generic-ytdlp-cache"
+          cache_info="$(python scripts/generic-ytdlp-runtime-cache.py prepare)"
+          mapfile -t cache_lines <<<"$cache_info"
+          test "${cache_lines[0]}" = prepared
+          printf 'YTDLP_SOURCE=%s\n' "${cache_lines[1]}" >> "$GITHUB_ENV"
       - name: Run native ARM64 runtime and security matrix
         shell: bash --noprofile --norc -euo pipefail {0}
         run: |
@@ -117,9 +139,6 @@ jobs:
         shell: bash --noprofile --norc -euo pipefail {0}
         run: |
           cargo test -p generic-ytdlp --features runtime-prep --lib fd_isolation_tests -- --nocapture
-          cargo test -p generic-ytdlp --features runtime-prep --test runtime non_cloexec_ambient_fd_is_not_admitted_beyond_broker_fd -- --nocapture
-          cargo test -p generic-ytdlp --features runtime-prep --test runtime inherited_ipc_capability_supports_multiple_broker_requests -- --nocapture
-          cargo test -p generic-ytdlp --features runtime-prep --test runtime seccomp_denies_worker_custom_handler_and_child_but_ipc_survives -- --nocapture
           ! rg -n 'YTDLP_(FORCE|BYPASS)|FORCE_.*(FALLBACK|CLOSE_RANGE)|SKIP_.*FD|DISABLE_.*(SANDBOX|SECCOMP)' plugins/generic-ytdlp gateway-egress
           ! rg -n 'bilibili\.com|Bilibili' .github/workflows/broker-fd-isolation.yml
 
