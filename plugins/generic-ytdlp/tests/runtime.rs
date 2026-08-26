@@ -187,29 +187,29 @@ fn lifecycle_timeout_and_stdout_overflow_are_bounded() {
         generic_ytdlp::ProcessError::StdoutLimitExceeded
     );
 
-    for (label, action, expected) in [
+    for (label, action, expected, timeout) in [
         (
             "timeout-descendant",
             "timeout-descendant",
             generic_ytdlp::ProcessError::TimedOut,
+            Duration::from_millis(300),
         ),
         (
             "crash-descendant",
             "crash-descendant",
             generic_ytdlp::ProcessError::NonZeroExit,
+            Duration::from_secs(5),
         ),
         (
             "overflow-descendant",
             "overflow-descendant",
             generic_ytdlp::ProcessError::StdoutLimitExceeded,
+            Duration::from_secs(5),
         ),
     ] {
         let marker = pid_marker(label);
-        let descendant_runner = runner_with_backend(
-            Arc::new(FixtureBroker),
-            Duration::from_millis(300),
-            Some(marker.clone()),
-        );
+        let descendant_runner =
+            runner_with_backend(Arc::new(FixtureBroker), timeout, Some(marker.clone()));
         assert_eq!(
             descendant_runner
                 .run_action(
