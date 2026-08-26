@@ -56,8 +56,9 @@ pub use display_session::{
     WebDisplayObservation,
 };
 pub use security::{
-    EgressPolicy, EgressPolicyError, EgressScope, HttpAuthorityError, HttpAuthorityPolicy,
-    SiteAccessCapability, SiteAccessError, ValidatedTarget,
+    EgressDnsResolver, EgressPolicy, EgressPolicyError, EgressResolutionFuture, EgressScope,
+    HttpAuthorityError, HttpAuthorityPolicy, SiteAccessCapability, SiteAccessError,
+    ValidatedTarget,
 };
 pub use source_session::{
     CreateSessionErrorResponse, CreateSessionRequest, CreateSessionResponse, SessionMediaStream,

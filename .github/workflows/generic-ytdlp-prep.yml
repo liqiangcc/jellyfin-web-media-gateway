@@ -11,6 +11,7 @@ on:
       - "site-adapter-api/**"
       - "plugins/generic-direct/**"
       - "plugins/generic-ytdlp/**"
+      - "gateway-egress/**"
       - "gateway-core/**"
       - "display-adapter-api/**"
       - "scripts/check-core-site-boundary.sh"
@@ -32,10 +33,11 @@ concurrency:
 
 env:
   CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+  PYTHON: python
 
 jobs:
   j1-conformance:
-    name: J1 fake process parser conformance and priority
+    name: J1 pinned worker broker flow parser and priority
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -53,16 +55,26 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt,clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install and verify frozen yt-dlp source
+        run: |
+          python -m pip install --disable-pip-version-check --no-deps \
+            "yt-dlp @ git+https://github.com/yt-dlp/yt-dlp.git@3a08beaf031ab68f966401ead017ac81fe8486cf"
+          python -c 'import yt_dlp; assert yt_dlp.version.__version__ == "2026.08.19"'
       - name: Run conformance, parser and direct-priority tests
         run: |
           cargo fmt --all -- --check
           cargo clippy -p generic-ytdlp --all-targets -- -D warnings
+          cargo test -p gateway-egress --all-targets -- --nocapture
           cargo test -p site-adapter-api --all-targets -- --nocapture
           cargo test -p generic-direct --all-targets -- --nocapture
           cargo test -p generic-ytdlp --all-targets -- --nocapture
+          cargo test -p generic-ytdlp --features runtime-prep --test runtime -- --nocapture
 
   j2-boundaries:
-    name: J2 argv limits secret negatives and disabled runtime
+    name: J2 sandbox and escape matrix
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -79,13 +91,26 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install and verify frozen yt-dlp source
+        run: |
+          python -m pip install --disable-pip-version-check --no-deps \
+            "yt-dlp @ git+https://github.com/yt-dlp/yt-dlp.git@3a08beaf031ab68f966401ead017ac81fe8486cf"
+          python -c 'import yt_dlp; assert yt_dlp.version.__version__ == "2026.08.19"'
       - name: Run bounded process and parser negatives
-        run: cargo test -p generic-ytdlp --all-targets -- --nocapture
+        run: |
+          cargo test -p generic-ytdlp --all-targets -- --nocapture
+          cargo test -p generic-ytdlp --features runtime-prep --test runtime -- --nocapture
       - name: Verify no Core yt-dlp/process fallback and no network client
         shell: bash --noprofile --norc -euo pipefail {0}
         run: |
           ! grep -RInE 'yt-dlp|ytdlp|std::process|Command::new|reqwest|TcpStream' gateway-core/src
-          ! grep -RInE 'curl|reqwest|ureq|TcpStream|connect\(' plugins/generic-ytdlp/tests plugins/generic-ytdlp/src
+          ! grep -RInE 'curl_cffi|websockets|ftp://|file://' plugins/generic-ytdlp/worker
+          ! grep -RInE 'gateway-core|reqwest|EgressPolicy|R008Broker' plugins/generic-ytdlp/src plugins/generic-ytdlp/Cargo.toml
+          grep -q 'R008Broker' gateway-egress/src/lib.rs
+          grep -q 'SYS_socketpair' plugins/generic-ytdlp/src/bin/ytdlp-sandbox.rs
           grep -q 'DisabledRunner' plugins/generic-ytdlp/src/lib.rs
           bash scripts/check-core-site-boundary.sh
           bash scripts/check-core-site-boundary.sh --self-test
@@ -109,6 +134,14 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt,clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install and verify frozen yt-dlp source
+        run: |
+          python -m pip install --disable-pip-version-check --no-deps \
+            "yt-dlp @ git+https://github.com/yt-dlp/yt-dlp.git@3a08beaf031ab68f966401ead017ac81fe8486cf"
+          python -c 'import yt_dlp; assert yt_dlp.version.__version__ == "2026.08.19"'
       - name: Run exact-Candidate workspace and affected regressions
         run: |
           cargo fmt --all -- --check
@@ -116,3 +149,43 @@ jobs:
           cargo test --workspace --all-targets
           cargo test -p gateway-core --test security_baseline -- --nocapture
           cargo test -p gateway-core --test media_gateway -- --nocapture
+          cargo test -p gateway-egress --all-targets -- --nocapture
+          cargo test -p generic-ytdlp --features runtime-prep --test runtime r008_broker_rejects_secret_userinfo_and_private_targets_before_network -- --nocapture
+
+  j4-lifecycle-regressions:
+    name: J4 lifecycle descendants and production-disabled regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install and verify frozen yt-dlp source
+        run: |
+          python -m pip install --disable-pip-version-check --no-deps \
+            "yt-dlp @ git+https://github.com/yt-dlp/yt-dlp.git@3a08beaf031ab68f966401ead017ac81fe8486cf"
+          python -c 'import yt_dlp; assert yt_dlp.version.__version__ == "2026.08.19"'
+      - name: Run lifecycle, parser and DisabledRunner proof
+        run: |
+          cargo fmt --all -- --check
+          cargo test -p generic-ytdlp --all-targets -- --nocapture
+          cargo test -p site-adapter-api --all-targets -- --nocapture
+          cargo test -p generic-ytdlp --features runtime-prep --test runtime -- --nocapture
+          python -m py_compile plugins/generic-ytdlp/worker/worker.py
+          grep -q 'Arc::new(DisabledRunner)' plugins/generic-ytdlp/src/lib.rs
+          bash scripts/check-core-site-boundary.sh
+          bash scripts/check-core-site-boundary.sh --self-test
