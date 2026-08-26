@@ -69,7 +69,7 @@ impl std::error::Error for BrowserError {}
 pub struct BrowserSessionId(String);
 
 impl BrowserSessionId {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self(Uuid::new_v4().simple().to_string())
     }
 }
@@ -119,6 +119,13 @@ pub struct BrowserSession {
 }
 
 impl BrowserSession {
+    pub(crate) fn new_for_runtime(mode: BrowserAuthMode) -> Self {
+        Self {
+            id: BrowserSessionId::new(),
+            mode,
+        }
+    }
+
     pub fn id(&self) -> &BrowserSessionId {
         &self.id
     }
@@ -201,17 +208,19 @@ impl R008NavigationPolicy {
     }
 
     fn authorize<'a>(&'a self, request: &'a BrowserNavigationRequest) -> BrowserFuture<'a, ()> {
-        Box::pin(async move {
-            let policy = self
-                .egress
-                .read()
-                .map_err(|_| BrowserError::WorkerUnavailable)?
-                .clone();
-            policy
-                .validate(request.url(), &self.scope)
-                .await
-                .map_err(|_| BrowserError::NavigationDenied)
-        })
+        Box::pin(async move { self.authorize_url(request.url()).await })
+    }
+
+    pub(crate) async fn authorize_url(&self, url: &Url) -> Result<(), BrowserError> {
+        let policy = self
+            .egress
+            .read()
+            .map_err(|_| BrowserError::WorkerUnavailable)?
+            .clone();
+        policy
+            .validate(url, &self.scope)
+            .await
+            .map_err(|_| BrowserError::NavigationDenied)
     }
 }
 
@@ -302,7 +311,7 @@ impl fmt::Debug for BrowserCommand {
 }
 
 impl BrowserInput {
-    fn kind(&self) -> InputKind {
+    pub(crate) fn kind(&self) -> InputKind {
         match self {
             Self::Key { .. } => InputKind::Key,
             Self::Pointer { .. } => InputKind::Pointer,
@@ -437,7 +446,7 @@ impl PanelPermissions {
 pub struct PanelSessionId(String);
 
 impl PanelSessionId {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self(Uuid::new_v4().simple().to_string())
     }
 }
@@ -487,6 +496,39 @@ impl NativePanelSession {
 
     pub fn permissions(&self) -> PanelPermissions {
         self.permissions
+    }
+
+    pub(crate) fn id(&self) -> &PanelSessionId {
+        &self.id
+    }
+
+    pub(crate) fn token(&self) -> &PanelControlToken {
+        &self.token
+    }
+
+    pub(crate) fn expires_at(&self) -> Instant {
+        self.expires_at
+    }
+
+    pub(crate) fn new_for_worker(worker_session: BrowserSessionId, ttl: Duration) -> Self {
+        Self {
+            id: PanelSessionId::new(),
+            worker_session,
+            token: PanelControlToken(Uuid::new_v4().simple().to_string()),
+            expires_at: Instant::now() + ttl,
+            permissions: PanelPermissions,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_wrong_token(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            worker_session: self.worker_session.clone(),
+            token: PanelControlToken(Uuid::new_v4().simple().to_string()),
+            expires_at: self.expires_at,
+            permissions: self.permissions,
+        }
     }
 }
 
