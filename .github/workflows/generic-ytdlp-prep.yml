@@ -11,6 +11,7 @@ on:
       - "site-adapter-api/**"
       - "plugins/generic-direct/**"
       - "plugins/generic-ytdlp/**"
+      - "scripts/generic-ytdlp-real-smoke.sh"
       - "gateway-egress/**"
       - "gateway-core/**"
       - "display-adapter-api/**"
@@ -71,7 +72,9 @@ jobs:
           cargo test -p site-adapter-api --all-targets -- --nocapture
           cargo test -p generic-direct --all-targets -- --nocapture
           cargo test -p generic-ytdlp --all-targets -- --nocapture
+          cargo test -p generic-ytdlp --features runtime-prep --test smoke -- --nocapture
           cargo test -p generic-ytdlp --features runtime-prep --test runtime -- --nocapture
+          bash -n scripts/generic-ytdlp-real-smoke.sh
 
   j2-boundaries:
     name: J2 sandbox and escape matrix
@@ -102,14 +105,16 @@ jobs:
       - name: Run bounded process and parser negatives
         run: |
           cargo test -p generic-ytdlp --all-targets -- --nocapture
+          cargo test -p generic-ytdlp --features runtime-prep --test smoke safe_broker -- --nocapture
           cargo test -p generic-ytdlp --features runtime-prep --test runtime -- --nocapture
       - name: Verify no Core yt-dlp/process fallback and no network client
         shell: bash --noprofile --norc -euo pipefail {0}
         run: |
           ! grep -RInE 'yt-dlp|ytdlp|std::process|Command::new|reqwest|TcpStream' gateway-core/src
           ! grep -RInE 'curl_cffi|websockets|ftp://|file://' plugins/generic-ytdlp/worker
-          ! grep -RInE 'gateway-core|reqwest|EgressPolicy|R008Broker' plugins/generic-ytdlp/src plugins/generic-ytdlp/Cargo.toml
+          ! grep -RInE --exclude='generic-ytdlp-real-smoke.rs' 'gateway-core|reqwest|EgressPolicy|R008Broker' plugins/generic-ytdlp/src plugins/generic-ytdlp/Cargo.toml
           grep -q 'R008Broker' gateway-egress/src/lib.rs
+          grep -q 'R008Broker::default' plugins/generic-ytdlp/src/bin/generic-ytdlp-real-smoke.rs
           grep -q 'SYS_socketpair' plugins/generic-ytdlp/src/bin/ytdlp-sandbox.rs
           grep -q 'DisabledRunner' plugins/generic-ytdlp/src/lib.rs
           bash scripts/check-core-site-boundary.sh
@@ -151,6 +156,32 @@ jobs:
           cargo test -p gateway-core --test media_gateway -- --nocapture
           cargo test -p gateway-egress --all-targets -- --nocapture
           cargo test -p generic-ytdlp --features runtime-prep --test runtime r008_broker_rejects_secret_userinfo_and_private_targets_before_network -- --nocapture
+
+      - name: Verify isolated frozen runtime setup and cleanup
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          setup_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$setup_dir"' EXIT
+          site_dir="$setup_dir/site-packages"
+          python -m pip install --disable-pip-version-check --no-cache-dir --no-deps \
+            --target "$site_dir" \
+            "yt-dlp @ git+https://github.com/yt-dlp/yt-dlp.git@3a08beaf031ab68f966401ead017ac81fe8486cf"
+          PYTHONPATH="$site_dir" python - "$site_dir" <<'PY'
+          import json
+          import pathlib
+          import sys
+          from importlib import metadata
+          import yt_dlp
+
+          site_dir = pathlib.Path(sys.argv[1])
+          assert yt_dlp.version.__version__ == "2026.08.19"
+          dist = metadata.distribution("yt-dlp")
+          direct_url = json.loads((pathlib.Path(dist._path) / "direct_url.json").read_text())
+          assert direct_url["vcs_info"]["commit_id"] == "3a08beaf031ab68f966401ead017ac81fe8486cf"
+          assert str(site_dir) in str(pathlib.Path(dist._path).parent)
+          PY
+          rm -rf -- "$setup_dir"
+          test ! -e "$setup_dir"
 
   j4-lifecycle-regressions:
     name: J4 lifecycle descendants and production-disabled regressions
