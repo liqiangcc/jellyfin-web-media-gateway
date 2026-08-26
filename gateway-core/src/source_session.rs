@@ -135,6 +135,27 @@ impl SourceSessionService {
             .then_some(media)
     }
 
+    /// Publish a media projection without allowing a delayed preparation to
+    /// roll the projection back after a newer Playback item has committed.
+    ///
+    /// Playback commits and this projection live behind separate authorities,
+    /// so publication must be monotonic as well as protected by the map lock.
+    /// `item_revision` is the per-session authority for item transitions;
+    /// equal revisions are never replaced by a later navigation publication.
+    fn publish_media_view(&self, view: SessionMediaView) {
+        let mut media_views = self
+            .media_views
+            .write()
+            .expect("source media views poisoned");
+        if media_views
+            .get(&view.session_id)
+            .is_some_and(|current| current.item_revision >= view.item_revision)
+        {
+            return;
+        }
+        media_views.insert(view.session_id.clone(), view);
+    }
+
     pub(crate) fn create(
         &self,
         gateway: &GatewayService,
@@ -277,10 +298,7 @@ impl SourceSessionService {
                 return internal_failure();
             }
         };
-        self.media_views
-            .write()
-            .expect("source media views poisoned")
-            .insert(session_id.clone(), media_view.clone());
+        self.publish_media_view(media_view.clone());
         if displays
             .set_current_rendering_session(&request.display_id, &session_id)
             .is_err()
@@ -399,10 +417,7 @@ impl SourceSessionService {
         );
         match result {
             Ok(result) => {
-                self.media_views
-                    .write()
-                    .expect("source media views poisoned")
-                    .insert(session_id.to_owned(), prepared.view);
+                self.publish_media_view(prepared.view);
                 Ok(result)
             }
             Err(error) => {
@@ -1264,5 +1279,51 @@ mod tests {
             previous_body["snapshot"]["current_item"]["item_revision"],
             3
         );
+    }
+
+    #[test]
+    fn reversed_post_commit_publication_keeps_latest_media_projection() {
+        // This models two successful Playback commits whose projections are
+        // published in reverse order. It is intentionally deterministic: the
+        // publication boundary itself must reject the older item revision.
+        let service = service();
+        let view = |item_id: &str, item_revision: u64| SessionMediaView {
+            session_id: "session-navigation".into(),
+            item_id: item_id.into(),
+            item_revision,
+            media_generation: 0,
+            title: format!("title-{item_revision}"),
+            source_site: "fixture".into(),
+            streams: vec![],
+        };
+
+        let newer = view("item-newer", 3);
+        let older = view("item-older", 2);
+        service.publish_media_view(newer);
+        service.publish_media_view(older);
+
+        let snapshot = crate::ControlSnapshot {
+            session_id: "session-navigation".into(),
+            session_revision: 2,
+            state: "playing",
+            current_item: crate::ControlItemSnapshot {
+                item_id: "item-newer".into(),
+                item_revision: 3,
+                media_generation: 0,
+            },
+            position_ms: 0,
+            telemetry_sequence: 0,
+            active_display: crate::ControlDisplaySnapshot {
+                display_id: "display-a".into(),
+                generation: 0,
+            },
+            handoff: None,
+        };
+        let published = service
+            .media_for_snapshot(&snapshot)
+            .expect("latest projection remains available");
+        assert_eq!(published.item_id, "item-newer");
+        assert_eq!(published.item_revision, 3);
+        assert_eq!(published.title, "title-3");
     }
 }
