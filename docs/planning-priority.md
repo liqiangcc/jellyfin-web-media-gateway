@@ -2,6 +2,8 @@
 
 This document records the current execution priority for the media gateway project.
 
+The detailed current product capability/task map is `product-roadmap.md`.
+
 The ordering is intentionally:
 
 ```text
@@ -21,40 +23,97 @@ Environment work answers only whether a target can be used for functional develo
 - required build/runtime tools are present or the concrete missing capability is known;
 - the Gateway can be built/started/stopped in an isolated test location;
 - required public network paths can be exercised without credential/access-control bypass;
-- Evidence can be returned through GitHub Actions.
+- Evidence can be returned through GitHub Actions / the approved execution plane.
 
 Environment readiness must not claim CPU/RSS/temperature/throughput/soak feasibility.
 
-Current dedicated environment task:
+Current environment route:
 
 ```text
-#63 ENV-ARM64-READY
-→ phone Runner / low-privilege boundary
-→ functional toolchain/runtime readiness
-→ isolated Gateway functional smoke
-→ public-network route classification
+#64 ENV-ARM64-RUST
+→ #63 ENV-ARM64-READY
 ```
 
-A fresh accepted `target-runner-smoke` rerun on 2026-08-26 already proves the first scheduling/security slice on `ubuntu-arm64-target-phone`; #63 owns only the remaining functional-environment readiness, not performance.
+A fresh accepted Target Runner smoke and #63 Attempt 1 already prove the scheduling/security/direct-network slices, including direct/no-proxy HTTP 200 reachability for the frozen Bilibili sample. The remaining environment blocker is low-privilege functional toolchain/Gateway execution, not Bilibili network reachability.
 
 ## Functional closure
 
-After environment readiness, prioritize user-visible end-to-end behavior. Current real-site priority is:
+After environment readiness, prioritize user-visible end-to-end behavior.
+
+The current first real-site playback route is:
 
 ```text
-R005-PUBLIC-REAL (#36)
-→ R005-PUBLIC (#23)
-→ real Bilibili URL → Site Plugin → ResolvedMedia → Gateway → Web Display E2E
+#66 GENERIC-YTDLP-EXTRACT-PREP
+→ #67 GENERIC-YTDLP-BILIBILI-REAL
+→ #68 BILIBILI-WEB-E2E
 ```
 
-If #63 finds a concrete environment blocker required by this functional chain, fix that blocker first and then resume the same functional Task. Do not convert environment work into premature performance benchmarking.
+Target user-visible path:
+
+```text
+Bilibili URL
+→ SiteAdapterRegistry
+→ generic-ytdlp
+→ current ResolvedMedia
+→ Gateway
+→ Web Display
+→ Control play/pause/seek/stop
+```
+
+The legacy `#36 → #23 → PR #37` route is superseded for first playback because #65 proved that the preserved #23 branch conflicts semantically with the accepted current SiteAdapter authority. Historical Evidence remains reference material; it is not the active delivery candidate.
+
+## Functional expansion after first playback
+
+Once the first Bilibili playback path is accepted, expand capabilities in generic layers rather than rebuilding a monolithic site plugin:
+
+```text
+Continuous content
+→ SITE-NAVIGATION-PREP
+→ BILIBILI-NAVIGATION
+
+Source-site accounts
+→ #28 accepted auth foundation
+→ #26 future real-auth child
+
+Native site controls
+→ #33 accepted Browser/Native Panel contracts
+→ #27 R006-RUNTIME-FUNCTIONAL
+→ concrete site panel interpretation
+```
+
+Navigation, authentication and Native Panel work may be planned in advance, but should not displace the current first-playback critical path unless they expose a hard dependency.
 
 ## Performance / capacity
 
-R003-TARGET (#9) remains the authoritative Ubuntu ARM64 performance/resource verification task, including sustained Direct/Remux, CPU/RSS/temperature and 5/30/60-minute Evidence.
+R003-TARGET (#9) remains the authoritative Ubuntu ARM64 performance/resource verification task, including sustained Direct/Remux/Chromium scenarios, CPU/RSS/temperature and 5/30/60-minute Evidence.
 
-It is intentionally deferred until the primary functional paths are stable enough that measurements are representative. Deferring execution does not weaken or rewrite the #9 Task Contract.
+It is intentionally deferred until primary functional paths are stable enough that measurements are representative.
+
+Important separation:
+
+```text
+Chromium/Gateway can function
+!=
+Chromium/Gateway is performant enough for always-on production use
+```
+
+Functional runtime Tasks may therefore proceed before #9 when they make no resource/capacity claim.
 
 ## Physical-device gates
 
 Physical-TV verification remains independent and should execute when the TV environment is available. Missing physical-TV Evidence must not be substituted by hosted browser evidence.
+
+## Current top-level execution graph
+
+```text
+#64 → #63
+   
+#66 → #67 → #68
+               ├→ Navigation capability/site mapping
+               ├→ Auth real-site work
+               └→ Native Panel functional runtime
+
+#9 performance/capacity later
+```
+
+No-hard-dependency ready Tasks should execute in parallel.
