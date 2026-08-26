@@ -152,8 +152,8 @@ Current planning buffer:
 Active: #79
 Blocked waiting on #79: #67
 Draft materialized ahead: #68 Task Package
-  - docs/tasks/68-bilibili-web-e2e/task.md
-  - docs/tasks/68-bilibili-web-e2e/prompt.md
+  - task commit: 1a99830b753b7e43f520403451dc9899c855a341
+  - prompt commit: 4e8abb5554aeffa51b1dd6738bccfff3c13b1923
 ```
 
 #68 may be designed while #79/#67 execute, but it must remain `status:draft` until #67 Final Acceptance PASS freezes the real media protocol/shape and exact Candidate.
