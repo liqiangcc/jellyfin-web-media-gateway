@@ -121,7 +121,11 @@ impl CdpClient {
         Ok(client)
     }
 
-    async fn command(&self, method: &str, params: Value, wait_for: Duration) -> CdpResult {
+    async fn begin_command(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<(u64, oneshot::Receiver<CdpResult>), CdpError> {
         if !self.alive.load(Ordering::Acquire) {
             return Err(CdpError::Disconnected);
         }
@@ -140,11 +144,20 @@ impl CdpClient {
             self.pending.lock().await.remove(&id);
             return Err(CdpError::Disconnected);
         }
+        Ok((id, receiver))
+    }
+
+    async fn cancel_command(&self, id: u64) {
+        self.pending.lock().await.remove(&id);
+    }
+
+    async fn command(&self, method: &str, params: Value, wait_for: Duration) -> CdpResult {
+        let (id, receiver) = self.begin_command(method, params).await?;
         match timeout(wait_for, receiver).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(CdpError::Disconnected),
             Err(_) => {
-                self.pending.lock().await.remove(&id);
+                self.cancel_command(id).await;
                 Err(CdpError::Timeout)
             }
         }
@@ -156,10 +169,6 @@ impl CdpClient {
             .ok()?
             .recv()
             .await
-    }
-
-    fn is_alive(&self) -> bool {
-        self.alive.load(Ordering::Acquire)
     }
 }
 
@@ -616,56 +625,74 @@ impl ChromiumBrowserWorker {
         Ok(false)
     }
 
-    async fn wait_for_ready(
+    async fn navigate_and_wait(
         &self,
         session: &BrowserSessionId,
         handle: Arc<AsyncMutex<ChromiumSession>>,
-        operation_id: BrowserOperationId,
+        cdp: Arc<CdpClient>,
+        request: &BrowserNavigationRequest,
         policy: &R008NavigationPolicy,
     ) -> Result<(), BrowserError> {
+        let (command_id, response) = cdp
+            .begin_command("Page.navigate", json!({"url": request.url().as_str()}))
+            .await
+            .map_err(|error| match error {
+                CdpError::Timeout => BrowserError::WorkerTimeout,
+                CdpError::Disconnected | CdpError::Protocol => BrowserError::WorkerCrashed,
+            })?;
+        tokio::pin!(response);
         let deadline = Instant::now() + self.operation_timeout;
+        let mut navigate_accepted = false;
+        let mut ready = false;
+
         loop {
-            let (cdp, cancelled) = {
-                let mut state = handle.lock().await;
-                if state.cancelled.remove(&operation_id).is_some() {
-                    let cdp = Arc::clone(&state.cdp);
-                    Self::push_event(
-                        &mut state,
-                        BrowserEventKind::OperationCancelled { operation_id },
-                    );
-                    (cdp, true)
-                } else {
-                    Self::refresh_status(&mut state)?;
-                    if !state.cdp.is_alive() {
-                        Self::terminate_state(&mut state, BrowserStatus::Crashed);
-                        return Err(BrowserError::WorkerCrashed);
-                    }
-                    if state.status != BrowserStatus::Open {
-                        return Err(status_error(state.status));
-                    }
-                    (Arc::clone(&state.cdp), false)
-                }
-            };
-            if cancelled {
-                let _ = cdp
-                    .command("Page.stopLoading", Value::Null, self.operation_timeout)
-                    .await;
-                return Err(BrowserError::OperationCancelled);
+            if navigate_accepted && ready {
+                return Ok(());
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
+                cdp.cancel_command(command_id).await;
                 let mut state = handle.lock().await;
                 Self::terminate_state(&mut state, BrowserStatus::TimedOut);
                 return Err(BrowserError::WorkerTimeout);
             }
-            let wait_for = remaining.min(EVENT_POLL_INTERVAL * 5);
-            if let Some(event) = cdp.next_event(wait_for).await {
-                let mut state = handle.lock().await;
-                if self
-                    .process_cdp_event(session, &mut state, event, policy)
-                    .await?
-                {
-                    return Ok(());
+
+            tokio::select! {
+                result = &mut response, if !navigate_accepted => {
+                    let result = match result {
+                        Ok(result) => result,
+                        Err(_) => Err(CdpError::Disconnected),
+                    };
+                    match result {
+                        Ok(_) => navigate_accepted = true,
+                        Err(error) => {
+                            let browser_error = match error {
+                                CdpError::Timeout => BrowserError::WorkerTimeout,
+                                CdpError::Disconnected | CdpError::Protocol => BrowserError::WorkerCrashed,
+                            };
+                            let mut state = handle.lock().await;
+                            Self::terminate_state(
+                                &mut state,
+                                match browser_error {
+                                    BrowserError::WorkerTimeout => BrowserStatus::TimedOut,
+                                    _ => BrowserStatus::Crashed,
+                                },
+                            );
+                            return Err(browser_error);
+                        }
+                    }
+                }
+                event = cdp.next_event(remaining.min(EVENT_POLL_INTERVAL * 5)) => {
+                    if let Some(event) = event {
+                        let mut state = handle.lock().await;
+                        match self.process_cdp_event(session, &mut state, event, policy).await {
+                            Ok(done) => ready |= done,
+                            Err(error) => {
+                                cdp.cancel_command(command_id).await;
+                                return Err(error);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -756,7 +783,7 @@ impl BrowserWorker for ChromiumBrowserWorker {
         Box::pin(async move {
             policy.authorize_url(request.url()).await?;
             let handle = self.session_handle(session)?;
-            let (cdp, operation_id) = {
+            let cdp = {
                 let mut state = handle.lock().await;
                 Self::session_error(&mut state)?;
                 if state.cancelled.remove(&request.operation_id()).is_some() {
@@ -775,31 +802,9 @@ impl BrowserWorker for ChromiumBrowserWorker {
                     },
                 );
                 Self::push_event(&mut state, BrowserEventKind::Loading);
-                (Arc::clone(&state.cdp), request.operation_id())
+                Arc::clone(&state.cdp)
             };
-            let navigate_result = cdp
-                .command(
-                    "Page.navigate",
-                    json!({"url": request.url().as_str()}),
-                    self.operation_timeout,
-                )
-                .await;
-            if let Err(error) = navigate_result {
-                let mut state = handle.lock().await;
-                let browser_error = match error {
-                    CdpError::Timeout => BrowserError::WorkerTimeout,
-                    CdpError::Disconnected | CdpError::Protocol => BrowserError::WorkerCrashed,
-                };
-                Self::terminate_state(
-                    &mut state,
-                    match browser_error {
-                        BrowserError::WorkerTimeout => BrowserStatus::TimedOut,
-                        _ => BrowserStatus::Crashed,
-                    },
-                );
-                return Err(browser_error);
-            }
-            self.wait_for_ready(session, handle, operation_id, policy)
+            self.navigate_and_wait(session, handle, cdp, &request, policy)
                 .await
         })
     }
