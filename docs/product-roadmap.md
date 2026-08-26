@@ -75,18 +75,27 @@ Current route:
 
 ```text
 #66 GENERIC-YTDLP-EXTRACT-PREP          [accepted]
-→ #73 GENERIC-YTDLP-REAL-HARNESS-PREP
+→ #73 GENERIC-YTDLP-REAL-HARNESS-PREP  [accepted]
+→ #79 GENERIC-YTDLP-OFFLINE-RUNTIME-PREP
 → #67 GENERIC-YTDLP-BILIBILI-REAL
 → #68 BILIBILI-WEB-E2E
 ```
 
-Why #73 is a hard verification dependency:
+Why #73 remains a hard verification dependency:
 
-- #66 now provides the accepted real `extract_info(download=False)` library/runtime path;
+- #66 provides the accepted real `extract_info(download=False)` library/runtime path;
 - a real Target must not invent ad-hoc Rust/Python code merely to exercise it;
-- #73 owns one durable repository smoke entrypoint using the real `R008Broker` + `BrokerProcessRunner` path;
+- #73 owns the durable repository smoke entrypoint using the real `R008Broker` + `BrokerProcessRunner` path;
 - #73 also owns evidence-safe output and bounded site-neutral diagnostics, so #67 can report policy/limit/timeout/unsupported classes without logging signed media URLs or raw worker stderr;
 - #73 may not weaken R008 or increase the current broker response limit merely to make a site pass.
+
+Why #79 is now a hard environment-consistency dependency:
+
+- #67 Attempts 1 and 2 both reached the accepted low-privilege ARM64 target and proved direct/no-proxy public/Bilibili HTTP 200 reachability;
+- both attempts stopped before extractor traffic with `FROZEN_RUNTIME_SETUP` and `broker_request_count=0`;
+- #73 R2 user-owned caching reduced repeat setup work but cold Target preparation still depends on target-side `pip git+https` acquisition;
+- #79 moves frozen dependency acquisition/build to GitHub Actions, creates an immutable manifest+SHA256 runtime bundle, and verifies offline consumption on hosted Linux x86_64 and ARM64;
+- normal Target verification should consume that already-built artifact and must not resolve/build the frozen dependency from source.
 
 Architecture path:
 
@@ -94,7 +103,8 @@ Architecture path:
 Bilibili public URL
 → SiteAdapterRegistry
 → generic-ytdlp Site Plugin
-→ brokered frozen yt-dlp extraction
+→ verified offline frozen runtime
+→ R008Broker + BrokerProcessRunner extraction
 → current ResolvedMedia
 → Source/Session preparation
 → Gateway media capability
@@ -112,10 +122,11 @@ First-playback format policy is intentionally bounded:
 Acceptance gate:
 
 1. #66 deterministic brokered real extraction implementation accepted. **Done.**
-2. #73 provides an accepted safe/reproducible real-site smoke harness using actual R008 authority.
-3. #64/#63 establish the selected low-privilege normal-network target environment.
-4. #67 executes that accepted harness on an exact Candidate against the frozen public Bilibili sample and classifies real compatibility without bypass.
-5. #68 proves the same real-source path reaches Gateway/Web Display and normal Control commands.
+2. #73 accepted safe/reproducible real-site smoke harness using actual R008 authority. **Done.**
+3. #64/#63 accepted the selected low-privilege normal-network target environment. **Done.**
+4. #79 builds one immutable frozen-runtime artifact contract and proves setup-network-free consumption on hosted x86_64 + ARM64.
+5. #67 consumes the accepted offline runtime on the ARM64 target and classifies the frozen public Bilibili sample without bypass.
+6. #68 proves the same real-source path reaches Gateway/Web Display and normal Control commands.
 
 ---
 
@@ -127,14 +138,14 @@ User outcome:
 
 This is a **generic capability first**, followed by site semantics.
 
-Planned route:
+Current route:
 
 ```text
-#71 SITE-NAVIGATION-PREP
+#71 SITE-NAVIGATION-PREP                [accepted]
 → #72 BILIBILI-NAVIGATION
 ```
 
-Both are currently planning-only draft Tasks and must not displace the first-playback critical path unless Coordinator explicitly reprioritizes.
+#71 is Final Accepted. #72 remains a planning-only draft and must not displace the first-playback critical path unless Coordinator explicitly reprioritizes.
 
 Generic capability #71 owns:
 
@@ -155,7 +166,7 @@ Bilibili-specific implementation #72 owns:
 
 Core must not learn Bilibili identifiers or navigation algorithms.
 
-The old #23/PR #37 Navigation/ResolveContext implementation is historical Evidence only and is **not current API authority**. New navigation work starts from accepted current SiteAdapter conformance (#39) plus canonical `implementation-contracts.md`.
+The old #23/PR #37 Navigation/ResolveContext implementation is historical Evidence only and is **not current API authority**. Current navigation authority is accepted #71 plus #39 SiteAdapter conformance and canonical `implementation-contracts.md`.
 
 #72 publication hard-depends on #71 Final Acceptance and a stable accepted public Bilibili playback baseline (#68 or later equivalent).
 
@@ -295,23 +306,27 @@ Historical Evidence must not be merged or reported as if it were current-main in
 
 ```text
 Environment lane
-#64 → #63 ─────────────────────┐
-                               │
-First-playback lane            │
-#66(done) → #73 ───────────────┼→ #67 → #68
-                               │
-                               └ target readiness joins at #67
+#64 → #63 ───────────────────────────────┐
+                                         │
+First-playback lane                      │
+#66(done) → #73(done) → #79 ────────────┼→ #67 → #68
+                                         │
+                                         └ target readiness joins at #67
+
+Navigation
+#71(done) → #72 BILIBILI-NAVIGATION
+                 ↑
+                 └ also waits for stable #68/equivalent playback baseline
 
 After first playback
-        ├→ #71 SITE-NAVIGATION-PREP → #72 BILIBILI-NAVIGATION
-#68 ────┼→ #26 future AUTH-REAL child
+#68 ────┬→ #26 future AUTH-REAL child
         └→ #27 R006-RUNTIME-FUNCTIONAL → site Native Panel work
 
 Performance later
 #9 R003-TARGET
 ```
 
-#73 and #64 may execute in parallel. #67 must wait for both the accepted harness and the selected target's functional readiness.
+#79 is the current first-playback blocker repair. #67 stays blocked until #79 Final Acceptance provides a durable exact offline runtime artifact/consume path.
 
 Independent ready Tasks should still execute in parallel when no hard dependency exists.
 
@@ -324,6 +339,9 @@ Before creating a concrete-site implementation Task, classify the requested beha
 ```text
 media extraction
 → generic or site SiteAdapter resolution
+
+runtime dependency distribution
+→ immutable verified offline artifact + architecture compatibility Evidence
 
 real-site verification
 → repository-owned safe harness + exact target Evidence
