@@ -255,7 +255,7 @@ fn seccomp_denies_worker_custom_handler_and_child_but_ipc_survives() {
 
 #[test]
 fn lifecycle_timeout_and_stdout_overflow_are_bounded() {
-    let timeout_runner = runner(Duration::from_millis(300));
+    let timeout_runner = runner(Duration::from_secs(2));
     assert_eq!(
         timeout_runner
             .run_action(
@@ -291,7 +291,7 @@ fn lifecycle_timeout_and_stdout_overflow_are_bounded() {
             "timeout-descendant",
             "timeout-descendant",
             generic_ytdlp::ProcessError::TimedOut,
-            Duration::from_millis(300),
+            Duration::from_secs(2),
         ),
         (
             "crash-descendant",
