@@ -3,7 +3,8 @@
 Issue: #50 `GENERIC-YTDLP-EGRESS-RESEARCH`  
 Attempt: 1  
 Worker / environment: Web Worker / `env:web-gpt`  
-Planning base: `6a6c724ae3e8ebafc733fcf1c5fcc1b031a32757`  
+Planning Base: `18dd2b60f21d98436341e056376b26730c392ab7`  
+Execution Base (Publication/current main at claim): `6a6c724ae3e8ebafc733fcf1c5fcc1b031a32757`  
 Candidate: commit containing this document; the exact immutable SHA is recorded in Issue #50 `[EXECUTION REPORT]`  
 Research date: 2026-08-26  
 Decision: **CONDITIONALLY SUPPORTED**
@@ -354,6 +355,6 @@ Only after a future exact-candidate implementation proves the conditions should 
 
 ## 12. Freshness and stale-source risk
 
-This decision is tied to repository `main@6a6c724ae3e8ebafc733fcf1c5fcc1b031a32757` and yt-dlp stable `2026.08.19@3a08beaf031ab68f966401ead017ac81fe8486cf`, with upstream master freshness checked at `66f49765d5a46c7be1c2c414f245c71530c4a2fd` on 2026-08-26.
+This decision is tied to Task Planning Base `18dd2b60f21d98436341e056376b26730c392ab7`, Attempt 1 Execution Base/current main `6a6c724ae3e8ebafc733fcf1c5fcc1b031a32757`, and yt-dlp stable `2026.08.19@3a08beaf031ab68f966401ead017ac81fe8486cf`, with upstream master freshness checked at `66f49765d5a46c7be1c2c414f245c71530c4a2fd` on 2026-08-26.
 
 Because RequestHandler/plugin/runtime internals are upstream implementation details and the plugin API explicitly carries no backwards-compatibility guarantee, **every future yt-dlp version bump is a security-relevant freshness event**. The later implementation must pin a version and re-run source/escape/egress verification before upgrading.
