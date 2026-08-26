@@ -33,6 +33,7 @@ FROZEN_SOURCE = (
 SCHEMA_VERSION = 1
 ARTIFACT_FORMAT = "python-wheel"
 PLATFORM_COMPATIBILITY = "platform-independent: py3-none-any"
+TRUST_ANCHOR_PATH = Path(__file__).with_name("generic-ytdlp-offline-runtime.lock.json")
 WHEEL_NAME_RE = re.compile(r"^yt_dlp-[0-9][A-Za-z0-9.]*-py3-none-any\.whl$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -190,6 +191,47 @@ def _validate_manifest(value: dict[str, Any]) -> dict[str, str | int]:
     return value
 
 
+TRUST_ANCHOR_KEYS = frozenset(
+    {
+        "schema_version",
+        "runtime_name",
+        "yt_dlp_version",
+        "source_commit",
+        "artifact_filename",
+        "artifact_sha256",
+        "artifact_format",
+        "platform_compatibility",
+    }
+)
+
+
+def _load_trust_anchor() -> dict[str, str | int]:
+    try:
+        value = json.loads(TRUST_ANCHOR_PATH.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as error:
+        raise OfflineRuntimeError("artifact trust anchor unavailable") from error
+    if not isinstance(value, dict) or set(value) != TRUST_ANCHOR_KEYS:
+        raise OfflineRuntimeError("artifact trust anchor shape rejected")
+    if value.get("schema_version") != SCHEMA_VERSION:
+        raise OfflineRuntimeError("artifact trust anchor schema rejected")
+    if any(not isinstance(value.get(key), str) for key in TRUST_ANCHOR_KEYS - {"schema_version"}):
+        raise OfflineRuntimeError("artifact trust anchor value rejected")
+    if (
+        value["runtime_name"] != RUNTIME_NAME
+        or value["yt_dlp_version"] != FROZEN_VERSION
+        or value["source_commit"] != FROZEN_COMMIT
+        or value["artifact_format"] != ARTIFACT_FORMAT
+        or value["platform_compatibility"] != PLATFORM_COMPATIBILITY
+    ):
+        raise OfflineRuntimeError("artifact trust anchor identity rejected")
+    if (
+        not WHEEL_NAME_RE.fullmatch(value["artifact_filename"])
+        or not SHA256_RE.fullmatch(value["artifact_sha256"])
+    ):
+        raise OfflineRuntimeError("artifact trust anchor hash rejected")
+    return value
+
+
 def _wheel_metadata(artifact: Path) -> tuple[str, str, str]:
     if not artifact.is_file() or artifact.is_symlink():
         raise OfflineRuntimeError("artifact missing")
@@ -239,11 +281,15 @@ def verify_bundle(bundle: Path) -> dict[str, str | int]:
     if any(path.is_symlink() for path in (manifest_path, sums_path, artifacts_path)):
         raise OfflineRuntimeError("bundle symlink rejected")
     manifest = _validate_manifest(_read_json(manifest_path))
+    trust_anchor = _load_trust_anchor()
+    for key in TRUST_ANCHOR_KEYS - {"schema_version"}:
+        if manifest[key] != trust_anchor[key]:
+            raise OfflineRuntimeError("artifact trust anchor mismatch")
     artifact = bundle / "artifacts" / str(manifest["artifact_filename"])
     if artifact.is_symlink():
         raise OfflineRuntimeError("artifact symlink rejected")
     actual_hash = _sha256(artifact)
-    if actual_hash != manifest["artifact_sha256"]:
+    if actual_hash != manifest["artifact_sha256"] or actual_hash != trust_anchor["artifact_sha256"]:
         raise OfflineRuntimeError("artifact hash mismatch")
     try:
         sums = (bundle / "SHA256SUMS").read_text(encoding="utf-8").splitlines()

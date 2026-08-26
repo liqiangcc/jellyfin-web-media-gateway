@@ -13,6 +13,7 @@ on:
       - "site-adapter-api/**"
       - "plugins/generic-ytdlp/**"
       - "scripts/generic-ytdlp-offline-runtime.py"
+      - "scripts/generic-ytdlp-offline-runtime.lock.json"
       - "scripts/generic-ytdlp-runtime-cache.py"
       - "scripts/generic-ytdlp-real-smoke.sh"
       - "scripts/tests/test_generic_ytdlp_offline_runtime.py"
@@ -60,6 +61,7 @@ jobs:
           bundle="$RUNNER_TEMP/generic-ytdlp-offline-runtime"
           python scripts/generic-ytdlp-offline-runtime.py build "$bundle"
           python scripts/generic-ytdlp-offline-runtime.py verify "$bundle"
+          python -c 'import json, pathlib; lock=json.loads(pathlib.Path("scripts/generic-ytdlp-offline-runtime.lock.json").read_text()); manifest=json.loads((pathlib.Path("'"$bundle"'") / "manifest.json").read_text()); assert manifest["artifact_sha256"] == lock["artifact_sha256"]'
           test "$(BUNDLE="$bundle" python -c 'import json, os, pathlib; print(json.loads((pathlib.Path(os.environ["BUNDLE"]) / "manifest.json").read_text())["build_candidate_sha"])')" = "$CANDIDATE_SHA"
           ! grep -RInE 'https?://|proxy|Cookie|Authorization|/home/|/runner/' "$bundle/manifest.json"
       - uses: actions/upload-artifact@v4
