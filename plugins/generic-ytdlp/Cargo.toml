@@ -27,3 +27,8 @@ generic-direct = { path = "../generic-direct" }
 name = "ytdlp-sandbox"
 path = "src/bin/ytdlp-sandbox.rs"
 required-features = ["runtime-prep"]
+
+[[bin]]
+name = "generic-ytdlp-real-smoke"
+path = "src/bin/generic-ytdlp-real-smoke.rs"
+required-features = ["runtime-prep"]

@@ -11,7 +11,7 @@ use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 use url::Url;
@@ -20,6 +20,94 @@ const IPC_FD: i32 = 3;
 const MAX_FRAME_BYTES: usize = 128 * 1024;
 const FROZEN_YTDLP_VERSION: &str = "2026.08.19";
 const FROZEN_YTDLP_COMMIT: &str = "3a08beaf031ab68f966401ead017ac81fe8486cf";
+
+/// Bounded, site-neutral metadata captured around the real R008 broker.
+///
+/// The broker response body, headers and request URL are deliberately not
+/// retained. Error codes are copied only from the fixed R008 allowlist below
+/// so an upstream diagnostic can never become an arbitrary output channel.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct BrokerDiagnosticsSnapshot {
+    pub request_count: u32,
+    pub last_status_class: Option<u16>,
+    pub last_error_code: Option<String>,
+}
+
+#[derive(Default)]
+struct BrokerDiagnosticsState {
+    request_count: u32,
+    last_status_class: Option<u16>,
+    last_error_code: Option<String>,
+}
+
+/// Adds safe diagnostics to an existing broker without adding any network
+/// authority. The intended production-shaped construction is
+/// `SafeBroker::new(R008Broker::default())`.
+#[derive(Clone)]
+pub struct SafeBroker {
+    backend: Arc<dyn BrokerBackend>,
+    state: Arc<Mutex<BrokerDiagnosticsState>>,
+}
+
+impl SafeBroker {
+    pub fn new<B>(backend: B) -> Self
+    where
+        B: BrokerBackend + 'static,
+    {
+        Self {
+            backend: Arc::new(backend),
+            state: Arc::new(Mutex::new(BrokerDiagnosticsState::default())),
+        }
+    }
+
+    pub fn snapshot(&self) -> BrokerDiagnosticsSnapshot {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        BrokerDiagnosticsSnapshot {
+            request_count: state.request_count,
+            last_status_class: state.last_status_class,
+            last_error_code: state.last_error_code.clone(),
+        }
+    }
+}
+
+impl BrokerBackend for SafeBroker {
+    fn handle(&self, request: BrokerRequest, cancellation: BrokerCancellation) -> BrokerResponse {
+        let response = self.backend.handle(request, cancellation);
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.request_count = state.request_count.saturating_add(1);
+        state.last_status_class = (100..=599)
+            .contains(&response.status)
+            .then_some(response.status / 100);
+        state.last_error_code = response.error.as_deref().map(safe_error_code);
+        response
+    }
+}
+
+fn safe_error_code(code: &str) -> String {
+    match code {
+        "BROKER_CANCELLED"
+        | "BROKER_CLIENT_REJECTED"
+        | "BROKER_EGRESS_REJECTED"
+        | "BROKER_OPERATION_REJECTED"
+        | "BROKER_REQUEST_TOO_LARGE"
+        | "BROKER_RESPONSE_HEADER_REJECTED"
+        | "BROKER_RESPONSE_READ_FAILED"
+        | "BROKER_RESPONSE_SECRET_REJECTED"
+        | "BROKER_RESPONSE_TOO_LARGE"
+        | "BROKER_RUNTIME_FAILED"
+        | "BROKER_SECRET_HEADER_REJECTED"
+        | "BROKER_TIMEOUT"
+        | "BROKER_TRANSPORT_FAILED"
+        | "BROKER_URL_REJECTED" => code.to_owned(),
+        _ => "BROKER_ERROR".into(),
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct RuntimeLimits {

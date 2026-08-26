@@ -36,10 +36,16 @@ pub const RECOGNITION_PRIORITY: u16 = 1;
 mod runtime;
 
 #[cfg(feature = "runtime-prep")]
+mod smoke;
+
+#[cfg(feature = "runtime-prep")]
 pub use runtime::{
-    BrokerBackend, BrokerCancellation, BrokerProcessRunner, BrokerRequest, BrokerResponse,
-    RuntimeLimits,
+    BrokerBackend, BrokerCancellation, BrokerDiagnosticsSnapshot, BrokerProcessRunner,
+    BrokerRequest, BrokerResponse, RuntimeLimits, SafeBroker,
 };
+
+#[cfg(feature = "runtime-prep")]
+pub use smoke::{render_blocked_summary, render_error_summary, render_success_summary};
 
 const MAX_INPUT_BYTES: usize = 16 * 1024;
 const MAX_JSON_BYTES: usize = 256 * 1024;
