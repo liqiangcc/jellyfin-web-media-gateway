@@ -40,6 +40,53 @@ jobs:
           test -n "$browser"
           echo "browser_class=$browser"
           "$browser" --version | head -1
+      - name: Verify hosted Chrome CDP endpoint
+        run: |
+          profile="$(mktemp -d)"
+          port="$(python3 - <<'PY'
+          import socket
+          with socket.socket() as sock:
+              sock.bind(('127.0.0.1', 0))
+              print(sock.getsockname()[1])
+          PY
+          )"
+          log="$profile/stderr.log"
+          google-chrome-stable \
+            --headless=new \
+            --disable-gpu \
+            --disable-dev-shm-usage \
+            --no-sandbox \
+            --disable-background-networking \
+            --disable-component-update \
+            --disable-default-apps \
+            --disable-extensions \
+            --disable-features=Translate,OptimizationHints,MediaRouter \
+            --no-first-run \
+            --no-default-browser-check \
+            --remote-allow-origins='*' \
+            --remote-debugging-address=127.0.0.1 \
+            --remote-debugging-port="$port" \
+            --user-data-dir="$profile/data" \
+            about:blank >/dev/null 2>"$log" &
+          pid=$!
+          ready=''
+          for _ in $(seq 1 80); do
+            if curl --silent --fail "http://127.0.0.1:$port/json/list" | grep -q 'webSocketDebuggerUrl'; then
+              ready=1
+              break
+            fi
+            sleep 0.1
+          done
+          if [ -z "$ready" ]; then
+            echo 'hosted Chrome did not expose a CDP page endpoint'
+            sed -n '1,120p' "$log"
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            exit 1
+          fi
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+          rm -rf "$profile"
       - name: Run real lifecycle/navigation smoke
         run: cargo test -p gateway-core --lib browser_chromium::tests::real_chromium_lifecycle_navigation_events_and_cleanup -- --exact --nocapture
 
