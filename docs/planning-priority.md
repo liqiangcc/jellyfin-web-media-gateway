@@ -25,6 +25,18 @@ Environment work answers only whether a target can be used for functional develo
 
 Environment readiness must not claim CPU/RSS/temperature/throughput/soak feasibility.
 
+Current dedicated environment task:
+
+```text
+#63 ENV-ARM64-READY
+→ phone Runner / low-privilege boundary
+→ functional toolchain/runtime readiness
+→ isolated Gateway functional smoke
+→ public-network route classification
+```
+
+A fresh accepted `target-runner-smoke` rerun on 2026-08-26 already proves the first scheduling/security slice on `ubuntu-arm64-target-phone`; #63 owns only the remaining functional-environment readiness, not performance.
+
 ## Functional closure
 
 After environment readiness, prioritize user-visible end-to-end behavior. Current real-site priority is:
@@ -34,6 +46,8 @@ R005-PUBLIC-REAL (#36)
 → R005-PUBLIC (#23)
 → real Bilibili URL → Site Plugin → ResolvedMedia → Gateway → Web Display E2E
 ```
+
+If #63 finds a concrete environment blocker required by this functional chain, fix that blocker first and then resume the same functional Task. Do not convert environment work into premature performance benchmarking.
 
 ## Performance / capacity
 
