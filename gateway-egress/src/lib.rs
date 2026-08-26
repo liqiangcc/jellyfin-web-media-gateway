@@ -277,9 +277,62 @@ fn secretish_name(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{BrokerAbort, BrokerCancellation, await_broker_stage};
+    use super::{
+        BrokerAbort, BrokerBackend, BrokerCancellation, BrokerRequest, R008Broker,
+        await_broker_stage,
+    };
+    use gateway_core::{EgressDnsResolver, EgressPolicy, EgressResolutionFuture};
     use std::future::pending;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::task::{Context, Poll};
+    use std::thread;
     use std::time::Duration;
+
+    #[derive(Debug)]
+    struct PendingResolution {
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl std::future::Future for PendingResolution {
+        type Output = Result<Vec<std::net::SocketAddr>, ()>;
+
+        fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+            Poll::Pending
+        }
+    }
+
+    impl Drop for PendingResolution {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+        }
+    }
+
+    #[derive(Debug)]
+    struct BlockingResolver {
+        started: Arc<AtomicBool>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl EgressDnsResolver for BlockingResolver {
+        fn resolve<'a>(&'a self, _: &'a str, _: u16) -> EgressResolutionFuture<'a> {
+            self.started.store(true, Ordering::Release);
+            Box::pin(PendingResolution {
+                dropped: Arc::clone(&self.dropped),
+            })
+        }
+    }
+
+    fn pending_request() -> BrokerRequest {
+        BrokerRequest {
+            operation: "http".into(),
+            method: "GET".into(),
+            url: "https://resolver-cancellation.example/media".into(),
+            headers: Default::default(),
+            body: Vec::new(),
+        }
+    }
 
     #[tokio::test]
     async fn pre_transport_stage_cancellation_aborts_blocked_resolution() {
@@ -304,5 +357,68 @@ mod tests {
         )
         .await;
         assert_eq!(result, Err(BrokerAbort::TimedOut));
+    }
+
+    #[test]
+    fn r008_cancellation_drops_actual_resolver_future_and_joins_broker() {
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let policy = EgressPolicy::with_resolver(Arc::new(BlockingResolver {
+            started: Arc::clone(&started),
+            dropped: Arc::clone(&dropped),
+        }));
+        let broker = Arc::new(R008Broker::new(policy, Duration::from_secs(30)));
+        let cancellation = BrokerCancellation::default();
+        let worker_cancel = cancellation.clone();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let worker_broker = Arc::clone(&broker);
+        let worker = thread::spawn(move || {
+            let response = worker_broker.handle(pending_request(), worker_cancel);
+            sender.send(response).unwrap();
+        });
+
+        for _ in 0..100 {
+            if started.load(Ordering::Acquire) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(started.load(Ordering::Acquire));
+        cancellation.cancel();
+        let response = receiver
+            .recv_timeout(Duration::from_millis(500))
+            .expect("R008 broker cancellation must finish promptly");
+        assert_eq!(response.error.as_deref(), Some("BROKER_CANCELLED"));
+        worker.join().unwrap();
+        assert!(dropped.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn r008_deadline_drops_actual_resolver_future_and_joins_broker() {
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let policy = EgressPolicy::with_resolver(Arc::new(BlockingResolver {
+            started: Arc::clone(&started),
+            dropped: Arc::clone(&dropped),
+        }));
+        let broker = Arc::new(R008Broker::new(policy, Duration::from_millis(25)));
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let worker_broker = Arc::clone(&broker);
+        let worker = thread::spawn(move || {
+            let response = worker_broker.handle(pending_request(), BrokerCancellation::default());
+            sender.send(response).unwrap();
+        });
+
+        assert!(
+            receiver
+                .recv_timeout(Duration::from_millis(500))
+                .expect("R008 broker deadline must finish promptly")
+                .error
+                .as_deref()
+                == Some("BROKER_TIMEOUT")
+        );
+        worker.join().unwrap();
+        assert!(started.load(Ordering::Acquire));
+        assert!(dropped.load(Ordering::Acquire));
     }
 }

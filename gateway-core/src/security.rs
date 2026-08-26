@@ -1,11 +1,55 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
+use std::fmt::Debug;
+use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::pin::Pin;
 use std::process::Command;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::net::lookup_host;
+use hickory_resolver::TokioResolver;
 use url::Url;
+
+/// A resolver future is driven directly by the caller's async runtime. It
+/// must not delegate to an uncancellable blocking resolver pool: dropping the
+/// future is the cancellation boundary used by R008 broker operations.
+pub type EgressResolutionFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<SocketAddr>, ()>> + Send + 'a>>;
+
+pub trait EgressDnsResolver: Debug + Send + Sync {
+    fn resolve<'a>(&'a self, host: &'a str, port: u16) -> EgressResolutionFuture<'a>;
+}
+
+#[derive(Clone, Debug)]
+struct SystemDnsResolver {
+    resolver: Option<TokioResolver>,
+}
+
+impl SystemDnsResolver {
+    fn new() -> Self {
+        // A malformed/unavailable system resolver is fail-closed. The
+        // resolver itself uses Tokio sockets and therefore dropping its
+        // lookup future closes the operation without Tokio's blocking DNS
+        // pool surviving Runtime shutdown.
+        let resolver = TokioResolver::builder_tokio()
+            .ok()
+            .and_then(|builder| builder.build().ok());
+        Self { resolver }
+    }
+}
+
+impl EgressDnsResolver for SystemDnsResolver {
+    fn resolve<'a>(&'a self, host: &'a str, port: u16) -> EgressResolutionFuture<'a> {
+        let Some(resolver) = &self.resolver else {
+            return Box::pin(async { Err(()) });
+        };
+        Box::pin(async move {
+            let lookup = resolver.lookup_ip(host).await.map_err(|_| ())?;
+            Ok(lookup.iter().map(|ip| SocketAddr::new(ip, port)).collect())
+        })
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EgressScope {
@@ -69,12 +113,32 @@ struct LocalService {
     port: Option<u16>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct EgressPolicy {
     local_services: HashMap<String, LocalService>,
+    resolver: Arc<dyn EgressDnsResolver>,
+}
+
+impl Default for EgressPolicy {
+    fn default() -> Self {
+        Self {
+            local_services: HashMap::new(),
+            resolver: Arc::new(SystemDnsResolver::new()),
+        }
+    }
 }
 
 impl EgressPolicy {
+    /// Build an R008 policy with an explicit resolver implementation. This is
+    /// also the deterministic test seam for proving cancellation of the real
+    /// `validate_and_resolve` path without replacing the public-IP checks.
+    pub fn with_resolver(resolver: Arc<dyn EgressDnsResolver>) -> Self {
+        Self {
+            local_services: HashMap::new(),
+            resolver,
+        }
+    }
+
     pub fn configure_local_service(
         &mut self,
         name: impl Into<String>,
@@ -133,7 +197,7 @@ impl EgressPolicy {
                 {
                     return Err(EgressPolicyError::LocalServiceOriginMismatch);
                 }
-                resolve_target(host, port, false).await
+                self.resolve_target(host, port, false).await
             }
         }
     }
@@ -146,35 +210,36 @@ impl EgressPolicy {
         if is_forbidden_hostname(host) {
             return Err(EgressPolicyError::TargetRejected);
         }
-        resolve_target(host, port, true).await
+        self.resolve_target(host, port, true).await
     }
-}
 
-async fn resolve_target(
-    host: &str,
-    port: u16,
-    require_public: bool,
-) -> Result<ValidatedTarget, EgressPolicyError> {
-    let addresses: Vec<SocketAddr> = if let Ok(ip) = host.parse::<IpAddr>() {
-        vec![SocketAddr::new(ip, port)]
-    } else {
-        lookup_host((host, port))
-            .await
-            .map_err(|_| EgressPolicyError::DnsLookupFailed)?
-            .collect()
-    };
-    if addresses.is_empty()
-        || (require_public
-            && addresses
-                .iter()
-                .any(|address| !is_public_web_ip(address.ip())))
-    {
-        return Err(EgressPolicyError::TargetRejected);
+    async fn resolve_target(
+        &self,
+        host: &str,
+        port: u16,
+        require_public: bool,
+    ) -> Result<ValidatedTarget, EgressPolicyError> {
+        let addresses: Vec<SocketAddr> = if let Ok(ip) = host.parse::<IpAddr>() {
+            vec![SocketAddr::new(ip, port)]
+        } else {
+            self.resolver
+                .resolve(host, port)
+                .await
+                .map_err(|_| EgressPolicyError::DnsLookupFailed)?
+        };
+        if addresses.is_empty()
+            || (require_public
+                && addresses
+                    .iter()
+                    .any(|address| !is_public_web_ip(address.ip())))
+        {
+            return Err(EgressPolicyError::TargetRejected);
+        }
+        Ok(ValidatedTarget {
+            host: host.to_string(),
+            addresses,
+        })
     }
-    Ok(ValidatedTarget {
-        host: host.to_string(),
-        addresses,
-    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
