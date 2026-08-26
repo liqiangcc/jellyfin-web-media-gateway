@@ -4,16 +4,6 @@ on:
   push:
     branches:
       - "worker/**"
-  pull_request:
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "gateway-core/**"
-      - "gateway-egress/**"
-      - "plugins/generic-ytdlp/**"
-      - "site-adapter-api/**"
-      - "scripts/generic-ytdlp-runtime-cache.py"
-      - ".github/workflows/broker-fd-isolation.yml"
   workflow_dispatch:
     inputs:
       candidate_sha:
