@@ -1,0 +1,208 @@
+name: generic-ytdlp-offline-runtime
+
+on:
+  push:
+    branches:
+      - "worker/**"
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "gateway-core/**"
+      - "gateway-egress/**"
+      - "site-adapter-api/**"
+      - "plugins/generic-ytdlp/**"
+      - "scripts/generic-ytdlp-offline-runtime.py"
+      - "scripts/generic-ytdlp-offline-runtime.lock.json"
+      - "scripts/generic-ytdlp-runtime-cache.py"
+      - "scripts/generic-ytdlp-real-smoke.sh"
+      - "scripts/tests/test_generic_ytdlp_offline_runtime.py"
+      - "scripts/tests/test_generic_ytdlp_runtime_cache.py"
+      - ".github/workflows/generic-ytdlp-offline-runtime.yml"
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: "Exact candidate commit to verify"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: generic-ytdlp-offline-runtime-${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+
+jobs:
+  j1-build-bundle:
+    name: J1 build canonical frozen offline bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build and verify fixed-source bundle
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          bundle="$RUNNER_TEMP/generic-ytdlp-offline-runtime"
+          python scripts/generic-ytdlp-offline-runtime.py build "$bundle"
+          python scripts/generic-ytdlp-offline-runtime.py verify "$bundle"
+          python -c 'import json, pathlib; lock=json.loads(pathlib.Path("scripts/generic-ytdlp-offline-runtime.lock.json").read_text()); manifest=json.loads((pathlib.Path("'"$bundle"'") / "manifest.json").read_text()); assert manifest["artifact_sha256"] == lock["artifact_sha256"]'
+          test "$(BUNDLE="$bundle" python -c 'import json, os, pathlib; print(json.loads((pathlib.Path(os.environ["BUNDLE"]) / "manifest.json").read_text())["build_candidate_sha"])')" = "$CANDIDATE_SHA"
+          ! grep -RInE 'https?://|proxy|Cookie|Authorization|/home/|/runner/' "$bundle/manifest.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: generic-ytdlp-offline-runtime-${{ env.CANDIDATE_SHA }}
+          path: ${{ runner.temp }}/generic-ytdlp-offline-runtime
+          if-no-files-found: error
+          retention-days: 14
+
+  j2-offline-x86_64:
+    name: J2 x86_64 offline consume
+    needs: j1-build-bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: generic-ytdlp-offline-runtime-${{ env.CANDIDATE_SHA }}
+          path: ${{ runner.temp }}/bundle
+      - name: Install and reuse bundle with setup network unavailable
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          bundle_path="$RUNNER_TEMP/bundle"
+          [[ -d "$bundle_path/generic-ytdlp-offline-runtime" ]] && bundle_path="$bundle_path/generic-ytdlp-offline-runtime"
+          test -d "$bundle_path"
+          export XDG_CACHE_HOME="$RUNNER_TEMP/offline-cache"
+          install_info="$(HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 PIP_INDEX_URL=http://127.0.0.1:9 python scripts/generic-ytdlp-offline-runtime.py install "$bundle_path")"
+          mapfile -t lines <<<"$install_info"
+          test "${lines[0]}" = prepared
+          test -d "${lines[1]}"
+          [[ "${lines[2]}" =~ ^[0-9a-f]{64}$ ]]
+          export YTDLP_SOURCE="${lines[1]}"
+          warm_info="$(HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 PIP_INDEX_URL=http://127.0.0.1:9 python scripts/generic-ytdlp-offline-runtime.py install "$bundle_path")"
+          test "${warm_info%%$'\n'*}" = hit
+          PYTHONPATH="$YTDLP_SOURCE" python -c 'import pathlib, os, yt_dlp; assert yt_dlp.version.__version__ == "2026.08.19"; assert pathlib.Path(yt_dlp.__file__).resolve().is_relative_to(pathlib.Path(os.environ["YTDLP_SOURCE"]).resolve())'
+          python -m unittest discover -s scripts/tests -p 'test_*.py' -v
+          ! rg -n 'git\+https|pip install.*git|pip wheel.*git' scripts/generic-ytdlp-offline-runtime.py
+
+  j3-offline-arm64:
+    name: J3 ARM64 offline consume
+    needs: j1-build-bundle
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: generic-ytdlp-offline-runtime-${{ env.CANDIDATE_SHA }}
+          path: ${{ runner.temp }}/bundle
+      - name: Install same J1 bundle without source or package network
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          bundle_path="$RUNNER_TEMP/bundle"
+          [[ -d "$bundle_path/generic-ytdlp-offline-runtime" ]] && bundle_path="$bundle_path/generic-ytdlp-offline-runtime"
+          test -d "$bundle_path"
+          export XDG_CACHE_HOME="$RUNNER_TEMP/offline-cache"
+          install_info="$(HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 PIP_INDEX_URL=http://127.0.0.1:9 python scripts/generic-ytdlp-offline-runtime.py install "$bundle_path")"
+          mapfile -t lines <<<"$install_info"
+          test "${lines[0]}" = prepared
+          test -d "${lines[1]}"
+          [[ "${lines[2]}" =~ ^[0-9a-f]{64}$ ]]
+          PYTHONPATH="${lines[1]}" python -c 'import yt_dlp; assert yt_dlp.version.__version__ == "2026.08.19"'
+          python -m unittest discover -s scripts/tests -p 'test_*.py' -v
+          ! rg -n 'git\+https|pip install.*git|pip wheel.*git' scripts/generic-ytdlp-offline-runtime.py
+
+  j4-security-lifecycle-regressions:
+    name: J4 security lifecycle and workspace regressions
+    needs: [j1-build-bundle, j2-offline-x86_64, j3-offline-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: generic-ytdlp-offline-runtime-${{ env.CANDIDATE_SHA }}
+          path: ${{ runner.temp }}/bundle
+      - name: Prepare exact offline runtime for deterministic tests
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          bundle_path="$RUNNER_TEMP/bundle"
+          [[ -d "$bundle_path/generic-ytdlp-offline-runtime" ]] && bundle_path="$bundle_path/generic-ytdlp-offline-runtime"
+          export XDG_CACHE_HOME="$RUNNER_TEMP/offline-cache"
+          install_info="$(python scripts/generic-ytdlp-offline-runtime.py install "$bundle_path")"
+          mapfile -t lines <<<"$install_info"
+          test "${lines[0]}" = prepared
+          printf 'YTDLP_SOURCE=%s\n' "${lines[1]}" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt,clippy
+      - name: Run exact-Candidate regressions
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace --all-targets
+          cargo test -p gateway-core --test security_baseline -- --nocapture
+          cargo test -p gateway-core --test media_gateway -- --nocapture
+          cargo test -p gateway-egress --all-targets -- --nocapture
+          cargo test -p generic-ytdlp --features runtime-prep --test runtime -- --nocapture
+          python -m py_compile scripts/generic-ytdlp-offline-runtime.py plugins/generic-ytdlp/worker/worker.py
+          python -m unittest discover -s scripts/tests -p 'test_*.py' -v
+          grep -q 'Arc::new(DisabledRunner)' plugins/generic-ytdlp/src/lib.rs
+          bash scripts/check-core-site-boundary.sh
+          bash scripts/check-core-site-boundary.sh --self-test
+          bash -n scripts/generic-ytdlp-real-smoke.sh
+          ! rg -n 'Bilibili|bilibili\.com|Cookie:|Authorization:' scripts/generic-ytdlp-offline-runtime.py .github/workflows/generic-ytdlp-offline-runtime.yml
