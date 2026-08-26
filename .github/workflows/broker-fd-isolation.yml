@@ -1,0 +1,207 @@
+name: broker-fd-isolation
+
+on:
+  push:
+    branches:
+      - "worker/**"
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "gateway-core/**"
+      - "gateway-egress/**"
+      - "plugins/generic-ytdlp/**"
+      - "site-adapter-api/**"
+      - "scripts/generic-ytdlp-runtime-cache.py"
+      - ".github/workflows/broker-fd-isolation.yml"
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: "Exact candidate commit to verify"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: broker-fd-isolation-${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+
+jobs:
+  j1-hosted-x86_64:
+    name: J1 hosted x86_64 modern-path regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt,clippy
+      - name: Assert exact x86_64 Candidate checkout
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(uname -m)" = x86_64
+          rustc -vV 2>/dev/null | grep -q 'host: x86_64-unknown-linux-gnu'
+      - name: Run required full and focused regressions
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace --all-targets
+          cargo test -p gateway-egress --all-targets
+          cargo test -p generic-ytdlp --features runtime-prep --test runtime -- --nocapture
+          cargo test -p generic-ytdlp --features runtime-prep --bin ytdlp-sandbox -- --nocapture
+
+  j2-hosted-arm64:
+    name: J2 hosted ARM64 modern-path regression
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 35
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Assert exact native AArch64 Candidate checkout
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(uname -m)" = aarch64
+          rustc -vV 2>/dev/null | grep -q 'host: aarch64-unknown-linux-gnu'
+      - name: Run native ARM64 runtime and security matrix
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          cargo test -p gateway-egress --all-targets -- --nocapture
+          cargo test -p generic-ytdlp --features runtime-prep --test runtime -- --nocapture
+          cargo test -p generic-ytdlp --features runtime-prep --bin ytdlp-sandbox -- --nocapture
+          cargo test -p generic-ytdlp --features runtime-prep --lib fd_isolation_tests -- --nocapture
+
+  j3-forced-legacy:
+    name: J3 forced ENOSYS descriptor isolation proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Assert exact Candidate checkout
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Run actual descriptor-state and fail-closed tests
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          cargo test -p generic-ytdlp --features runtime-prep --lib fd_isolation_tests -- --nocapture
+          cargo test -p generic-ytdlp --features runtime-prep --test runtime non_cloexec_ambient_fd_is_not_admitted_beyond_broker_fd -- --nocapture
+          cargo test -p generic-ytdlp --features runtime-prep --test runtime inherited_ipc_capability_supports_multiple_broker_requests -- --nocapture
+          cargo test -p generic-ytdlp --features runtime-prep --test runtime seccomp_denies_worker_custom_handler_and_child_but_ipc_survives -- --nocapture
+          ! rg -n 'YTDLP_(FORCE|BYPASS)|FORCE_.*(FALLBACK|CLOSE_RANGE)|SKIP_.*FD|DISABLE_.*(SANDBOX|SECCOMP)' plugins/generic-ytdlp gateway-egress
+          ! rg -n 'bilibili\.com|Bilibili' .github/workflows/broker-fd-isolation.yml
+
+  j4-legacy-target:
+    name: J4 Linux 4.19 ARM64 legacy-kernel target proof
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: [self-hosted, linux, ARM64, ubuntu-arm64, target-device]
+    timeout-minutes: 35
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+      - name: Record target boundary and exact checkout
+        shell: bash --noprofile --norc -euo pipefail {0}
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(uname -m)" = aarch64
+          test "$(id -u)" -ne 0
+          if command -v sudo >/dev/null 2>&1; then
+            ! sudo -n true >/dev/null 2>&1
+          fi
+          case "$GITHUB_WORKSPACE" in
+            /var/lib/web-media-gateway|/var/lib/web-media-gateway/*) exit 1 ;;
+          esac
+          {
+            echo "candidate_sha=$CANDIDATE_SHA"
+            uname -a
+            id
+            rustc -vV
+            python3 --version
+          } | tee j4-target-identity.txt
+      - name: Probe close_range without changing policy
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          python3 - <<'PY' | tee j4-close-range-probe.txt
+          import ctypes
+          import errno
+          libc = ctypes.CDLL(None, use_errno=True)
+          result = libc.syscall(436, 1 << 30, 1 << 30, 0)
+          observed = ctypes.get_errno() if result == -1 else 0
+          print(f"close_range_syscall={'ENOSYS' if observed == errno.ENOSYS else observed}")
+          if observed != errno.ENOSYS:
+              raise SystemExit(1)
+          PY
+      - name: Reuse exact user-owned frozen runtime cache
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          cache_info="$(python3 scripts/generic-ytdlp-runtime-cache.py prepare)"
+          mapfile -t cache_lines <<<"$cache_info"
+          test "${cache_lines[0]}" = hit
+          printf 'YTDLP_SOURCE=%s\n' "${cache_lines[1]}" >> "$GITHUB_ENV"
+      - name: Run deterministic BrokerProcessRunner target proof
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          cargo test --offline -p generic-ytdlp --features runtime-prep --lib fd_isolation_tests -- --nocapture | tee j4-fd-isolation.log
+          cargo test --offline -p generic-ytdlp --features runtime-prep --test runtime -- --nocapture | tee j4-broker-runtime.log
+      - name: Verify target cleanup and safe checkout
+        if: always()
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test -z "$(git status --porcelain)"
+          ! pgrep -af 'generic-ytdlp-real-smoke|ytdlp-sandbox|plugins/generic-ytdlp/worker/worker.py' || true
+          if [[ -e /var/lib/web-media-gateway/vault ]]; then
+            ! test -r /var/lib/web-media-gateway/vault
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: broker-fd-isolation-j4-${{ inputs.candidate_sha }}
+          path: |
+            j4-target-identity.txt
+            j4-close-range-probe.txt
+            j4-fd-isolation.log
+            j4-broker-runtime.log
+          if-no-files-found: warn
+          retention-days: 14

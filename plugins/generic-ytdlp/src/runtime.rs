@@ -491,6 +491,11 @@ mod fd_isolation_tests {
                 if result.is_err() {
                     libc::_exit(11);
                 }
+                for fd in 0..=2 {
+                    if libc::fcntl(fd, libc::F_GETFD) < 0 {
+                        libc::_exit(14);
+                    }
+                }
                 for fd in sentinels {
                     if libc::fcntl(fd, libc::F_GETFD) >= 0 {
                         libc::_exit(12);
