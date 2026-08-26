@@ -186,6 +186,8 @@ impl BrokerProcessRunner {
         let (parent_socket, child_socket) =
             std::os::unix::net::UnixStream::pair().map_err(|_| ProcessError::SpawnFailed)?;
         let child_fd = child_socket.as_raw_fd();
+        #[cfg(target_os = "linux")]
+        let fd_upper_bound = fd_upper_bound().map_err(|_| ProcessError::SpawnFailed)?;
         let python = resolve_program(&self.python).ok_or(ProcessError::SpawnFailed)?;
         let mut command = Command::new(&self.sandbox);
         command
@@ -221,7 +223,7 @@ impl BrokerProcessRunner {
                 // capability. Do not rely on every present or future parent
                 // descriptor having CLOEXEC set: close the entire ambient
                 // descriptor range after fd 3 has been installed.
-                close_unadmitted_fds()?;
+                close_unadmitted_fds(fd_upper_bound)?;
                 Ok(())
             });
         }
@@ -380,21 +382,165 @@ fn resolve_program(program: &PathBuf) -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "linux")]
-fn close_unadmitted_fds() -> io::Result<()> {
-    // fd 0..2 are the intentionally admitted stdio set and fd 3 is the
-    // broker socketpair endpoint. close_range is atomic with respect to the
-    // exec path and also closes the temporary child_socket descriptor.
-    let result =
-        unsafe { libc::syscall(libc::SYS_close_range as libc::c_long, 4u32, u32::MAX, 0u32) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
+fn fd_upper_bound() -> io::Result<u64> {
+    let mut limit = std::mem::MaybeUninit::<libc::rlimit>::uninit();
+    // SAFETY: `getrlimit` initializes the caller-provided rlimit on success.
+    let result = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, limit.as_mut_ptr()) };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: the successful getrlimit call initialized `limit`.
+    let limit = unsafe { limit.assume_init() };
+    if limit.rlim_cur == libc::RLIM_INFINITY {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "unbounded RLIMIT_NOFILE cannot establish fd isolation bound",
+        ));
+    }
+    let limit = u64::try_from(limit.rlim_cur).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "RLIMIT_NOFILE does not fit a bounded fd range",
+        )
+    })?;
+    if limit < 4 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "RLIMIT_NOFILE does not admit the required descriptors",
+        ));
+    }
+    // File descriptors are c_int values. This is the type's representable
+    // upper bound, not a small policy limit; clamping a larger rlimit here
+    // still covers every descriptor the close(2) ABI can address.
+    Ok(limit.min(libc::c_int::MAX as u64 + 1))
+}
+
+#[cfg(target_os = "linux")]
+fn close_unadmitted_fds(upper_bound: u64) -> io::Result<()> {
+    close_unadmitted_fds_with(upper_bound, close_range_syscall)
+}
+
+#[cfg(target_os = "linux")]
+unsafe fn close_range_syscall(first: u32, last: u32, flags: u32) -> libc::c_long {
+    // SAFETY: the arguments are the Linux close_range(2) ABI values.
+    unsafe { libc::syscall(libc::SYS_close_range as libc::c_long, first, last, flags) }
+}
+
+#[cfg(target_os = "linux")]
+fn close_unadmitted_fds_legacy(upper_bound: u64) -> io::Result<()> {
+    for fd in 4..upper_bound {
+        // SAFETY: this is the async-signal-safe close(2) syscall, and the
+        // descriptor range was derived before fork/pre_exec.
+        if unsafe { libc::close(fd as libc::c_int) } != 0 {
+            let error = io::Error::last_os_error();
+            // Sparse descriptor tables are normal. Any other error means the
+            // child cannot prove that the admitted boundary was enforced.
+            if error.raw_os_error() != Some(libc::EBADF) {
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod fd_isolation_tests {
+    use super::{close_unadmitted_fds_with, fd_upper_bound};
+    use std::fs::OpenOptions;
+    use std::io::Read;
+    use std::os::fd::{AsRawFd, RawFd};
+    use std::os::unix::net::UnixStream;
+
+    const SENTINEL_MINIMUMS: [RawFd; 3] = [8, 64, 4096];
+
+    unsafe fn fake_enosys(_: u32, _: u32, _: u32) -> libc::c_long {
+        // SAFETY: Linux exposes errno through this thread-local pointer.
+        unsafe { *libc::__errno_location() = libc::ENOSYS };
+        -1
+    }
+
+    unsafe fn fake_einval(_: u32, _: u32, _: u32) -> libc::c_long {
+        // SAFETY: Linux exposes errno through this thread-local pointer.
+        unsafe { *libc::__errno_location() = libc::EINVAL };
+        -1
+    }
+
+    #[test]
+    fn forced_enosys_closes_far_ambient_fds_and_keeps_fd_three() {
+        let mut control = UnixStream::pair().expect("control socketpair");
+        let mut sentinels = Vec::new();
+        for minimum in SENTINEL_MINIMUMS {
+            let file = OpenOptions::new()
+                .read(true)
+                .open("/dev/null")
+                .expect("sentinel");
+            let fd = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_DUPFD, minimum) };
+            assert!(fd >= minimum);
+            sentinels.push(fd);
+        }
+        let upper_bound = fd_upper_bound().expect("finite fd limit");
+        let child_fd = control.1.as_raw_fd();
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork failed");
+        if pid == 0 {
+            unsafe {
+                if libc::dup2(child_fd, 3) < 0 {
+                    libc::_exit(10);
+                }
+                let result = close_unadmitted_fds_with(upper_bound, fake_enosys);
+                if result.is_err() {
+                    libc::_exit(11);
+                }
+                for fd in sentinels {
+                    if libc::fcntl(fd, libc::F_GETFD) >= 0 {
+                        libc::_exit(12);
+                    }
+                }
+                let marker = [b'3'];
+                if libc::write(3, marker.as_ptr().cast(), marker.len()) != 1 {
+                    libc::_exit(13);
+                }
+                libc::_exit(0);
+            }
+        }
+        drop(control.1);
+        let mut marker = [0u8; 1];
+        control.0.read_exact(&mut marker).expect("fd 3 marker");
+        assert_eq!(marker, [b'3']);
+        let mut status = 0;
+        unsafe { libc::waitpid(pid, &mut status, 0) };
+        assert!(libc::WIFEXITED(status));
+        assert_eq!(libc::WEXITSTATUS(status), 0);
+        drop(control.0);
+    }
+
+    #[test]
+    fn non_enosys_close_range_error_fails_closed_without_fallback() {
+        let error =
+            close_unadmitted_fds_with(fd_upper_bound().expect("finite fd limit"), fake_einval)
+                .expect_err("unexpected close_range errors must fail closed");
+        assert_eq!(error.raw_os_error(), Some(libc::EINVAL));
     }
 }
 
+#[cfg(target_os = "linux")]
+fn close_unadmitted_fds_with(
+    upper_bound: u64,
+    close_range: unsafe fn(u32, u32, u32) -> libc::c_long,
+) -> io::Result<()> {
+    let result = unsafe { close_range(4, u32::MAX, 0) };
+    if result == 0 {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ENOSYS) {
+        return close_unadmitted_fds_legacy(upper_bound);
+    }
+    Err(error)
+}
+
 #[cfg(not(target_os = "linux"))]
-fn close_unadmitted_fds() -> io::Result<()> {
+fn close_unadmitted_fds(_: u64) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "runtime-prep requires Linux close_range fd isolation",
