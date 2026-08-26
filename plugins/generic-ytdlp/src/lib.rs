@@ -320,6 +320,7 @@ pub enum ParseError {
     DrmUnsupported,
     UnsupportedProtection,
     SecretHeader,
+    UnsupportedFormat,
 }
 
 #[derive(Debug, Deserialize)]
@@ -349,7 +350,19 @@ pub fn parse_machine_output(bytes: &[u8]) -> Result<ResolvedMedia, ParseError> {
     if bytes.len() > MAX_JSON_BYTES {
         return Err(ParseError::Oversized);
     }
-    let output: MachineOutput = serde_json::from_slice(bytes).map_err(|error| {
+    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {
+        if error.to_string().contains("unknown field") {
+            ParseError::UnsupportedSchema
+        } else if error.is_data() {
+            ParseError::InvalidField
+        } else {
+            ParseError::Malformed
+        }
+    })?;
+    if value.get("error").and_then(serde_json::Value::as_str) == Some("UNSUPPORTED_FORMAT") {
+        return Err(ParseError::UnsupportedFormat);
+    }
+    let output: MachineOutput = serde_json::from_value(value).map_err(|error| {
         if error.to_string().contains("unknown field") {
             ParseError::UnsupportedSchema
         } else if error.is_data() {
@@ -456,6 +469,16 @@ impl Default for GenericYtdlpAdapter {
 impl GenericYtdlpAdapter {
     #[cfg(test)]
     fn with_runner(runner: Arc<dyn ProcessRunner>) -> Self {
+        Self {
+            runner,
+            runtime_enabled: true,
+        }
+    }
+
+    /// Construct the explicitly admitted verification/runtime adapter. The
+    /// production registry continues to use `Default`, which is disabled.
+    #[cfg(feature = "runtime-prep")]
+    pub fn with_runtime_runner(runner: Arc<dyn ProcessRunner>) -> Self {
         Self {
             runner,
             runtime_enabled: true,

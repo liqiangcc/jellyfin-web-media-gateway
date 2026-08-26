@@ -14,6 +14,7 @@ import os
 import socket
 import subprocess
 import sys
+import urllib.parse
 from typing import Any
 
 from yt_dlp import YoutubeDL
@@ -26,6 +27,10 @@ EXPECTED_COMMIT = "3a08beaf031ab68f966401ead017ac81fe8486cf"
 MAX_FRAME = 128 * 1024
 MAX_BODY = 96 * 1024
 _BROKER_STREAM: socket.socket | None = None
+
+
+class UnsupportedFormat(Exception):
+    """The fixed first-playback policy cannot represent the extraction."""
 
 
 def _read_exact(stream: socket.socket, size: int) -> bytes:
@@ -72,6 +77,8 @@ class BrokerRH(RequestHandler):
         if request.proxies:
             raise RequestError("proxy configuration is not admitted")
         headers = self._get_headers(request)
+        if any(_is_secret_header(name, value) for name, value in headers.items()):
+            raise RequestError("secret request headers are not admitted")
         if request.data is not None and not isinstance(request.data, bytes):
             raise RequestError("streaming request bodies are not admitted")
         response = _broker_request(
@@ -140,12 +147,13 @@ class BrokerOnlyYDL(YoutubeDL):
 
 
 def _ydl() -> BrokerOnlyYDL:
-    return BrokerOnlyYDL(
+    ydl = BrokerOnlyYDL(
         {
             "quiet": True,
             "no_warnings": True,
             "simulate": True,
             "skip_download": True,
+            "noplaylist": True,
             "http_headers": {},
             "proxy": None,
             "geo_verification_proxy": None,
@@ -165,6 +173,11 @@ def _ydl() -> BrokerOnlyYDL:
         },
         auto_init=False,
     )
+    # auto_init=False is required so the worker owns initialization and never
+    # loads arbitrary CLI/plugin state. The frozen built-in extractors are
+    # then explicitly installed into this API-owned instance.
+    ydl.add_default_info_extractors()
+    return ydl
 
 
 def _probe(url: str) -> dict[str, Any]:
@@ -186,6 +199,100 @@ def _probe(url: str) -> dict[str, Any]:
             }
         ],
     }
+
+
+def _is_secret_header(name: str, value: str) -> bool:
+    normalized_name = name.lower().replace("_", "-")
+    normalized_value = value.strip().lower()
+    return normalized_name in {
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+        "x-api-key",
+        "x-auth-token",
+        "proxy-authenticate",
+        "www-authenticate",
+        "api-key",
+        "access-token",
+        "refresh-token",
+        "id-token",
+    } or normalized_value.startswith(("bearer ", "basic "))
+
+
+def _public_headers(info: dict[str, Any], fmt: dict[str, Any]) -> dict[str, str]:
+    headers = fmt.get("http_headers") or info.get("http_headers") or {}
+    if not isinstance(headers, dict):
+        raise UnsupportedFormat
+    public: dict[str, str] = {}
+    for name, value in headers.items():
+        if not isinstance(name, str) or not isinstance(value, str):
+            raise UnsupportedFormat
+        if _is_secret_header(name, value):
+            raise UnsupportedFormat
+        public[name] = value
+    return public
+
+
+def _is_muxed(fmt: dict[str, Any]) -> bool:
+    # Direct video responses from the generic extractor have no codec fields;
+    # a present value means that codec is known, while only the literal
+    # ``none`` is an explicit audio-only/video-only marker.
+    return fmt.get("vcodec") != "none" and fmt.get("acodec") != "none"
+
+
+def _extract(url: str) -> dict[str, Any]:
+    with _ydl() as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    if not isinstance(info, dict) or info.get("_type") in {"playlist", "multi_video"}:
+        raise UnsupportedFormat
+    formats = info.get("formats") or []
+    if not isinstance(formats, list):
+        raise UnsupportedFormat
+
+    for fmt in reversed(formats):
+        if not isinstance(fmt, dict) or not _is_muxed(fmt):
+            continue
+        raw_url = fmt.get("url")
+        if not isinstance(raw_url, str):
+            continue
+        parsed = urllib.parse.urlparse(raw_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            continue
+        protocol = fmt.get("protocol")
+        if protocol in {"m3u8", "m3u8_native"}:
+            stream_url = fmt.get("manifest_url") or raw_url
+            output_protocol = "hls"
+        elif protocol in {"http", "https", None} and (
+            not info.get("direct") or fmt.get("ext") not in {None, "unknown", "unknown_video"}
+        ):
+            stream_url = raw_url
+            output_protocol = "http-file"
+        else:
+            continue
+        if not isinstance(stream_url, str):
+            continue
+        stream_parsed = urllib.parse.urlparse(stream_url)
+        if stream_parsed.scheme not in {"http", "https"} or not stream_parsed.netloc:
+            continue
+        title = info.get("title")
+        if not isinstance(title, str) or not title.strip():
+            raise UnsupportedFormat
+        return {
+            "title": title,
+            "protection": "clear",
+            "streams": [
+                {
+                    "id": str(fmt.get("format_id") or "primary"),
+                    "protocol": output_protocol,
+                    "url": stream_url,
+                    "public_headers": _public_headers(info, fmt),
+                    "upstream_access_ref": None,
+                }
+            ],
+        }
+    raise UnsupportedFormat
 
 
 def _network_matrix(url: str) -> dict[str, Any]:
@@ -339,6 +446,11 @@ def main() -> int:
     url = sys.argv[2] if len(sys.argv) > 2 else "https://fixture.example.test/media"
     if action == "probe":
         result = _probe(url)
+    elif action == "extract":
+        try:
+            result = _extract(url)
+        except UnsupportedFormat:
+            result = {"error": "UNSUPPORTED_FORMAT"}
     elif action == "multi-probe":
         _probe(url)
         result = _probe(url)
