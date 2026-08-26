@@ -171,6 +171,40 @@ fn navigation_request_retry_is_idempotent_and_direction_mismatch_is_rejected() {
 }
 
 #[test]
+fn two_prepared_navigation_tickets_from_one_revision_only_one_commits() {
+    let mut session = navigable_session();
+    let next_ticket =
+        session.navigation_ticket("session-a", NavigationDirection::Next, locator("next"));
+    let previous_ticket = session.navigation_ticket(
+        "session-a",
+        NavigationDirection::Previous,
+        locator("previous"),
+    );
+
+    session
+        .commit_prepared_navigation(
+            envelope("next-race", 0, Command::NextItem),
+            &next_ticket,
+            "item-next",
+            "media-next",
+        )
+        .expect("one navigation may commit");
+    let rejected = session
+        .commit_prepared_navigation(
+            envelope("previous-race", 0, Command::PreviousItem),
+            &previous_ticket,
+            "item-previous",
+            "media-previous",
+        )
+        .expect_err("the second old-revision navigation must be stale");
+
+    assert_eq!(rejected, CommandError::NavigationStale);
+    assert_eq!(session.current_item_id(), "item-next");
+    assert_eq!(session.item_revision(), 2);
+    assert_eq!(session.session_revision(), 1);
+}
+
+#[test]
 fn position_telemetry_does_not_advance_command_revision() {
     let mut session = session();
     let item_id = session.current_item_id().to_owned();
