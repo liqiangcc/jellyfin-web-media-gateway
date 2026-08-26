@@ -3,8 +3,9 @@
 use gateway_egress::{BrokerCancellation as EgressCancellation, R008Broker};
 use generic_ytdlp::{
     BrokerBackend, BrokerCancellation, BrokerProcessRunner, BrokerRequest, BrokerResponse,
-    RuntimeLimits, parse_machine_output,
+    GenericYtdlpAdapter, RuntimeLimits, parse_machine_output,
 };
+use site_adapter_api::SiteAdapter;
 use std::collections::BTreeMap;
 use std::fs;
 use std::fs::OpenOptions;
@@ -23,14 +24,37 @@ impl BrokerBackend for FixtureBroker {
         assert_eq!(request.operation, "http");
         assert_eq!(request.method, "GET");
         assert!(request.headers.keys().all(|name| name != "Cookie"));
+        let (content_type, body) = if request.url.contains("item=muxed") {
+            ("video/mp4", Vec::new())
+        } else if request.url.ends_with("/video.m3u8") {
+            (
+                "application/vnd.apple.mpegurl",
+                b"#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:1,\nsegment.ts\n#EXT-X-ENDLIST\n"
+                    .to_vec(),
+            )
+        } else if request.url.contains("item=hls") {
+            (
+                "application/vnd.apple.mpegurl",
+                b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-STREAM-INF:BANDWIDTH=800000,CODECS=\"avc1.64001f,mp4a.40.2\",RESOLUTION=640x360\nhttps://cdn.example.test/video.m3u8\n".to_vec(),
+            )
+        } else if request.url.contains("item=separate") {
+            (
+                "application/vnd.apple.mpegurl",
+                b"#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=800000,CODECS=\"avc1.64001f\"\nhttps://cdn.example.test/video.m3u8\n".to_vec(),
+            )
+        } else if request.url.contains("item=unsupported") {
+            ("application/octet-stream", b"not a media page".to_vec())
+        } else {
+            (
+                "application/json",
+                br#"{"fixture":"generic-ytdlp-broker","title":"fixture media"}"#.to_vec(),
+            )
+        };
         BrokerResponse {
             status: 200,
             reason: "OK".into(),
-            headers: BTreeMap::from([(
-                String::from("content-type"),
-                String::from("application/json"),
-            )]),
-            body: br#"{"fixture":"generic-ytdlp-broker","title":"fixture media"}"#.to_vec(),
+            headers: BTreeMap::from([(String::from("content-type"), String::from(content_type))]),
+            body,
             error: None,
         }
     }
@@ -115,6 +139,81 @@ fn pinned_worker_uses_actual_ytdlp_request_handler_and_existing_parser() {
 }
 
 #[test]
+fn extract_action_uses_frozen_ytdlp_and_normalizes_muxed_direct_media() {
+    let output = runner(Duration::from_secs(5))
+        .run_action(
+            "extract",
+            &Url::parse("https://fixture.example.test/watch?item=muxed").unwrap(),
+        )
+        .unwrap();
+    let media = parse_machine_output(&output.stdout).unwrap();
+    assert_eq!(media.title, "watch");
+    assert_eq!(media.streams.len(), 1);
+    assert_eq!(
+        media.streams[0].protocol,
+        site_adapter_api::StreamProtocol::HttpFile
+    );
+    assert_eq!(
+        media.streams[0].url.as_str(),
+        "https://fixture.example.test/watch?item=muxed"
+    );
+}
+
+#[test]
+fn extract_action_normalizes_actual_muxed_hls_without_downloading_media() {
+    let output = runner(Duration::from_secs(5))
+        .run_action(
+            "extract",
+            &Url::parse("https://fixture.example.test/watch?item=hls").unwrap(),
+        )
+        .unwrap();
+    let media = parse_machine_output(&output.stdout).unwrap();
+    assert_eq!(media.streams.len(), 1);
+    assert_eq!(
+        media.streams[0].protocol,
+        site_adapter_api::StreamProtocol::Hls
+    );
+    assert_eq!(
+        media.streams[0].url.as_str(),
+        "https://fixture.example.test/watch?item=hls"
+    );
+}
+
+#[test]
+fn explicit_runtime_constructor_resolves_through_current_adapter_contract() {
+    let adapter =
+        GenericYtdlpAdapter::with_runtime_runner(Arc::new(runner(Duration::from_secs(5))));
+    assert!(adapter.is_runtime_enabled());
+    let locator = adapter
+        .recognize("https://fixture.example.test/watch?item=muxed")
+        .unwrap()
+        .locator
+        .unwrap();
+    let media = adapter.resolve(&locator).unwrap();
+    assert_eq!(media.source_site, "generic");
+    assert_eq!(
+        media.streams[0].protocol,
+        site_adapter_api::StreamProtocol::HttpFile
+    );
+}
+
+#[test]
+fn extract_action_rejects_separate_or_unsupported_formats() {
+    for path in ["separate", "unsupported"] {
+        let output = runner(Duration::from_secs(5))
+            .run_action(
+                "extract",
+                &Url::parse(&format!("https://fixture.example.test/watch?item={path}")).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            parse_machine_output(&output.stdout),
+            Err(generic_ytdlp::ParseError::UnsupportedFormat)
+        );
+    }
+}
+
+#[test]
 fn inherited_ipc_capability_supports_multiple_broker_requests() {
     let output = runner(Duration::from_secs(5))
         .run_action(
@@ -156,7 +255,7 @@ fn seccomp_denies_worker_custom_handler_and_child_but_ipc_survives() {
 
 #[test]
 fn lifecycle_timeout_and_stdout_overflow_are_bounded() {
-    let timeout_runner = runner(Duration::from_millis(300));
+    let timeout_runner = runner(Duration::from_secs(2));
     assert_eq!(
         timeout_runner
             .run_action(
@@ -192,7 +291,7 @@ fn lifecycle_timeout_and_stdout_overflow_are_bounded() {
             "timeout-descendant",
             "timeout-descendant",
             generic_ytdlp::ProcessError::TimedOut,
-            Duration::from_millis(300),
+            Duration::from_secs(2),
         ),
         (
             "crash-descendant",

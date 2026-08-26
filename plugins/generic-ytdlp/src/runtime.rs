@@ -315,7 +315,11 @@ fn close_unadmitted_fds() -> io::Result<()> {
 
 impl crate::ProcessRunner for BrokerProcessRunner {
     fn run(&self, request: &ProcessRequest) -> Result<ProcessOutput, ProcessError> {
-        self.run_child("probe", request.source_url(), BrokerCancellation::default())
+        self.run_child(
+            "extract",
+            request.source_url(),
+            BrokerCancellation::default(),
+        )
     }
 }
 
