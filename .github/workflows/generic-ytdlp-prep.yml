@@ -62,7 +62,8 @@ jobs:
           toolchain: stable
           components: rustfmt,clippy
       - name: Assert x86_64 Rust target
-        run: rustc -vV | grep -q 'host: x86_64-unknown-linux-gnu'
+        run: |
+          rustc -vV | grep -q 'host: x86_64-unknown-linux-gnu'
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -120,7 +121,8 @@ jobs:
         with:
           toolchain: stable
       - name: Assert AArch64 Rust target
-        run: rustc -vV | grep -q 'host: aarch64-unknown-linux-gnu'
+        run: |
+          rustc -vV | grep -q 'host: aarch64-unknown-linux-gnu'
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
