@@ -54,10 +54,16 @@ jobs:
           persist-credentials: false
       - name: Assert exact Candidate SHA
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - name: Assert x86_64 execution target
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: test "$(uname -m)" = x86_64
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
           components: rustfmt,clippy
+      - name: Assert x86_64 Rust target
+        run: |
+          rustc -vV | grep -q 'host: x86_64-unknown-linux-gnu'
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -90,11 +96,12 @@ jobs:
           cargo test -p generic-ytdlp --all-targets -- --nocapture
           cargo test -p generic-ytdlp --features runtime-prep --test smoke -- --nocapture
           cargo test -p generic-ytdlp --features runtime-prep --test runtime -- --nocapture
+          cargo test -p generic-ytdlp --features runtime-prep --bin ytdlp-sandbox -- --nocapture
           bash -n scripts/generic-ytdlp-real-smoke.sh
 
   j2-boundaries:
     name: J2 sandbox and escape matrix
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
       - name: Validate candidate identity
@@ -107,9 +114,15 @@ jobs:
           persist-credentials: false
       - name: Assert exact Candidate SHA
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - name: Assert AArch64 execution target
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: test "$(uname -m)" = aarch64
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+      - name: Assert AArch64 Rust target
+        run: |
+          rustc -vV | grep -q 'host: aarch64-unknown-linux-gnu'
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -128,6 +141,7 @@ jobs:
           cargo test -p generic-ytdlp --all-targets -- --nocapture
           cargo test -p generic-ytdlp --features runtime-prep --test smoke safe_broker -- --nocapture
           cargo test -p generic-ytdlp --features runtime-prep --test runtime -- --nocapture
+          cargo test -p generic-ytdlp --features runtime-prep --bin ytdlp-sandbox -- --nocapture
       - name: Verify no Core yt-dlp/process fallback and no network client
         shell: bash --noprofile --norc -euo pipefail {0}
         run: |
@@ -136,6 +150,13 @@ jobs:
           ! grep -RInE --exclude='generic-ytdlp-real-smoke.rs' 'gateway-core|reqwest|EgressPolicy|R008Broker' plugins/generic-ytdlp/src plugins/generic-ytdlp/Cargo.toml
           grep -q 'R008Broker' gateway-egress/src/lib.rs
           grep -q 'R008Broker::default' plugins/generic-ytdlp/src/bin/generic-ytdlp-real-smoke.rs
+          grep -q 'target_arch = "x86_64"' plugins/generic-ytdlp/src/bin/ytdlp-sandbox.rs
+          grep -q 'target_arch = "aarch64"' plugins/generic-ytdlp/src/bin/ytdlp-sandbox.rs
+          grep -q 'AUDIT_ARCH_AARCH64' plugins/generic-ytdlp/src/bin/ytdlp-sandbox.rs
+          grep -q 'CURRENT_AUDIT_ARCH' plugins/generic-ytdlp/src/bin/ytdlp-sandbox.rs
+          grep -q 'compile_error!' plugins/generic-ytdlp/src/bin/ytdlp-sandbox.rs
+          grep -q 'libc::SYS_socket as u32' plugins/generic-ytdlp/src/bin/ytdlp-sandbox.rs
+          grep -q 'libc::SYS_socketpair as u32' plugins/generic-ytdlp/src/bin/ytdlp-sandbox.rs
           grep -q 'SYS_socketpair' plugins/generic-ytdlp/src/bin/ytdlp-sandbox.rs
           grep -q 'DisabledRunner' plugins/generic-ytdlp/src/lib.rs
           bash scripts/check-core-site-boundary.sh
