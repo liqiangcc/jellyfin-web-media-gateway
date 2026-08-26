@@ -460,8 +460,7 @@ impl ChromiumBrowserWorker {
         set_private_permissions(&profile_dir);
         let port = reserve_loopback_port().await?;
         let mut command = tokio::process::Command::new(executable);
-        configure_chromium_environment(&mut command, &profile_dir)
-            .map_err(|_| BrowserError::WorkerUnavailable)?;
+        configure_chromium_environment(&mut command, &profile_dir);
         command
             .args(CHROMIUM_FIXED_ARGS)
             .arg(format!("--remote-debugging-port={port}"))
@@ -763,30 +762,13 @@ impl ChromiumBrowserWorker {
     }
 }
 
-fn configure_chromium_environment(
-    command: &mut tokio::process::Command,
-    profile_dir: &Path,
-) -> std::io::Result<()> {
-    let temp_dir = profile_dir.join("tmp");
-    let config_dir = profile_dir.join("config");
-    let cache_dir = profile_dir.join("cache");
-    fs::create_dir_all(&temp_dir)?;
-    fs::create_dir_all(&config_dir)?;
-    fs::create_dir_all(&cache_dir)?;
-    set_private_permissions(&temp_dir);
-    set_private_permissions(&config_dir);
-    set_private_permissions(&cache_dir);
-
+fn configure_chromium_environment(command: &mut tokio::process::Command, profile_dir: &Path) {
     command
         .env_clear()
         .env("HOME", profile_dir)
-        .env("TMPDIR", temp_dir)
-        .env("XDG_CONFIG_HOME", config_dir)
-        .env("XDG_CACHE_HOME", cache_dir)
         .env("LANG", "C.UTF-8")
         .env("LC_ALL", "C.UTF-8")
         .env("PATH", CHILD_PATH);
-    Ok(())
 }
 
 impl BrowserWorker for ChromiumBrowserWorker {
@@ -1242,7 +1224,7 @@ mod tests {
         command
             .env("HTTP_PROXY", "proxy-sentinel")
             .env("BROWSER_SECRET_SENTINEL", "secret-sentinel");
-        configure_chromium_environment(&mut command, &profile_dir).unwrap();
+        configure_chromium_environment(&mut command, &profile_dir);
         command.args(CHROMIUM_FIXED_ARGS);
 
         let args = command
@@ -1282,9 +1264,6 @@ mod tests {
             Some(CHILD_PATH)
         );
         assert!(environment.contains_key("HOME"));
-        assert!(environment.contains_key("TMPDIR"));
-        assert!(environment.contains_key("XDG_CONFIG_HOME"));
-        assert!(environment.contains_key("XDG_CACHE_HOME"));
 
         remove_profile(&profile_dir);
     }
