@@ -14,10 +14,165 @@ permissions:
   contents: read
 
 jobs:
-  j1-contract:
-    name: J1 deterministic Browser Worker contract suite
+  j1-real-chromium:
+    name: J1 real Chromium hosted lifecycle smoke
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+      - name: Discover allowlisted preinstalled browser
+        run: |
+          browser=''
+          for candidate in google-chrome-stable google-chrome chromium chromium-browser; do
+            if command -v "$candidate" >/dev/null 2>&1; then
+              browser="$candidate"
+              break
+            fi
+          done
+          test -n "$browser"
+          echo "browser_class=$browser"
+          "$browser" --version | head -1
+      - name: Verify hosted Chrome CDP endpoint
+        run: |
+          browser=''
+          for candidate in google-chrome-stable google-chrome chromium chromium-browser; do
+            if command -v "$candidate" >/dev/null 2>&1; then
+              browser="$candidate"
+              break
+            fi
+          done
+          test -n "$browser"
+          browser_path="$(command -v "$browser")"
+          test -x "$browser_path"
+          profile="$(mktemp -d)"
+          port="$(python3 - <<'PY'
+          import socket
+          with socket.socket() as sock:
+              sock.bind(('127.0.0.1', 0))
+              print(sock.getsockname()[1])
+          PY
+          )"
+          log="$profile/stderr.log"
+          env -i \
+            HOME="$profile" \
+            LANG=C.UTF-8 \
+            LC_ALL=C.UTF-8 \
+            PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+          "$browser_path" \
+            --headless=new \
+            --disable-gpu \
+            --disable-dev-shm-usage \
+            --disable-background-networking \
+            --disable-component-update \
+            --disable-default-apps \
+            --disable-extensions \
+            --disable-features=Translate,OptimizationHints,MediaRouter \
+            --no-first-run \
+            --no-default-browser-check \
+            --no-proxy-server \
+            --remote-allow-origins='*' \
+            --remote-debugging-address=127.0.0.1 \
+            --remote-debugging-port="$port" \
+            --user-data-dir="$profile/data" \
+            about:blank >/dev/null 2>"$log" &
+          pid=$!
+          ready=''
+          for _ in $(seq 1 80); do
+            if curl --silent --fail "http://127.0.0.1:$port/json/list" | grep -q 'webSocketDebuggerUrl'; then
+              ready=1
+              break
+            fi
+            sleep 0.1
+          done
+          if [ -z "$ready" ]; then
+            echo 'hosted Chrome did not expose a CDP page endpoint'
+            sed -n '1,120p' "$log"
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            exit 1
+          fi
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+          cleaned=''
+          for _ in $(seq 1 30); do
+            if rm -rf "$profile" 2>/dev/null; then
+              cleaned=1
+              break
+            fi
+            sleep 0.1
+          done
+          test "$cleaned" = 1
+          test ! -e "$profile"
+      - name: Run real lifecycle/navigation smoke
+        run: cargo test -p gateway-core --lib browser_chromium::tests::real_chromium_lifecycle_navigation_events_and_cleanup -- --exact --nocapture
+
+  j2-input-panel:
+    name: J2 real Chromium input and NativePanel seam
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Discover allowlisted preinstalled browser
+        run: |
+          found=0
+          for candidate in google-chrome-stable google-chrome chromium chromium-browser; do
+            if command -v "$candidate" >/dev/null 2>&1; then
+              "$candidate" --version | head -1
+              found=1
+              break
+            fi
+          done
+          test "$found" = 1
+      - name: Run input and panel seam smoke
+        run: cargo test -p gateway-core --lib browser_chromium::tests::generic_input_and_native_panel_boundary_are_bounded -- --exact --nocapture
+
+  j3-boundary-failure:
+    name: J3 R008 boundary and failure matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Run real R008 and cleanup cases
+        run: |
+          cargo test -p gateway-core --lib browser_chromium::tests::private_navigation_and_stale_session_are_denied -- --exact --nocapture
+          cargo test -p gateway-core --lib browser_chromium::tests::cancellation_and_browser_exit_are_observable_and_isolated -- --exact --nocapture
+          cargo test -p gateway-core --lib browser_chromium::tests::close_cleanup_and_timeout_leave_no_owned_profile -- --exact --nocapture
+          cargo test -p gateway-core --lib browser::tests::navigation_uses_r008_policy_and_denies_local_file_and_private_targets -- --exact --nocapture
+          cargo test -p gateway-core --lib browser::tests::configured_local_service_is_explicit_and_not_user_selectable -- --exact --nocapture
+      - name: Check generic runtime boundary
+        run: |
+          ! rg -n -i 'bilibili|youtube|dom selector' gateway-core/src/browser_chromium.rs
+          ! rg -n -i 'cpu|rss|thermal|always.?on|on.?demand|pool size|phone' gateway-core/src/browser_chromium.rs
+          ! rg -n -- '--no-sandbox' gateway-core/src/browser_chromium.rs .github/workflows/r006-browser-contract.yml
+
+  j4-regressions:
+    name: J4 workspace and accepted contract/security regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -32,47 +187,7 @@ jobs:
         run: |
           cargo fmt --all -- --check
           cargo clippy --workspace --all-targets -- -D warnings
-      - name: Run C1-C5/C7/C8 deterministic fake-worker suite
+      - name: Run deterministic Browser contract suite
         run: cargo test -p gateway-core --lib browser::tests -- --nocapture
-
-  j2-security-failure:
-    name: J2 navigation, stale capability, panel, and cleanup suite
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-      - name: Assert exact Candidate SHA
-        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
-      - name: Run security and failure cases
-        run: |
-          cargo test -p gateway-core --lib browser::tests::navigation_uses_r008_policy_and_denies_local_file_and_private_targets -- --exact --nocapture
-          cargo test -p gateway-core --lib browser::tests::configured_local_service_is_explicit_and_not_user_selectable -- --exact --nocapture
-          cargo test -p gateway-core --lib browser::tests::profile_refs_are_opaque_and_expiry_is_rejected_and_cleaned -- --exact --nocapture
-          cargo test -p gateway-core --lib browser::tests::debug_does_not_expose_sensitive_input_or_command_payloads -- --exact --nocapture
-          cargo test -p gateway-core --lib browser::tests::debug_does_not_expose_sensitive_event_navigation_urls -- --exact --nocapture
-          cargo test -p gateway-core --lib browser::tests::panel_is_bound_short_lived_reconnectable_and_deny_by_default -- --exact --nocapture
-          cargo test -p gateway-core --lib browser::tests::panel_expiry_and_worker_failure_disconnect_and_cleanup -- --exact --nocapture
-          cargo test -p gateway-core --lib browser::tests::cancel_crash_timeout_and_close_have_explicit_outcomes_and_cleanup -- --exact --nocapture
-      - name: Check generic boundary has no concrete-site knowledge
-        run: |
-          ! rg -n -i 'bilibili|youtube|dom selector' gateway-core/src/browser.rs
-          ! rg -n -i 'cpu|rss|thermal|always.?on|on.?demand|pool size|phone' gateway-core/src/browser.rs
-
-  j3-regressions:
-    name: J3 workspace and accepted R007/R008 regressions
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-      - name: Assert exact Candidate SHA
-        run: test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
-      - name: Install Rust stable
-        run: |
-          rustup toolchain install stable --profile minimal --component rustfmt,clippy
-          rustup default stable
       - name: Run exact-Candidate workspace regressions
-        run: cargo test --workspace --all-targets
+        run: cargo test --workspace --all-targets -- --test-threads=1

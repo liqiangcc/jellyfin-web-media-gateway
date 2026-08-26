@@ -24,6 +24,7 @@ use uuid::Uuid;
 
 pub mod auth;
 pub mod browser;
+pub mod browser_chromium;
 pub mod control;
 #[cfg(test)]
 mod control_contract_tests;
