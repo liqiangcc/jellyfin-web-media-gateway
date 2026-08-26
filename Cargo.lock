@@ -251,10 +251,15 @@ dependencies = [
 name = "generic-ytdlp"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
+ "gateway-core",
  "generic-direct",
+ "libc",
+ "reqwest",
  "serde",
  "serde_json",
  "site-adapter-api",
+ "tokio",
  "url",
 ]
 

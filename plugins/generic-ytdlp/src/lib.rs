@@ -32,6 +32,14 @@ pub const SITE_ID: &str = "generic";
 pub const LOCATOR_VERSION: u32 = 1;
 pub const RECOGNITION_PRIORITY: u16 = 1;
 
+#[cfg(feature = "runtime-prep")]
+mod runtime;
+
+#[cfg(feature = "runtime-prep")]
+pub use runtime::{
+    BrokerBackend, BrokerProcessRunner, BrokerRequest, BrokerResponse, R008Broker, RuntimeLimits,
+};
+
 const MAX_INPUT_BYTES: usize = 16 * 1024;
 const MAX_JSON_BYTES: usize = 256 * 1024;
 const MAX_TITLE_BYTES: usize = 1024;
@@ -115,6 +123,8 @@ pub enum ProcessError {
     StdoutLimitExceeded,
     StderrLimitExceeded,
     NonZeroExit,
+    BrokerIo,
+    BrokerProtocol,
     Disabled,
 }
 
