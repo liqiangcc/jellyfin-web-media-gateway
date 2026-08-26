@@ -124,9 +124,12 @@ class FrozenCacheTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": temporary}, clear=False):
                 parent, cache_dir = cache._cache_paths(os.geteuid())
-                old = self.make_cache(parent, version="old", commit=cache.FROZEN_COMMIT)
+                self.make_cache(parent, version="old", commit=cache.FROZEN_COMMIT)
+                rebuild_calls = 0
 
                 def rebuild(_python: str, site_dir: Path) -> bool:
+                    nonlocal rebuild_calls
+                    rebuild_calls += 1
                     site_dir.mkdir(parents=True)
                     write_fixture(site_dir)
                     return True
@@ -134,7 +137,7 @@ class FrozenCacheTests(unittest.TestCase):
                 with mock.patch.object(cache, "_install_frozen", side_effect=rebuild):
                     state, _ = cache.prepare(sys.executable)
                 self.assertEqual(state, "prepared")
-                self.assertFalse(old.exists())
+                self.assertEqual(rebuild_calls, 1)
                 self.assertTrue(cache.verify_cache(sys.executable, cache_dir, os.geteuid()))
 
                 cache.invalidate()
