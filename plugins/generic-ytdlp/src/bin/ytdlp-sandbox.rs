@@ -14,9 +14,31 @@ const SECCOMP_MODE_FILTER: libc::c_ulong = 2;
 const SECCOMP_RET_KILL_PROCESS: u32 = 0x8000_0000;
 const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
 const EPERM: u32 = 1;
-const AUDIT_ARCH_X86_64: u32 = 0xc000_003e;
 const SECCOMP_DATA_ARCH: u32 = 4;
 const SECCOMP_DATA_NR: u32 = 0;
+
+// These values are the Linux UAPI AUDIT_ARCH_* values from
+// linux/uapi/linux/audit.h. Keep the selected value target-bound: accepting a
+// second architecture in one binary would make the syscall policy ambiguous.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const AUDIT_ARCH_X86_64: u32 = 0xc000_003e;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const CURRENT_AUDIT_ARCH: u32 = AUDIT_ARCH_X86_64;
+
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const AUDIT_ARCH_AARCH64: u32 = 0xc000_00b7;
+
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const CURRENT_AUDIT_ARCH: u32 = AUDIT_ARCH_AARCH64;
+
+// This binary is deliberately Linux-only and must never silently select the
+// x86_64 policy for an unsupported target.
+#[cfg(not(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+)))]
+compile_error!("ytdlp-sandbox supports only Linux x86_64 and AArch64");
 
 fn stmt(code: u16, k: u32) -> libc::sock_filter {
     libc::sock_filter {
@@ -32,8 +54,6 @@ fn jump(code: u16, k: u32, jt: u8, jf: u8) -> libc::sock_filter {
 }
 
 fn install_filter() -> Result<(), String> {
-    // Only the hosted x64 Linux worker is currently an evidence target. An
-    // unsupported architecture fails closed rather than running unsandboxed.
     let filter = [
         stmt(
             (libc::BPF_LD | libc::BPF_W | libc::BPF_ABS) as u16,
@@ -41,7 +61,7 @@ fn install_filter() -> Result<(), String> {
         ),
         jump(
             (libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K) as u16,
-            AUDIT_ARCH_X86_64,
+            CURRENT_AUDIT_ARCH,
             1,
             0,
         ),
@@ -87,6 +107,19 @@ fn install_filter() -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn audit_arch_is_exactly_bound_to_the_compile_target() {
+        let expected = match std::env::consts::ARCH {
+            "x86_64" => 0xc000_003e,
+            "aarch64" => 0xc000_00b7,
+            architecture => panic!("unsupported architecture: {architecture}"),
+        };
+        assert_eq!(super::CURRENT_AUDIT_ARCH, expected);
+    }
 }
 
 fn main() -> ExitCode {
