@@ -1,5 +1,9 @@
-use crate::playback::{Command, CommandEnvelope, CommandError, PlaybackSession, PlaybackState};
+use crate::playback::{
+    Command, CommandEnvelope, CommandError, CommandResult, NavigationTicket, PlaybackSession,
+    PlaybackState,
+};
 use serde::{Deserialize, Serialize};
+use site_adapter_api::SourceLocator;
 use std::collections::{HashMap, VecDeque};
 #[cfg(any(test, feature = "control-ui-harness"))]
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -117,28 +121,58 @@ pub enum ControlCommand {
     Pause,
     Seek { position_ms: u64 },
     Stop,
+    NextItem,
+    PreviousItem,
     BeginHandoff { target_display_id: String },
 }
 
 impl ControlCommand {
     fn validate(&self) -> Result<(), ControlValidationError> {
         match self {
-            Self::Seek { .. } | Self::Play | Self::Pause | Self::Stop => Ok(()),
+            Self::Seek { .. }
+            | Self::Play
+            | Self::Pause
+            | Self::Stop
+            | Self::NextItem
+            | Self::PreviousItem => Ok(()),
             Self::BeginHandoff { target_display_id } => {
                 validate_bounded_identifier(target_display_id, MAX_DISPLAY_ID_BYTES, "display_id")
             }
         }
     }
 
-    fn into_playback(self) -> Command {
+    pub(crate) fn into_playback(self) -> Command {
         match self {
             Self::Play => Command::Play,
             Self::Pause => Command::Pause,
             Self::Seek { position_ms } => Command::Seek(position_ms),
             Self::Stop => Command::Stop,
+            Self::NextItem => Command::NextItem,
+            Self::PreviousItem => Command::PreviousItem,
             Self::BeginHandoff { target_display_id } => Command::BeginHandoff { target_display_id },
         }
     }
+
+    pub(crate) fn is_navigation(&self) -> bool {
+        matches!(self, Self::NextItem | Self::PreviousItem)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct NavigationSourceSnapshot {
+    pub session_id: String,
+    pub session_revision: u64,
+    pub item_id: String,
+    pub item_revision: u64,
+    pub source_locator: SourceLocator,
+}
+
+pub(crate) enum NavigationStart {
+    Replay(Result<CommandResult, CommandError>),
+    Prepare {
+        envelope: CommandEnvelope,
+        snapshot: NavigationSourceSnapshot,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -333,6 +367,7 @@ impl ControlService {
         item_id: String,
         media_descriptor: String,
         display_id: String,
+        source_locator: SourceLocator,
     ) -> Result<ControlSnapshot, ControlPublicationError> {
         #[cfg(test)]
         if self.fail_next_publication.swap(false, Ordering::SeqCst) {
@@ -344,7 +379,12 @@ impl ControlService {
             return Err(ControlPublicationError::AlreadyExists);
         }
         let record = SessionRecord {
-            playback: PlaybackSession::new(item_id, media_descriptor, display_id),
+            playback: PlaybackSession::new_with_source_locator(
+                item_id,
+                media_descriptor,
+                display_id,
+                Some(source_locator),
+            ),
             next_cursor: 0,
             events: VecDeque::with_capacity(self.event_limit),
         };
@@ -480,6 +520,126 @@ impl ControlService {
         })
     }
 
+    pub(crate) fn begin_navigation(
+        &self,
+        session_id: &str,
+        request: ControlCommandRequest,
+    ) -> Result<NavigationStart, ControlCommandError> {
+        request
+            .validate()
+            .map_err(ControlCommandError::Validation)?;
+        let session = self
+            .session(session_id)
+            .map_err(|_| ControlCommandError::NotFound)?;
+        let record = session.lock().expect("control session poisoned");
+        let envelope = CommandEnvelope {
+            request_id: request.request_id,
+            expected_session_revision: request.expected_session_revision,
+            command: request.command.into_playback(),
+        };
+        if let Some(outcome) = record
+            .playback
+            .request_outcome(&envelope)
+            .map_err(ControlCommandError::Playback)?
+        {
+            return Ok(NavigationStart::Replay(outcome));
+        }
+        record
+            .playback
+            .validate_navigation_request(&envelope)
+            .map_err(ControlCommandError::Playback)?;
+        let source_locator = record.playback.current_source_locator().cloned().ok_or(
+            ControlCommandError::Playback(CommandError::NavigationUnsupported),
+        )?;
+        Ok(NavigationStart::Prepare {
+            envelope,
+            snapshot: NavigationSourceSnapshot {
+                session_id: session_id.to_owned(),
+                session_revision: record.playback.session_revision(),
+                item_id: record.playback.current_item_id().to_owned(),
+                item_revision: record.playback.item_revision(),
+                source_locator,
+            },
+        })
+    }
+
+    pub(crate) fn commit_prepared_navigation(
+        &self,
+        session_id: &str,
+        envelope: CommandEnvelope,
+        ticket: &NavigationTicket,
+        item_id: String,
+        media_descriptor: String,
+    ) -> Result<ControlCommandResponse, ControlCommandError> {
+        let session = self
+            .session(session_id)
+            .map_err(|_| ControlCommandError::NotFound)?;
+        let mut record = session.lock().expect("control session poisoned");
+        let is_replay = record
+            .playback
+            .request_outcome(&envelope)
+            .map_err(ControlCommandError::Playback)?
+            .is_some();
+        let result = record
+            .playback
+            .commit_prepared_navigation(envelope, ticket, item_id, media_descriptor)
+            .map_err(ControlCommandError::Playback)?;
+        if !is_replay {
+            append_event(
+                &mut record,
+                session_id,
+                ControlEventKind::CommandAccepted,
+                self.event_limit,
+            );
+        }
+        Ok(self.response_from_result(session_id, &record, result))
+    }
+
+    pub(crate) fn remember_navigation_failure(
+        &self,
+        session_id: &str,
+        envelope: &CommandEnvelope,
+        error: CommandError,
+    ) -> Result<ControlCommandResponse, ControlCommandError> {
+        let session = self
+            .session(session_id)
+            .map_err(|_| ControlCommandError::NotFound)?;
+        let mut record = session.lock().expect("control session poisoned");
+        let result = record
+            .playback
+            .remember_navigation_failure(envelope, error)
+            .map_err(ControlCommandError::Playback)?;
+        Ok(self.response_from_result(session_id, &record, result))
+    }
+
+    pub(crate) fn replay_navigation(
+        &self,
+        session_id: &str,
+        outcome: Result<CommandResult, CommandError>,
+    ) -> Result<ControlCommandResponse, ControlCommandError> {
+        let session = self
+            .session(session_id)
+            .map_err(|_| ControlCommandError::NotFound)?;
+        let record = session.lock().expect("control session poisoned");
+        let result = outcome.map_err(ControlCommandError::Playback)?;
+        Ok(self.response_from_result(session_id, &record, result))
+    }
+
+    fn response_from_result(
+        &self,
+        session_id: &str,
+        record: &SessionRecord,
+        result: CommandResult,
+    ) -> ControlCommandResponse {
+        ControlCommandResponse {
+            request_id: result.request_id,
+            status: "accepted",
+            session_revision: result.session_revision,
+            snapshot: snapshot_from_playback(session_id, &record.playback),
+            event_cursor: record.next_cursor,
+        }
+    }
+
     /// Trusted/internal telemetry hook. Invalid or stale callbacks are
     /// rejected by the R007 PlaybackSession and do not create events.
     pub fn apply_position_telemetry(
@@ -613,6 +773,30 @@ impl ControlCommandError {
                     transition_id: Some(*transition_id),
                 }
             }
+            Self::Playback(CommandError::NavigationUnsupported) => ControlErrorResponse {
+                code: "NAVIGATION_UNSUPPORTED",
+                message: "the current source does not provide navigation",
+                current_revision: None,
+                transition_id: None,
+            },
+            Self::Playback(CommandError::NavigationNoTarget) => ControlErrorResponse {
+                code: "NAVIGATION_NO_TARGET",
+                message: "the requested navigation edge has no item",
+                current_revision: None,
+                transition_id: None,
+            },
+            Self::Playback(CommandError::NavigationPreparationFailed) => ControlErrorResponse {
+                code: "NAVIGATION_PREPARE_FAILED",
+                message: "the requested item could not be prepared",
+                current_revision: None,
+                transition_id: None,
+            },
+            Self::Playback(CommandError::NavigationStale) => ControlErrorResponse {
+                code: "NAVIGATION_STALE",
+                message: "the prepared navigation no longer matches current playback",
+                current_revision: None,
+                transition_id: None,
+            },
         }
     }
 }

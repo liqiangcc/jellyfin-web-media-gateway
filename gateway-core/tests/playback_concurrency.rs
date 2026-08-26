@@ -1,6 +1,7 @@
 use gateway_core::playback::{
     Command, CommandEnvelope, CommandError, PlaybackSession, PlaybackState,
 };
+use site_adapter_api::{NavigationDirection, SourceLocator};
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 
@@ -14,6 +15,24 @@ fn envelope(request_id: &str, expected_session_revision: u64, command: Command) 
         expected_session_revision: Some(expected_session_revision),
         command,
     }
+}
+
+fn locator(payload: &str) -> SourceLocator {
+    SourceLocator {
+        site_id: "fixture".into(),
+        plugin_id: "fixture-navigation".into(),
+        locator_version: 1,
+        opaque_payload: payload.into(),
+    }
+}
+
+fn navigable_session() -> PlaybackSession {
+    PlaybackSession::new_with_source_locator(
+        "item-a",
+        "media-a",
+        "display-a",
+        Some(locator("current")),
+    )
 }
 
 #[test]
@@ -68,6 +87,87 @@ fn stale_expected_revision_has_no_side_effects() {
     assert_eq!(session.session_revision(), 1);
     assert_eq!(session.state(), before_state);
     assert_eq!(session.position_ms(), before_position);
+}
+
+#[test]
+fn prepared_navigation_commits_once_and_resets_item_local_state() {
+    let mut session = navigable_session();
+    let old_item = session.current_item_id().to_owned();
+    let old_revision = session.item_revision();
+    assert!(session.apply_position_callback(&old_item, old_revision, 1, 42_000));
+    let ticket = session.navigation_ticket("session-a", NavigationDirection::Next, locator("next"));
+    let result = session
+        .commit_prepared_navigation(
+            envelope("next-1", 0, Command::NextItem),
+            &ticket,
+            "item-b",
+            "media-b",
+        )
+        .expect("prepared navigation commits");
+
+    assert_eq!(result.session_revision, 1);
+    assert_eq!(session.current_item_id(), "item-b");
+    assert_eq!(session.item_revision(), old_revision + 1);
+    assert_eq!(session.current_source_locator(), Some(&locator("next")));
+    assert_eq!(session.position_ms(), 0);
+    assert_eq!(session.telemetry_sequence(), 0);
+    assert!(!session.apply_position_callback(&old_item, old_revision, 2, 99_000));
+}
+
+#[test]
+fn stale_prepared_navigation_is_rejected_after_a_newer_item_commit() {
+    let mut session = navigable_session();
+    let ticket = session.navigation_ticket("session-a", NavigationDirection::Next, locator("next"));
+    session.switch_item_with_locator("item-new", "media-new", Some(locator("newer")));
+    let before = (
+        session.current_item_id().to_owned(),
+        session.item_revision(),
+        session.session_revision(),
+    );
+    let error = session
+        .commit_prepared_navigation(
+            envelope("next-stale", 0, Command::NextItem),
+            &ticket,
+            "item-b",
+            "media-b",
+        )
+        .expect_err("stale preparation must fail closed");
+
+    assert_eq!(error, CommandError::NavigationStale);
+    assert_eq!(
+        (
+            session.current_item_id().to_owned(),
+            session.item_revision(),
+            session.session_revision(),
+        ),
+        before
+    );
+}
+
+#[test]
+fn navigation_request_retry_is_idempotent_and_direction_mismatch_is_rejected() {
+    let mut session = navigable_session();
+    let ticket = session.navigation_ticket("session-a", NavigationDirection::Next, locator("next"));
+    let command = envelope("next-retry", 0, Command::NextItem);
+    let first = session
+        .commit_prepared_navigation(command.clone(), &ticket, "item-b", "media-b")
+        .expect("first navigation");
+    let second = session
+        .commit_prepared_navigation(command, &ticket, "item-c", "media-c")
+        .expect("identical retry");
+    assert_eq!(first, second);
+    assert_eq!(session.current_item_id(), "item-b");
+    assert_eq!(session.item_revision(), 2);
+
+    let mismatch = session
+        .commit_prepared_navigation(
+            envelope("next-retry", 0, Command::PreviousItem),
+            &ticket,
+            "item-c",
+            "media-c",
+        )
+        .expect_err("request id direction mismatch");
+    assert_eq!(mismatch, CommandError::RequestIdMismatch);
 }
 
 #[test]
