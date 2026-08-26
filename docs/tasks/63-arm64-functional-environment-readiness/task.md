@@ -6,8 +6,8 @@
 GitHub Issue: #63
 Task ID: ENV-ARM64-READY
 Task kind: verification / environment readiness
-Planning Base: f6f6096c32b01c4cad2cf8d7e717807ecb26e033
-Functional Baseline: f6f6096c32b01c4cad2cf8d7e717807ecb26e033
+Planning Base: 9fb6b25bc7781e1396c4e979454df962de43090d
+Functional Baseline: 9fb6b25bc7781e1396c4e979454df962de43090d
 Session Bootstrap: docs/tasks/63-arm64-functional-environment-readiness/prompt.md
 Downstream Handoff: docs/tasks/handoffs/ubuntu-arm64.md
 Preferred worker: ubuntu-arm64
@@ -15,12 +15,27 @@ Eligible environment: env:ubuntu-arm64
 Required capabilities: github-read-write, arm64-target-runtime, interactive-linux-debug, rust-build, process-control, functional-network-diagnostic, evidence-authoring
 Target: Ubuntu ARM64 phone
 Existing infrastructure authority: #1 INFRA-001 ACCEPTED; #21 INFRA-002 ACCEPTED
-Downstream functional consumers: #36 R005-PUBLIC-REAL, #23 R005-PUBLIC, later real Bilibili Web E2E
+Accepted environment repair: #64 ENV-ARM64-RUST Final Accepted
+Downstream functional consumers: #67 GENERIC-YTDLP-BILIBILI-REAL and later real Bilibili Web E2E
 Explicitly not owned here: #9 R003 performance/resource verification
 Freshness policy: dependency-aware
 ```
 
 > Issue #63 owns live status, Attempt, owner and result. This `task.md` owns the stable environment-readiness contract.
+
+## Contract Revision R2
+
+Issue #63 Attempt 1 correctly BLOCKED because `gateway-runner` lacked `cargo`/`rustc`. Issue #64 now owns and has completed that provisioning repair.
+
+The earlier #63 Task also referenced #36/#23 as downstream Bilibili consumers. Those Tasks were later closed `not_planned` during product-route re-planning. The current real-site consumer is #67, through the accepted #66/#73 generic-ytdlp route.
+
+Because accepted runtime/security work landed after the original frozen baseline, the functional build smoke is refreshed to the latest accepted runtime merge before the subsequent docs-only planning commits:
+
+```text
+Functional Baseline: 9fb6b25bc7781e1396c4e979454df962de43090d
+```
+
+This revision does **not** turn #63 into a Bilibili playback Task and does not add performance scope. It only makes the environment smoke representative of the current accepted runtime and removes superseded #36/#23 routing.
 
 ## Goal
 
@@ -37,40 +52,51 @@ trusted target identity
 
 This Task answers **“can we use this target for functional work?”** It does not answer **“is the target fast/cool/stable enough for long-running production?”**
 
-## Current durable Evidence
+## Reusable Durable Evidence
 
-Before publication the Coordinator reran the accepted `target-runner-smoke`:
+Accepted/reusable evidence already established before Attempt 2:
 
 ```text
-run: 32727443950
-job: 98053402258
-runner: ubuntu-arm64-target-phone
-runner OS/arch: Linux / ARM64
-kernel arch: aarch64
-runtime uid: 999 gateway-runner
-workspace: /home/gateway-runner/actions-runner/_work/...
-sudo: absent
-temporary workspace create/cleanup: PASS
-production Vault path: not present
+trusted runner smoke:
+  run: 32727443950
+  job: 98053402258
+  runner: ubuntu-arm64-target-phone
+  Linux / ARM64 / uid 999 gateway-runner
+  isolated workspace / no sudo / temp cleanup PASS
+
+#63 Attempt 1:
+  target identity/safety: PASS
+  direct public HTTPS: PASS
+  frozen Bilibili page direct/no-proxy: HTTP 200
+  capacity inventory only: recorded
+  blocker: cargo/rustc absent
+
+#64 Final Accepted:
+  user-owned cargo/rustup under /home/gateway-runner
+  cargo/rustc usable non-interactively
+  rustc 1.98.0 >= repository minimum 1.85
+  Runner.Listener PATH includes /home/gateway-runner/.cargo/bin
+  uid 999 / zero capability sets / no sudo-admin
+  runner online/idle/claimable
 ```
 
-The job was accepted by the phone and completed the trusted scheduling/security boundary successfully.
-
-Worker must still perform the current interactive checks below; do not treat the historical smoke as proof that every tool/network condition remains unchanged.
+Attempt 2 should re-read current identity/toolchain before the build and should re-check the bounded direct network classification if practical, but it need not pretend the already accepted evidence never existed.
 
 ## Canonical Sources
 
 Read before execution:
 
 - `AGENTS.md`
-- Issue #63 and relevant comments
+- Issue #63 and relevant comments, including Attempt 1 blocker and Coordinator revision
+- Issue #64 Final Acceptance
+- `docs/product-roadmap.md`
 - `docs/planning-priority.md`
 - `docs/tasks/issue-lifecycle-protocol.md`
 - `docs/runner-execution-architecture.md`
 - `docs/security.md` Target Runner sections
 - Issue #1 Final Acceptance
 - Issue #21 Final Acceptance
-- Issue #36 current draft contract
+- Issue #67 current draft contract
 - `gateway-core/Cargo.toml`
 - `gateway-core/src/bin/r001-server.rs`
 
@@ -83,20 +109,20 @@ Read before execution:
 5. Do not run sustained performance scenarios. No 30/60-minute soak, CPU/RSS/temperature benchmark, throughput benchmark, remux endurance or transcode benchmark belongs here.
 6. Missing `ffmpeg` or Chromium is environment inventory Evidence; do not turn it into #9 performance Evidence.
 7. Network tests are public/no-login only. No Cookie, Authorization, CAPTCHA automation, fingerprint spoofing, proxy rotation or access-control bypass.
-8. If a proxy is present, record the route class safely. A proxy-mediated Bilibili result must not be reported as ordinary/direct #36 Evidence.
+8. If a proxy is present, record the route class safely. A proxy-mediated Bilibili result must not be reported as ordinary/direct real-site Evidence.
 9. Do not change Gateway/R007/R001/R008 semantics in this Task.
-10. Worker does not start #36/#23 or a Bilibili E2E automatically.
+10. Worker does not start #67/#68 or #9 automatically.
 
 ## In Scope
 
 - current target identity and privilege/workspace boundary;
-- required tool/runtime inventory;
+- required tool/runtime inventory after #64;
 - exact Functional Baseline checkout/build;
 - bounded local Gateway start/health/UI-route smoke;
 - deterministic stop/cleanup;
 - sanitized network/proxy route inventory;
 - direct public HTTPS reachability classification;
-- bounded direct reachability check of frozen Bilibili sample `BV14V411W7r5` only to decide whether this phone/network may be eligible for later #36 execution;
+- bounded direct reachability check of frozen Bilibili sample `BV14V411W7r5` only as host/network eligibility evidence for later #67;
 - GitHub Issue Evidence/reporting.
 
 ## Out of Scope
@@ -105,8 +131,8 @@ Read before execution:
 - 5/30/60-minute checkpoints;
 - long-running Direct/Remux/Chromium resource measurement;
 - installing or tuning FFmpeg/Chromium;
-- merging the Bilibili plugin;
-- claiming #36 J3 C3/C4 ResolvedMedia/navigation Evidence;
+- real generic-ytdlp extraction of Bilibili;
+- claiming #67 ResolvedMedia compatibility Evidence;
 - login/authenticated Bilibili;
 - TV verification;
 - production deployment/service management.
@@ -118,7 +144,7 @@ C1 — Target identity / safety
 The current phone environment is the expected Linux ARM64 target and the functional worker operates without weakening the accepted low-privilege/workspace/Vault boundary.
 
 C2 — Functional toolchain inventory
-The Task records exact availability/version of required functional tools and optional later runtimes without installing or silently substituting them.
+The required source-build tools, including #64-provisioned cargo/rustc, are available non-interactively and exact versions/optional gaps are recorded.
 
 C3 — Gateway functional baseline
 The exact frozen Functional Baseline can be checked out/built and the Gateway can start on an isolated loopback test port, serve bounded health/UI routes, stop, and leave no Task-owned process behind.
@@ -127,7 +153,7 @@ C4 — Public-network route classification
 The target's direct public HTTPS route and any configured proxy path are distinguished. The frozen Bilibili page receives a bounded direct/no-proxy reachability classification without Cookie/login/bypass behavior.
 
 C5 — Downstream environment decision
-Evidence is sufficient to say whether the phone is READY, READY_WITH_GAPS or NOT_READY for functional work and separately whether it is eligible as a normal-network host candidate for #36.
+Evidence is sufficient to say whether the phone is READY, READY_WITH_GAPS or NOT_READY for functional work and separately whether the host/network is eligible for later #67 real-site verification.
 ```
 
 Research-style claim results use only `PASS | CONDITIONAL PASS | FAIL | BLOCKED` in reports.
@@ -136,33 +162,11 @@ Research-style claim results use only `PASS | CONDITIONAL PASS | FAIL | BLOCKED`
 
 ### J0 — Current identity / security read-back
 
-Record:
-
-```bash
-date -u
-uname -a
-uname -m
-id
-id -u
-pwd
-printf 'HOME=%s\n' "$HOME"
-printf 'TMPDIR=%s\n' "${TMPDIR:-}"
-```
-
-Verify:
-
-- architecture is `aarch64`/ARM64;
-- runtime work is not executed as root;
-- current work directory does not overlap `/var/lib/web-media-gateway`;
-- do not print credential files or token values.
-
-Reference the fresh trusted smoke run/job in the final report.
+Record bounded non-secret identity, architecture, workspace and current Runner state. Confirm runtime work is not root and does not overlap production state. Reference the accepted runner smoke and #64 Final Acceptance.
 
 ### J1 — Functional tool/runtime inventory
 
-Record `command -v` plus bounded version output for:
-
-Required for the current source-build functional path:
+Record `command -v` plus bounded version output for required current tools:
 
 ```text
 bash
@@ -173,7 +177,7 @@ cargo
 rustc
 ```
 
-Inventory for later functional/compatibility work:
+Inventory optional/later runtimes without installing them:
 
 ```text
 ffmpeg
@@ -181,39 +185,32 @@ chromium | chromium-browser | google-chrome | google-chrome-stable
 node
 ```
 
-Also record bounded disk/memory availability as **capacity inventory only**, not a performance result:
-
-```bash
-df -h "$HOME" /tmp 2>/dev/null || true
-free -h 2>/dev/null || true
-```
-
-Do not install missing tools in this Attempt. Missing required-now tools produce a concrete blocker/gap. Missing optional-later tools are recorded for downstream planning.
+Also record bounded disk/memory availability as **capacity inventory only**, not a performance result.
 
 ### J2 — Exact Functional Baseline build/start/stop smoke
 
-Use an isolated worktree/directory. Fetch/checkout exactly:
+Use an isolated worktree/directory and checkout exactly:
 
 ```text
-f6f6096c32b01c4cad2cf8d7e717807ecb26e033
+9fb6b25bc7781e1396c4e979454df962de43090d
 ```
 
 Verify checkout identity before build.
 
-Build the current Gateway server entry:
+Build:
 
 ```bash
 cargo build -p gateway-core --bin r001-server
 ```
 
-Start only a loopback test instance using a non-production port, expected:
+Start only an isolated loopback test instance, expected:
 
 ```text
 R001_BIND_ADDR=127.0.0.1
 R001_PORT=18789
 ```
 
-Use a bounded process lifetime and test only local product routes such as:
+Test bounded local routes:
 
 ```text
 /healthz
@@ -226,20 +223,16 @@ Requirements:
 
 - no production Vault/Secret/profile configuration;
 - no root/sudo;
-- no public/LAN bind in this Task;
-- retain only bounded non-secret diagnostics;
+- no public/LAN bind;
+- bounded non-secret diagnostics only;
 - stop the exact test process and verify no Task-owned Gateway process remains;
-- cleanup the isolated worktree/runtime created by this Task.
+- cleanup the isolated worktree/runtime.
 
-If the frozen baseline cannot build/start because of a concrete target/toolchain condition, preserve Evidence and report it; do not patch product code inside this verification Task.
+If the exact baseline cannot build/start because of a concrete target/toolchain condition, preserve Evidence and report it; do not patch product code inside this verification Task.
 
 ### J3 — Network / proxy / Bilibili-host eligibility classification
 
-First record only sanitized route metadata. For proxy environment variables (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`), report presence plus scheme/host/port with credentials/query redacted. Do not copy secret-bearing proxy URLs into GitHub.
-
-Check a bounded direct/no-proxy public HTTPS request using `curl --noproxy '*'` and strict connect/overall timeouts.
-
-Then perform a bounded **reachability-only** direct/no-proxy request to the frozen public Bilibili page:
+Record sanitized proxy metadata only. Check bounded direct/no-proxy public HTTPS and the unchanged frozen public Bilibili page:
 
 ```text
 https://www.bilibili.com/video/BV14V411W7r5/
@@ -249,64 +242,56 @@ Rules:
 
 - no Cookie or Authorization;
 - no login;
-- no browser/device fingerprint spoofing;
+- no fingerprint spoofing;
 - no CAPTCHA/challenge automation;
 - no residential/proxy rotation;
 - no use of the local proxy to turn a direct-site failure into PASS;
-- do not retain media payloads or signed media URLs.
+- no media payload or signed media URL retention.
 
-Record only status/error class and route class, for example:
+Record only route/status/error classes, including:
 
 ```text
 direct public HTTPS: reachable | blocked
-direct Bilibili sample: HTTP 2xx/3xx | HTTP 412 | DNS error | timeout | other bounded status
+direct Bilibili sample: bounded HTTP/error class
 configured/default proxy present: yes/no + sanitized endpoint class
-BILIBILI_HOST_ELIGIBLE_FOR_#36: yes | no
+BILIBILI_HOST_ELIGIBLE_FOR_#67: yes | no
 ```
 
-`BILIBILI_HOST_ELIGIBLE_FOR_#36=yes` requires the unchanged sample to be normally retrievable through the direct/non-bypass route. A 412/challenge/proxy-only result is `no` and is not a failure of the Site Plugin.
-
-This J3 is only a Publication-Gate prerequisite check for #36; it is **not** #36's real `ResolvedMedia`/navigation Evidence.
+This J3 proves only host/network eligibility. It is **not** #67 generic-ytdlp `ResolvedMedia` Evidence.
 
 ## Result Criteria
 
 ### PASS
 
 - C1 target/safety boundary passes;
-- all required-now tools for the frozen source-build path are available;
+- all required-now tools are available;
 - exact Functional Baseline builds, starts, serves bounded local routes, stops and cleans up;
 - direct public HTTPS is usable;
 - Bilibili host eligibility is explicitly classified.
 
-Bilibili eligibility may be `no` while the general environment Task is still PASS; in that case #36 must use another permitted host/network.
+Bilibili eligibility may be `no` while the general environment Task is still PASS; in that case #67 must use another permitted host/network.
 
 ### CONDITIONAL PASS
 
-The target is usable for functional work with a bounded, explicit environment gap that does not require weakening security, for example an optional later runtime such as Chromium/FFmpeg is missing. The condition must state which downstream work is affected.
+The target is usable for functional work with a bounded optional/later environment gap that does not require weakening security, for example Chromium/FFmpeg missing. State which downstream work is affected.
 
 ### FAIL
 
-The target's current environment fundamentally violates accepted safety boundaries or cannot perform the frozen basic functional path in a way that requires architectural/security weakening rather than a normal environment fix.
+The target environment violates accepted safety boundaries or cannot perform the frozen basic functional path without architectural/security weakening.
 
 ### BLOCKED
 
-Examples:
-
-- target no longer reachable;
-- required source-build tool is absent and provisioning must be handled by a separate approved environment operation;
-- checkout/build cannot proceed because network/storage/toolchain is unavailable;
-- safe cleanup cannot be guaranteed;
-- required GitHub write/report capability is unavailable.
+Examples include target unreachability, required toolchain no longer available, checkout/build unavailable, cleanup cannot be guaranteed, or required GitHub reporting unavailable.
 
 ## Success Criteria
 
-1. Current target identity/safety Evidence is recorded and consistent with accepted runner boundaries.
-2. Required-now and optional-later tool inventory is explicit with versions/absence.
-3. Exact Functional Baseline SHA is verified before build.
+1. Current target identity/safety Evidence is consistent with accepted runner boundaries.
+2. Required-now and optional-later tool inventory is explicit.
+3. Exact Functional Baseline SHA `9fb6b25...` is verified before build.
 4. Gateway local build/start/route/stop/cleanup smoke is complete or a concrete blocker is preserved.
 5. Proxy/direct network classes are not conflated.
 6. Direct Bilibili sample reachability is classified without bypass behavior.
-7. `BILIBILI_HOST_ELIGIBLE_FOR_#36` is explicit and evidence-backed.
+7. `BILIBILI_HOST_ELIGIBLE_FOR_#67` is explicit and evidence-backed.
 8. No sustained performance result is produced or inferred.
 9. Worker posts standard `[EXECUTION REPORT]` or `[BLOCKER REPORT]`, updates status accordingly, releases ownership and stops.
 
@@ -314,17 +299,17 @@ Examples:
 
 Policy: `dependency-aware`.
 
-Frozen Functional Baseline for this Task is:
+Frozen Functional Baseline for Attempt 2 is:
 
 ```text
-f6f6096c32b01c4cad2cf8d7e717807ecb26e033
+9fb6b25bc7781e1396c4e979454df962de43090d
 ```
 
-Later `main` movement does not automatically invalidate environment Evidence.
+This is the accepted runtime merge containing #66. Subsequent main movement through #73 Task Package / Roadmap documentation is unrelated unless accepted runtime/security code changes again before exact execution.
 
-Coordinator Review should classify freshness as:
+Coordinator Review should classify later movement as:
 
-- `UNRELATED` when main changed only in docs/tasks or unrelated plugin work;
+- `UNRELATED` for docs/tasks/planning only;
 - `INTEGRATION_OVERLAP` if accepted changes alter Gateway build/start/runtime requirements relevant to this smoke;
 - `SEMANTIC_AUTHORITY` / `CONTRACT_INVALIDATING` only when accepted architecture/security authority changes the environment boundary itself.
 
@@ -354,7 +339,7 @@ Gateway stop/cleanup result:
 Proxy variables sanitized classification:
 Direct public HTTPS result:
 Direct Bilibili sample result:
-BILIBILI_HOST_ELIGIBLE_FOR_#36: yes | no
+BILIBILI_HOST_ELIGIBLE_FOR_#67: yes | no
 Claims C1-C5:
 Environment result: PASS | CONDITIONAL PASS | FAIL | BLOCKED
 Downstream gaps:
@@ -383,4 +368,4 @@ If blocked:
 → STOP
 ```
 
-Worker must not set `status:done`, close #63, execute #36/#23, run #9 performance scenarios, install packages with privilege, or automatically start another Task.
+Worker must not set `status:done`, close #63, execute #67/#68, run #9 performance scenarios, install packages with privilege, or automatically start another Task.
