@@ -36,7 +36,15 @@ function attachGuards(page) {
       throw new Error('secret-like console text observed');
     }
   });
-  page.on('requestfailed', request => evidence.failures.push(`${request.method()} ${safeUrl(request.url())}`));
+  page.on('requestfailed', request => {
+    const failure = request.failure()?.errorText || '';
+    // Replacing Session A's video source with Session B intentionally aborts
+    // the old media request in Chromium. Keep real failed requests visible,
+    // but do not report this expected browser-side cancellation as a product
+    // failure.
+    if (safeUrl(request.url()).startsWith('/stream/') && /(?:ERR_ABORTED|ABORTED|NS_BINDING_ABORTED)/i.test(failure)) return;
+    evidence.failures.push(`${request.method()} ${safeUrl(request.url())}`);
+  });
   page.on('request', request => {
     const path = safeUrl(request.url());
     if (path.startsWith('/stream/')) evidence.requests.gateway_media += 1;
