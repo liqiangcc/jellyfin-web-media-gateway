@@ -25,7 +25,7 @@ use url::Url;
 use uuid::Uuid;
 
 const DEFAULT_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
-const BROWSER_START_TIMEOUT: Duration = Duration::from_secs(8);
+const BROWSER_START_TIMEOUT: Duration = Duration::from_secs(15);
 const CLOSE_WAIT: Duration = Duration::from_secs(2);
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const CHILD_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
