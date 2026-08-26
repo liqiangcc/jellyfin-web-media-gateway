@@ -104,7 +104,7 @@ The audit uses the latest stable release available on the research date plus cur
 - master at research time: `66f49765d5a46c7be1c2c414f245c71530c4a2fd`
 - commit timestamp: `2026-08-25T16:30:27Z`
 - commit: https://github.com/yt-dlp/yt-dlp/commit/66f49765d5a46c7be1c2c414f245c71530c4a2fd
-- master was six commits ahead of the stable release during the read-back. The relevant networking files had only small deltas, but any later implementation must re-audit its pinned yt-dlp version rather than treating this document as a forever-current upstream contract.
+- master was six commits ahead of the stable release during the read-back. The relevant networking files had only small deltas; current-master read-back still shows `YoutubeDL.urlopen() -> _request_director.send`, mutable `RequestDirector.add_handler()`, and `RequestsRH` with `allow_redirects=True`. The post-release networking touches do not remove the security gap identified here. Any later implementation must still re-audit its pinned yt-dlp version rather than treating this document as a forever-current upstream contract.
 
 ### Audited upstream source paths at tag `2026.08.19`
 
@@ -207,7 +207,8 @@ caller source URL
        -> capability IPC
   -> Gateway-owned scoped HTTP(S) broker
        -> reject non-http(s), URL userinfo and forbidden request authority
-       -> Core/Vault owns any future account Secret; anonymous mode has none
+       -> anonymous mode rejects worker-originated Secret-classified request headers
+       -> Core/Vault owns any future credential injection
        -> EgressPolicy::PublicWeb
        -> DNS resolve + public-address classification
        -> checked SocketAddr[]
@@ -244,6 +245,7 @@ The broker:
 - accepts only structured HTTP(S) requests needed by the extraction attempt;
 - never exposes CONNECT or a generic raw-tunnel API;
 - uses only `EgressScope::PublicWeb` for generic-ytdlp;
+- in the initial anonymous profile, rejects worker/extractor-supplied Secret-classified request headers such as `Authorization`, `Cookie`, proxy-auth/API/token families and Basic/Bearer values; future credential injection, if ever accepted, must be broker/Core capability-owned rather than worker-authored;
 - performs DNS and connects only to the validated R008 address set;
 - keeps automatic redirect disabled at the underlying client and revalidates every redirect target;
 - performs end-to-end TLS to the origin with hostname/certificate verification; there is no TLS MITM;
@@ -256,7 +258,8 @@ Initial production scope is anonymous extraction only.
 
 - Reject URL userinfo before entering the worker.
 - No caller Cookie, browser profile, netrc, Authorization, proxy credential or free-form Secret header.
-- A broker-owned ephemeral anonymous cookie jar may be evaluated in the future, but raw `Cookie`/`Set-Cookie` must not be exposed through public plugin output/logs.
+- The worker/extractor itself is also not credential authority in anonymous mode: if it tries to originate a Secret-classified request header, the broker rejects that request.
+- No persistent or broker-owned anonymous cookie jar is admitted by this initial decision. If one is proposed later, it must keep raw `Cookie`/`Set-Cookie` out of worker/public plugin output/logs and receive separate security review.
 - Any extractor attempt that requires user/account Secret remains unsupported by generic-ytdlp and falls back to an explicit Site Plugin/Browser flow.
 - Future authenticated generic-ytdlp, if ever proposed, requires a separate Core/Vault capability design and is not implied by this decision.
 
@@ -316,7 +319,7 @@ Why not standard proxy only: CONNECT hides HTTPS redirects unless TLS is interce
 | C3 Redirect revalidation | **CONDITIONAL PASS** | Default yt-dlp redirects are unacceptable. Selected broker must disable transport redirects and apply R008 to every Location hop. |
 | C4 Proxy/open-proxy boundary | **CONDITIONAL PASS** | Use inherited per-attempt IPC capability, no CONNECT/public listener/configured-local scope, and sandbox direct-deny. |
 | C5 TLS | **CONDITIONAL PASS** | Broker connects directly to origin with normal hostname/SNI/certificate verification + pinned addresses; no MITM and no no-check-certificate option. |
-| C6 Secret/account authority | **CONDITIONAL PASS** | Initial scope anonymous only; reject userinfo/caller Cookie/profile/netrc/Auth/proxy credentials. User-account auth remains explicit Site Plugin/Browser territory. |
+| C6 Secret/account authority | **CONDITIONAL PASS** | Initial scope anonymous only; reject URL userinfo, caller credentials/Secret headers, and worker/extractor-originated Secret-classified headers. User-account auth remains explicit Site Plugin/Browser territory. |
 | C7 alternate transport/config/process escape | **CONDITIONAL PASS** | Python API wrapper avoids CLI config/plugin load; fixed package/options; direct WS/FTP/file/curl-cffi/external downloader/runtime escape disabled and OS network sandbox is mandatory. |
 | C8 lifecycle/diagnostics | **CONDITIONAL PASS** | Reuse #46 caps/timeout/kill/reap and add descendant + broker cancellation proof and Secret-safe diagnostics. |
 | C9 product value | **PASS** | The long-tail yt-dlp value justifies a bounded future implementation experiment, but not at the cost of R008. Fallback remains generic-direct + explicit Site Plugins + Browser/site-specific runtime. |
@@ -333,7 +336,7 @@ A later implementation Task may be materialized only after #50 is Final Accepted
 4. direct AF_INET/AF_INET6 connection attempts from Python, a custom handler and an allowed child are denied;
 5. the worker cannot reach the internet by changing proxy/config/env/plugin/runtime/external-downloader state;
 6. TLS hostname/certificate verification remains enabled and no MITM CA is introduced;
-7. caller URL userinfo, Cookie/profile/netrc/Auth/proxy credentials and arbitrary headers/argv are rejected;
+7. caller URL userinfo, Cookie/profile/netrc/Auth/proxy credentials, arbitrary headers/argv, and worker/extractor-generated Secret-classified request headers are rejected in the anonymous profile;
 8. crash/timeout/cancel/oversized output kills/reaps descendants and cancels broker work without Secret-bearing diagnostics;
 9. a small, explicit compatibility corpus shows enough value over `generic-direct` to justify keeping the feature.
 
