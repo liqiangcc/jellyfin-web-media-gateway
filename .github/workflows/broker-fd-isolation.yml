@@ -54,7 +54,8 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           test "$(uname -m)" = x86_64
-          rustc -vV 2>/dev/null | grep -q 'host: x86_64-unknown-linux-gnu'
+          rustc_info="$(rustc -vV)"
+          [[ "$rustc_info" == *'host: x86_64-unknown-linux-gnu'* ]]
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -97,7 +98,8 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           test "$(uname -m)" = aarch64
-          rustc -vV 2>/dev/null | grep -q 'host: aarch64-unknown-linux-gnu'
+          rustc_info="$(rustc -vV)"
+          [[ "$rustc_info" == *'host: aarch64-unknown-linux-gnu'* ]]
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
