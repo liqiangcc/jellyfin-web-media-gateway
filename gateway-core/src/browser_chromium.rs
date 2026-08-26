@@ -331,6 +331,21 @@ impl ChromiumBrowserWorker {
         Ok(replacement)
     }
 
+    #[cfg(test)]
+    fn kill_for_test(&self, session: &BrowserSessionId) -> Result<(), BrowserError> {
+        let handle = self.session_handle(session)?;
+        let mut state = handle
+            .try_lock()
+            .map_err(|_| BrowserError::WorkerUnavailable)?;
+        Self::session_error(&mut state)?;
+        if let Some(child) = state.child.as_mut() {
+            kill_process_group(child);
+            Ok(())
+        } else {
+            Err(BrowserError::WorkerCrashed)
+        }
+    }
+
     fn lock_sessions(
         &self,
     ) -> Result<
@@ -1112,6 +1127,37 @@ mod tests {
             Err(BrowserError::SessionClosed)
         );
         let _ = policy;
+        fixture_task.abort();
+    }
+
+    #[tokio::test]
+    async fn cancellation_and_browser_exit_are_observable_and_isolated() {
+        let (worker, fixture_task, url, policy) = worker_and_fixture().await;
+        let session = worker.open_session(BrowserAuthMode::Passive).await.unwrap();
+        let request = BrowserNavigationRequest::new(url.clone());
+        worker.cancel(session.id(), request.operation_id()).unwrap();
+        assert_eq!(
+            worker.navigate(session.id(), request, &policy).await,
+            Err(BrowserError::OperationCancelled)
+        );
+        worker.close(session.id()).unwrap();
+
+        let crashed = worker.open_session(BrowserAuthMode::Passive).await.unwrap();
+        worker.kill_for_test(crashed.id()).unwrap();
+        for _ in 0..20 {
+            if worker.status(crashed.id()) == Ok(BrowserStatus::Crashed) {
+                break;
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+        assert_eq!(worker.status(crashed.id()), Ok(BrowserStatus::Crashed));
+        assert!(
+            worker
+                .poll_events(crashed.id(), 0)
+                .unwrap()
+                .iter()
+                .any(|event| event.kind == BrowserEventKind::WorkerCrashed)
+        );
         fixture_task.abort();
     }
 
