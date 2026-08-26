@@ -43,10 +43,15 @@ After environment readiness, prioritize user-visible end-to-end behavior.
 The current first real-site playback route is:
 
 ```text
-#66 GENERIC-YTDLP-EXTRACT-PREP
+#66 GENERIC-YTDLP-EXTRACT-PREP          [accepted]
+→ #73 GENERIC-YTDLP-REAL-HARNESS-PREP
 → #67 GENERIC-YTDLP-BILIBILI-REAL
 → #68 BILIBILI-WEB-E2E
 ```
+
+#73 is a hard Evidence/reproducibility dependency for #67. It adds the repository-owned safe command that connects the accepted #66 extraction library to the real R008Broker/BrokerProcessRunner path and emits only bounded, non-secret diagnostics. The phone must not invent ad-hoc real-site code.
+
+#73 must not increase the current R008 96 KiB broker body limit, weaken egress/Secret policy, use ambient proxy authority, or enable generic-ytdlp production registration. Real compatibility failures remain Evidence for #67/Coordinator classification.
 
 Target user-visible path:
 
@@ -60,7 +65,19 @@ Bilibili URL
 → Control play/pause/seek/stop
 ```
 
-The legacy `#36 → #23 → PR #37` route is superseded for first playback because #65 proved that the preserved #23 branch conflicts semantically with the accepted current SiteAdapter authority. #23/#36 are now closed `not_planned`, and PR #37 is closed unmerged as historical Evidence.
+The legacy `#36 → #23 → PR #37` route is superseded for first playback because #65 proved that the preserved #23 branch conflicts semantically with the accepted current SiteAdapter authority. #23/#36 are closed `not_planned`, and PR #37 is closed unmerged as historical Evidence.
+
+## Current parallelism
+
+The two immediate lanes are independent until #67:
+
+```text
+phone environment: #64 → #63 ──┐
+                                ├→ #67
+Cloud harness:     #73 ─────────┘
+```
+
+Therefore #73 and #64 should execute in parallel. #67 waits for both accepted harness Evidence and a ready selected target environment.
 
 ## Functional expansion after first playback
 
@@ -108,12 +125,12 @@ Physical-TV verification remains independent and should execute when the TV envi
 ## Current top-level execution graph
 
 ```text
-#64 → #63
-
-#66 → #67 → #68
-               ├→ #71 → #72
-               ├→ #26 future real-auth child
-               └→ #27 future functional Browser/Native Panel child
+#64 → #63 ───────────────┐
+                        ├→ #67 → #68
+#66(done) → #73 ────────┘
+                              ├→ #71 → #72
+                              ├→ #26 future real-auth child
+                              └→ #27 future functional Browser/Native Panel child
 
 #9 performance/capacity later
 ```
