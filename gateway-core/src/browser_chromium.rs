@@ -920,7 +920,7 @@ fn pointer_button(button: crate::browser::PointerButton) -> &'static str {
 fn find_allowed_binary() -> Option<(String, PathBuf)> {
     let directories = TRUSTED_BINARY_DIRECTORIES
         .iter()
-        .map(|directory| Path::new(directory))
+        .map(Path::new)
         .collect::<Vec<_>>();
     find_allowed_binary_in_directories(&directories)
 }
