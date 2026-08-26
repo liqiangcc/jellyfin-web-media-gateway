@@ -11,7 +11,9 @@ on:
       - "site-adapter-api/**"
       - "plugins/generic-direct/**"
       - "plugins/generic-ytdlp/**"
+      - "scripts/generic-ytdlp-runtime-cache.py"
       - "scripts/generic-ytdlp-real-smoke.sh"
+      - "scripts/tests/test_generic_ytdlp_runtime_cache.py"
       - "gateway-egress/**"
       - "gateway-core/**"
       - "display-adapter-api/**"
@@ -59,11 +61,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install and verify frozen yt-dlp source
+      - name: Prepare exact frozen user-owned cache
         run: |
-          python -m pip install --disable-pip-version-check --no-deps \
-            "yt-dlp @ git+https://github.com/yt-dlp/yt-dlp.git@3a08beaf031ab68f966401ead017ac81fe8486cf"
-          python -c 'import yt_dlp; assert yt_dlp.version.__version__ == "2026.08.19"'
+          cache_root="$RUNNER_TEMP/generic-ytdlp-cache"
+          export XDG_CACHE_HOME="$cache_root"
+          python scripts/generic-ytdlp-runtime-cache.py invalidate
+          cache_info="$(python scripts/generic-ytdlp-runtime-cache.py prepare)"
+          mapfile -t cache_lines <<<"$cache_info"
+          test "${cache_lines[0]}" = prepared
+          test -n "${cache_lines[1]}"
+          printf 'XDG_CACHE_HOME=%s\n' "$cache_root" >> "$GITHUB_ENV"
+          printf 'YTDLP_SOURCE=%s\n' "${cache_lines[1]}" >> "$GITHUB_ENV"
+      - name: Verify cold/warm cache, offline reuse and proxy separation
+        run: |
+          warm_info="$(HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 PIP_NO_INDEX=1 python scripts/generic-ytdlp-runtime-cache.py prepare)"
+          mapfile -t warm_lines <<<"$warm_info"
+          test "${warm_lines[0]}" = hit
+          test -n "${warm_lines[1]}"
+          PYTHONPATH="$YTDLP_SOURCE" python -c 'import os, pathlib, yt_dlp; assert yt_dlp.version.__version__ == "2026.08.19"; assert pathlib.Path(yt_dlp.__file__).resolve().is_relative_to(pathlib.Path(os.environ["YTDLP_SOURCE"]).resolve())'
+          python -m unittest discover -s scripts/tests -p 'test_*.py' -v
       - name: Run conformance, parser and direct-priority tests
         run: |
           cargo fmt --all -- --check
@@ -97,11 +113,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install and verify frozen yt-dlp source
+      - name: Prepare exact frozen user-owned cache
         run: |
-          python -m pip install --disable-pip-version-check --no-deps \
-            "yt-dlp @ git+https://github.com/yt-dlp/yt-dlp.git@3a08beaf031ab68f966401ead017ac81fe8486cf"
-          python -c 'import yt_dlp; assert yt_dlp.version.__version__ == "2026.08.19"'
+          export XDG_CACHE_HOME="$RUNNER_TEMP/generic-ytdlp-cache"
+          python scripts/generic-ytdlp-runtime-cache.py invalidate
+          cache_info="$(python scripts/generic-ytdlp-runtime-cache.py prepare)"
+          mapfile -t cache_lines <<<"$cache_info"
+          test "${cache_lines[0]}" = prepared
+          printf 'XDG_CACHE_HOME=%s\n' "$XDG_CACHE_HOME" >> "$GITHUB_ENV"
+          printf 'YTDLP_SOURCE=%s\n' "${cache_lines[1]}" >> "$GITHUB_ENV"
+          python -m unittest discover -s scripts/tests -p 'test_*.py' -v
       - name: Run bounded process and parser negatives
         run: |
           cargo test -p generic-ytdlp --all-targets -- --nocapture
@@ -142,11 +163,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install and verify frozen yt-dlp source
+      - name: Prepare exact frozen user-owned cache
         run: |
-          python -m pip install --disable-pip-version-check --no-deps \
-            "yt-dlp @ git+https://github.com/yt-dlp/yt-dlp.git@3a08beaf031ab68f966401ead017ac81fe8486cf"
-          python -c 'import yt_dlp; assert yt_dlp.version.__version__ == "2026.08.19"'
+          export XDG_CACHE_HOME="$RUNNER_TEMP/generic-ytdlp-cache"
+          python scripts/generic-ytdlp-runtime-cache.py invalidate
+          cache_info="$(python scripts/generic-ytdlp-runtime-cache.py prepare)"
+          mapfile -t cache_lines <<<"$cache_info"
+          test "${cache_lines[0]}" = prepared
+          printf 'XDG_CACHE_HOME=%s\n' "$XDG_CACHE_HOME" >> "$GITHUB_ENV"
+          printf 'YTDLP_SOURCE=%s\n' "${cache_lines[1]}" >> "$GITHUB_ENV"
+          python -m unittest discover -s scripts/tests -p 'test_*.py' -v
       - name: Run exact-Candidate workspace and affected regressions
         run: |
           cargo fmt --all -- --check
@@ -157,31 +183,13 @@ jobs:
           cargo test -p gateway-egress --all-targets -- --nocapture
           cargo test -p generic-ytdlp --features runtime-prep --test runtime r008_broker_rejects_secret_userinfo_and_private_targets_before_network -- --nocapture
 
-      - name: Verify isolated frozen runtime setup and cleanup
+      - name: Verify warm cache remains usable without setup network
         shell: bash --noprofile --norc -euo pipefail {0}
         run: |
-          setup_dir="$(mktemp -d)"
-          trap 'rm -rf -- "$setup_dir"' EXIT
-          site_dir="$setup_dir/site-packages"
-          python -m pip install --disable-pip-version-check --no-cache-dir --no-deps \
-            --target "$site_dir" \
-            "yt-dlp @ git+https://github.com/yt-dlp/yt-dlp.git@3a08beaf031ab68f966401ead017ac81fe8486cf"
-          PYTHONPATH="$site_dir" python - "$site_dir" <<'PY'
-          import json
-          import pathlib
-          import sys
-          from importlib import metadata
-          import yt_dlp
-
-          site_dir = pathlib.Path(sys.argv[1])
-          assert yt_dlp.version.__version__ == "2026.08.19"
-          dist = metadata.distribution("yt-dlp")
-          direct_url = json.loads((pathlib.Path(dist._path) / "direct_url.json").read_text())
-          assert direct_url["vcs_info"]["commit_id"] == "3a08beaf031ab68f966401ead017ac81fe8486cf"
-          assert str(site_dir) in str(pathlib.Path(dist._path).parent)
-          PY
-          rm -rf -- "$setup_dir"
-          test ! -e "$setup_dir"
+          warm_info="$(HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 PIP_NO_INDEX=1 python scripts/generic-ytdlp-runtime-cache.py prepare)"
+          mapfile -t warm_lines <<<"$warm_info"
+          test "${warm_lines[0]}" = hit
+          PYTHONPATH="$YTDLP_SOURCE" python -c 'import yt_dlp; assert yt_dlp.version.__version__ == "2026.08.19"'
 
   j4-lifecycle-regressions:
     name: J4 lifecycle descendants and production-disabled regressions
@@ -205,11 +213,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install and verify frozen yt-dlp source
+      - name: Prepare exact frozen user-owned cache
         run: |
-          python -m pip install --disable-pip-version-check --no-deps \
-            "yt-dlp @ git+https://github.com/yt-dlp/yt-dlp.git@3a08beaf031ab68f966401ead017ac81fe8486cf"
-          python -c 'import yt_dlp; assert yt_dlp.version.__version__ == "2026.08.19"'
+          export XDG_CACHE_HOME="$RUNNER_TEMP/generic-ytdlp-cache"
+          python scripts/generic-ytdlp-runtime-cache.py invalidate
+          cache_info="$(python scripts/generic-ytdlp-runtime-cache.py prepare)"
+          mapfile -t cache_lines <<<"$cache_info"
+          test "${cache_lines[0]}" = prepared
+          printf 'XDG_CACHE_HOME=%s\n' "$XDG_CACHE_HOME" >> "$GITHUB_ENV"
+          printf 'YTDLP_SOURCE=%s\n' "${cache_lines[1]}" >> "$GITHUB_ENV"
+          python -m unittest discover -s scripts/tests -p 'test_*.py' -v
       - name: Run lifecycle, parser and DisabledRunner proof
         run: |
           cargo fmt --all -- --check
