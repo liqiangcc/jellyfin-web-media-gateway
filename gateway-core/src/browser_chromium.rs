@@ -182,9 +182,12 @@ struct ChromiumSession {
     cancelled: HashMap<BrowserOperationId, ()>,
 }
 
+type SessionHandle = Arc<AsyncMutex<ChromiumSession>>;
+type SessionMap = HashMap<BrowserSessionId, SessionHandle>;
+
 #[derive(Clone)]
 pub struct ChromiumBrowserWorker {
-    sessions: Arc<Mutex<HashMap<BrowserSessionId, Arc<AsyncMutex<ChromiumSession>>>>>,
+    sessions: Arc<Mutex<SessionMap>>,
     operation_timeout: Duration,
 }
 
@@ -346,21 +349,13 @@ impl ChromiumBrowserWorker {
         }
     }
 
-    fn lock_sessions(
-        &self,
-    ) -> Result<
-        std::sync::MutexGuard<'_, HashMap<BrowserSessionId, Arc<AsyncMutex<ChromiumSession>>>>,
-        BrowserError,
-    > {
+    fn lock_sessions(&self) -> Result<std::sync::MutexGuard<'_, SessionMap>, BrowserError> {
         self.sessions
             .lock()
             .map_err(|_| BrowserError::WorkerUnavailable)
     }
 
-    fn session_handle(
-        &self,
-        session: &BrowserSessionId,
-    ) -> Result<Arc<AsyncMutex<ChromiumSession>>, BrowserError> {
+    fn session_handle(&self, session: &BrowserSessionId) -> Result<SessionHandle, BrowserError> {
         self.lock_sessions()?
             .get(session)
             .cloned()
