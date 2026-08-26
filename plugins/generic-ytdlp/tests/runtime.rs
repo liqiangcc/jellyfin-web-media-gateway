@@ -116,6 +116,16 @@ fn lifecycle_timeout_and_stdout_overflow_are_bounded() {
             .unwrap_err(),
         generic_ytdlp::ProcessError::TimedOut
     );
+    let crash_runner = runner(Duration::from_secs(5));
+    assert_eq!(
+        crash_runner
+            .run_action(
+                "crash",
+                &Url::parse("https://fixture.example.test/media").unwrap()
+            )
+            .unwrap_err(),
+        generic_ytdlp::ProcessError::NonZeroExit
+    );
     let overflow_runner = runner(Duration::from_secs(5));
     assert_eq!(
         overflow_runner
