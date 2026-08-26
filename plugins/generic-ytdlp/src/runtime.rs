@@ -252,12 +252,13 @@ impl BrokerProcessRunner {
         let (parent_socket, child_socket) =
             std::os::unix::net::UnixStream::pair().map_err(|_| ProcessError::SpawnFailed)?;
         let child_fd = child_socket.as_raw_fd();
+        let python = resolve_program(&self.python).ok_or(ProcessError::SpawnFailed)?;
         let mut command = Command::new(&self.sandbox);
         command
             .arg("--fd")
             .arg(IPC_FD.to_string())
             .arg("--")
-            .arg(&self.python)
+            .arg(python)
             .arg(&self.worker)
             .arg(action)
             .arg(source_url.as_str())
@@ -369,6 +370,16 @@ impl BrokerProcessRunner {
         }
         Ok(ProcessOutput { stdout })
     }
+}
+
+fn resolve_program(program: &PathBuf) -> Option<PathBuf> {
+    if program.is_absolute() {
+        return program.is_file().then(|| program.clone());
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|directory| directory.join(program))
+        .find(|candidate| candidate.is_file())
 }
 
 impl crate::ProcessRunner for BrokerProcessRunner {
