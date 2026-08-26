@@ -228,7 +228,6 @@ pub enum ControlLookupError {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ControlPublicationError {
     AlreadyExists,
-    DisplayAlreadyInUse,
     #[cfg(test)]
     InjectedFailure,
 }
@@ -343,12 +342,6 @@ impl ControlService {
         let mut sessions = self.sessions.write().expect("control sessions poisoned");
         if sessions.contains_key(&session_id) {
             return Err(ControlPublicationError::AlreadyExists);
-        }
-        if sessions.values().any(|session| {
-            let record = session.lock().expect("control session poisoned");
-            record.playback.active_display().display_id == display_id
-        }) {
-            return Err(ControlPublicationError::DisplayAlreadyInUse);
         }
         let record = SessionRecord {
             playback: PlaybackSession::new(item_id, media_descriptor, display_id),

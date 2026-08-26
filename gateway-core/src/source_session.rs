@@ -5,7 +5,7 @@
 //! registration/liveness stays behind `DisplaySessionService`; Playback
 //! authority stays behind `ControlService`.
 
-use crate::control::{ControlPublicationError, ControlService};
+use crate::control::ControlService;
 use crate::display_session::{DisplaySessionError, DisplaySessionService};
 use crate::{Binding, EgressScope, GatewayError, GatewayService};
 use axum::response::{IntoResponse, Response};
@@ -266,10 +266,6 @@ impl SourceSessionService {
             request.display_id.clone(),
         ) {
             Ok(snapshot) => snapshot,
-            Err(ControlPublicationError::DisplayAlreadyInUse) => {
-                revoke_all(gateway, &issued_tokens);
-                return failure_for_display_in_use();
-            }
             Err(_) => {
                 revoke_all(gateway, &issued_tokens);
                 return internal_failure();
@@ -279,6 +275,16 @@ impl SourceSessionService {
             .write()
             .expect("source media views poisoned")
             .insert(session_id.clone(), media_view.clone());
+        if displays
+            .set_current_rendering_session(&request.display_id, &session_id)
+            .is_err()
+        {
+            // The display selector was validated before resolution and the
+            // relationship is bounded server-owned integration state. A
+            // validation failure here cannot undo the already accepted #44
+            // publication, so leave the session authoritative and let the
+            // normal reconnect lookup fail closed until the display is live.
+        }
         CreationOutcome::Success(Box::new(CreateSessionResponse {
             request_id: request.request_id.clone(),
             session_id,
@@ -422,16 +428,6 @@ fn failure_for_display(error: DisplaySessionError) -> CreationOutcome {
     CreationOutcome::Failure {
         status,
         error: CreateSessionErrorResponse { code, message },
-    }
-}
-
-fn failure_for_display_in_use() -> CreationOutcome {
-    CreationOutcome::Failure {
-        status: axum::http::StatusCode::CONFLICT,
-        error: CreateSessionErrorResponse {
-            code: "DISPLAY_BUSY",
-            message: "display already has an authoritative playback session",
-        },
     }
 }
 

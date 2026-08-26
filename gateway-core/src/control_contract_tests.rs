@@ -243,21 +243,51 @@ async fn hosted_product_composes_live_display_source_session_and_rendering_view(
     assert!(!browser_view.contains("example.test/video.mp4"));
     assert!(!browser_view.contains("resolved_media"));
 
-    let busy = service
+    let stop = service
         .router()
         .oneshot(json_post(
-            "/api/v1/sessions",
+            &format!("/api/v1/sessions/{session_id}/commands"),
             json!({
-                "request_id": "hosted-create-2",
-                "source": "https://example.test/another-video.mp4",
-                "display_id": "tv-e2e"
+                "request_id": "hosted-stop-a",
+                "expected_session_revision": 0,
+                "command": {"type": "stop"}
             }),
         ))
         .await
         .unwrap();
-    assert_eq!(busy.status(), StatusCode::CONFLICT);
-    assert_eq!(json_body(busy).await["code"], "DISPLAY_BUSY");
-    assert_eq!(service.control().session_count(), 1);
+    assert_eq!(stop.status(), StatusCode::OK);
+
+    let created_b = json_body(
+        service
+            .router()
+            .oneshot(json_post(
+                "/api/v1/sessions",
+                json!({
+                    "request_id": "hosted-create-2",
+                    "source": "https://example.test/another-video.mp4",
+                    "display_id": "tv-e2e"
+                }),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let session_b = created_b["session_id"].as_str().unwrap();
+    assert_ne!(session_b, session_id);
+    assert_eq!(service.control().session_count(), 2);
+
+    let rendering_b = Request::builder()
+        .uri("/api/v1/displays/tv-e2e/rendering")
+        .header(header::HOST, HOST)
+        .header("x-display-lease", lease)
+        .body(Body::empty())
+        .unwrap();
+    let rendering_b = service.router().oneshot(rendering_b).await.unwrap();
+    assert_eq!(rendering_b.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(rendering_b).await["context"]["session_id"],
+        session_b
+    );
 
     let stale = Request::builder()
         .uri(format!(

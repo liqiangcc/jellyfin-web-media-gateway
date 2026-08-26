@@ -321,6 +321,10 @@ impl fmt::Debug for DisplayRecord {
 struct Registry {
     records: HashMap<String, DisplayRecord>,
     registration_by_display: HashMap<String, String>,
+    /// G3 integration state: the server-owned session currently rendered by
+    /// a logical display. This is deliberately separate from Playback's
+    /// active_display/display_generation authority and from page lease state.
+    current_rendering_session_by_display: HashMap<String, String>,
 }
 
 #[derive(Clone)]
@@ -439,6 +443,9 @@ impl DisplaySessionService {
                     }
                     registry.records.remove(&existing_id);
                     registry.registration_by_display.remove(&input.display_id);
+                    registry
+                        .current_rendering_session_by_display
+                        .remove(&input.display_id);
                 }
                 let registration_id = new_token();
                 let record = DisplayRecord {
@@ -508,6 +515,24 @@ impl DisplaySessionService {
         displays
     }
 
+    /// Record which published PlaybackSession the product currently renders
+    /// on this logical Display. This is G3 composition state only: it does
+    /// not alter Playback's active display or display generation and is never
+    /// supplied by the browser.
+    pub(crate) fn set_current_rendering_session(
+        &self,
+        display_id: &str,
+        session_id: &str,
+    ) -> Result<(), DisplaySessionError> {
+        validate_identifier(display_id, "display_id")?;
+        validate_identifier(session_id, "session_id")?;
+        let mut registry = self.inner.lock().expect("display registry poisoned");
+        registry
+            .current_rendering_session_by_display
+            .insert(display_id.to_owned(), session_id.to_owned());
+        Ok(())
+    }
+
     fn heartbeat_at(
         &self,
         display_id: &str,
@@ -569,10 +594,23 @@ impl DisplaySessionService {
         lease_token: &str,
     ) -> Result<DisplayContextResponse, DisplaySessionError> {
         validate_identifier(display_id, "display_id")?;
-        let snapshot = control
-            .snapshot_for_active_display(display_id)
-            .map_err(DisplaySessionError::from)?;
-        self.context_for_session(control, display_id, lease_token, Some(&snapshot.session_id))
+        let current_session = self
+            .inner
+            .lock()
+            .expect("display registry poisoned")
+            .current_rendering_session_by_display
+            .get(display_id)
+            .cloned();
+        let session_id = match current_session {
+            Some(session_id) => session_id,
+            None => {
+                control
+                    .snapshot_for_active_display(display_id)
+                    .map_err(DisplaySessionError::from)?
+                    .session_id
+            }
+        };
+        self.context_for_session(control, display_id, lease_token, Some(&session_id))
     }
 
     fn context_at(
