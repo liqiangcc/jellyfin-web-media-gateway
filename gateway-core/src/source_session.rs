@@ -769,10 +769,11 @@ mod tests {
                 opaque_payload: payload.into(),
             };
             Ok(site_adapter_api::NavigationContext {
-                previous: (locator.opaque_payload == "fixture://middle")
+                previous: (locator.opaque_payload != "fixture://start")
                     .then(|| make_locator("fixture://previous")),
-                next: (locator.opaque_payload != "fixture://end")
-                    .then(|| make_locator("fixture://next")),
+                next: (locator.opaque_payload == "fixture://start"
+                    || locator.opaque_payload == "fixture://middle")
+                    .then(|| make_locator("fixture://end")),
                 collection_id: Some("fixture-collection".into()),
                 current_index: Some(1),
             })
@@ -1218,6 +1219,50 @@ mod tests {
                 .unwrap()
                 .session_revision,
             1
+        );
+
+        let edge = service
+            .router()
+            .oneshot(post(
+                &path,
+                serde_json::json!({
+                    "request_id": "navigation-edge",
+                    "expected_session_revision": 1,
+                    "command": {"type": "next_item"}
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(edge.status(), StatusCode::CONFLICT);
+        assert_eq!(json(edge).await["code"], "NAVIGATION_NO_TARGET");
+        assert_eq!(
+            service
+                .control()
+                .snapshot(&session_id)
+                .unwrap()
+                .current_item
+                .item_revision,
+            2
+        );
+
+        let previous = service
+            .router()
+            .oneshot(post(
+                &path,
+                serde_json::json!({
+                    "request_id": "navigation-previous",
+                    "expected_session_revision": 1,
+                    "command": {"type": "previous_item"}
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(previous.status(), StatusCode::OK);
+        let previous_body = json(previous).await;
+        assert_eq!(previous_body["session_revision"], 2);
+        assert_eq!(
+            previous_body["snapshot"]["current_item"]["item_revision"],
+            3
         );
     }
 }

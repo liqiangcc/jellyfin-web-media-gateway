@@ -575,6 +575,9 @@ impl ControlService {
             .session(session_id)
             .map_err(|_| ControlCommandError::NotFound)?;
         let mut record = session.lock().expect("control session poisoned");
+        if ticket.session_id != session_id {
+            return Err(ControlCommandError::Playback(CommandError::NavigationStale));
+        }
         let is_replay = record
             .playback
             .request_outcome(&envelope)
