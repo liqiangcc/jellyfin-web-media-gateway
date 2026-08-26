@@ -331,15 +331,22 @@ impl ChromiumBrowserWorker {
         }
         let record = state
             .panels
-            .get_mut(panel.id())
+            .get(panel.id())
             .ok_or(BrowserError::SessionExpired)?;
         if record.token != *panel.token() {
             return Err(BrowserError::SessionExpired);
         }
         let replacement = NativePanelSession::new_for_worker(panel.worker_session().clone(), ttl);
-        record.token = replacement.token().clone();
-        record.expires_at = replacement.expires_at();
-        record.connected = true;
+        state.panels.remove(panel.id());
+        state.panels.insert(
+            replacement.id().clone(),
+            PanelRecord {
+                worker_session: panel.worker_session().clone(),
+                token: replacement.token().clone(),
+                expires_at: replacement.expires_at(),
+                connected: true,
+            },
+        );
         Ok(replacement)
     }
 
