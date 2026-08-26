@@ -74,10 +74,19 @@ User outcome:
 Current route:
 
 ```text
-#66 GENERIC-YTDLP-EXTRACT-PREP
+#66 GENERIC-YTDLP-EXTRACT-PREP          [accepted]
+→ #73 GENERIC-YTDLP-REAL-HARNESS-PREP
 → #67 GENERIC-YTDLP-BILIBILI-REAL
 → #68 BILIBILI-WEB-E2E
 ```
+
+Why #73 is a hard verification dependency:
+
+- #66 now provides the accepted real `extract_info(download=False)` library/runtime path;
+- a real Target must not invent ad-hoc Rust/Python code merely to exercise it;
+- #73 owns one durable repository smoke entrypoint using the real `R008Broker` + `BrokerProcessRunner` path;
+- #73 also owns evidence-safe output and bounded site-neutral diagnostics, so #67 can report policy/limit/timeout/unsupported classes without logging signed media URLs or raw worker stderr;
+- #73 may not weaken R008 or increase the current broker response limit merely to make a site pass.
 
 Architecture path:
 
@@ -102,9 +111,11 @@ First-playback format policy is intentionally bounded:
 
 Acceptance gate:
 
-1. #66 deterministic brokered real extraction implementation accepted.
-2. #67 exact Candidate resolves the frozen public Bilibili sample on a permitted normal network.
-3. #68 proves the same real-source path reaches Gateway/Web Display and normal Control commands.
+1. #66 deterministic brokered real extraction implementation accepted. **Done.**
+2. #73 provides an accepted safe/reproducible real-site smoke harness using actual R008 authority.
+3. #64/#63 establish the selected low-privilege normal-network target environment.
+4. #67 executes that accepted harness on an exact Candidate against the frozen public Bilibili sample and classifies real compatibility without bypass.
+5. #68 proves the same real-source path reaches Gateway/Web Display and normal Control commands.
 
 ---
 
@@ -123,7 +134,7 @@ Planned route:
 → #72 BILIBILI-NAVIGATION
 ```
 
-Both are currently planning-only draft Tasks and must not displace the #66 → #67 → #68 first-playback critical path unless Coordinator explicitly reprioritizes.
+Both are currently planning-only draft Tasks and must not displace the first-playback critical path unless Coordinator explicitly reprioritizes.
 
 Generic capability #71 owns:
 
@@ -266,7 +277,7 @@ Reason:
 
 - #65 attempted integration and found semantic conflicts between the preserved #23 branch and the accepted current SiteAdapter API/conformance authority;
 - #39 explicitly treated #23-only `NavigationContext`, `ResolveContext`, DASH/expiry and site-specific error additions as non-authoritative;
-- the project now has an accepted secure generic-ytdlp runtime (#60), which is the shortest route to first real playback;
+- the project now has an accepted secure generic-ytdlp runtime (#60/#66), which is the shortest route to first real playback;
 - navigation/auth/native-panel capabilities are being separated into generic capability layers rather than bundled into one legacy plugin branch.
 
 Historical value retained:
@@ -284,10 +295,12 @@ Historical Evidence must not be merged or reported as if it were current-main in
 
 ```text
 Environment lane
-#64 → #63
-
-First-playback lane
-#66 → #67 → #68
+#64 → #63 ─────────────────────┐
+                               │
+First-playback lane            │
+#66(done) → #73 ───────────────┼→ #67 → #68
+                               │
+                               └ target readiness joins at #67
 
 After first playback
         ├→ #71 SITE-NAVIGATION-PREP → #72 BILIBILI-NAVIGATION
@@ -297,6 +310,8 @@ After first playback
 Performance later
 #9 R003-TARGET
 ```
+
+#73 and #64 may execute in parallel. #67 must wait for both the accepted harness and the selected target's functional readiness.
 
 Independent ready Tasks should still execute in parallel when no hard dependency exists.
 
@@ -309,6 +324,9 @@ Before creating a concrete-site implementation Task, classify the requested beha
 ```text
 media extraction
 → generic or site SiteAdapter resolution
+
+real-site verification
+→ repository-owned safe harness + exact target Evidence
 
 previous/next/playlist semantics
 → generic navigation capability + concrete plugin mapping
@@ -326,4 +344,4 @@ performance/resource decision
 → #9 / target-specific Evidence
 ```
 
-Do not let a concrete plugin silently redefine shared SiteAdapter, ResolvedMedia, Playback or security contracts. If a real site proves a generic contract is insufficient, open a generic capability/contract Task first, then implement the site mapping.
+Do not let a concrete plugin or a target-only smoke script silently redefine shared SiteAdapter, ResolvedMedia, Playback or security contracts. If a real site proves a generic contract is insufficient, open a generic capability/contract Task first, then implement the site mapping.
