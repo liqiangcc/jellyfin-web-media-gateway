@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: broker-fd-isolation-${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
