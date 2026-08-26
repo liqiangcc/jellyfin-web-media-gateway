@@ -119,21 +119,23 @@ This is a **generic capability first**, followed by site semantics.
 Planned route:
 
 ```text
-SITE-NAVIGATION-PREP
-→ BILIBILI-NAVIGATION
+#71 SITE-NAVIGATION-PREP
+→ #72 BILIBILI-NAVIGATION
 ```
 
-Generic capability owns:
+Both are currently planning-only draft Tasks and must not displace the #66 → #67 → #68 first-playback critical path unless Coordinator explicitly reprioritizes.
+
+Generic capability #71 owns:
 
 ```text
 SourceLocator
-→ NavigationResult / equivalent generic contract
-→ previous / next / collection position
-→ Playback NextItem / PreviousItem
+→ generic navigation result / equivalent contract
+→ previous / next / bounded collection position
+→ Playback NextItem / PreviousItem preparation
 → stale item/re-resolve protection under R007
 ```
 
-Bilibili-specific implementation owns:
+Bilibili-specific implementation #72 owns:
 
 - BVID/page/part interpretation;
 - multipart ordering;
@@ -143,6 +145,8 @@ Bilibili-specific implementation owns:
 Core must not learn Bilibili identifiers or navigation algorithms.
 
 The old #23/PR #37 Navigation/ResolveContext implementation is historical Evidence only and is **not current API authority**. New navigation work starts from accepted current SiteAdapter conformance (#39) plus canonical `implementation-contracts.md`.
+
+#72 publication hard-depends on #71 Final Acceptance and a stable accepted public Bilibili playback baseline (#68 or later equivalent).
 
 ---
 
@@ -211,7 +215,7 @@ R006-RUNTIME-FUNCTIONAL
 → prove real Chromium lifecycle + BrowserEvent + Native Panel function
 → no performance/capacity claim
 
-later R006-TARGET/PERF
+later R006-TARGET-PERF
 → consume #9 resource Evidence
 → choose always-on / on-demand / pool / external host / defer
 ```
@@ -251,6 +255,13 @@ The following early route is no longer the current delivery path:
 → PR #37 bilibili-public candidate
 ```
 
+Current durable disposition:
+
+- #23: closed `not_planned`, explicitly **not** PASS;
+- #36: closed `not_planned`;
+- #65 integration attempt: closed `not_planned` after contract-invalidating conflict;
+- PR #37: closed unmerged and retained as historical reference.
+
 Reason:
 
 - #65 attempted integration and found semantic conflicts between the preserved #23 branch and the accepted current SiteAdapter API/conformance authority;
@@ -279,7 +290,7 @@ First-playback lane
 #66 → #67 → #68
 
 After first playback
-        ├→ SITE-NAVIGATION-PREP → BILIBILI-NAVIGATION
+        ├→ #71 SITE-NAVIGATION-PREP → #72 BILIBILI-NAVIGATION
 #68 ────┼→ #26 future AUTH-REAL child
         └→ #27 R006-RUNTIME-FUNCTIONAL → site Native Panel work
 
