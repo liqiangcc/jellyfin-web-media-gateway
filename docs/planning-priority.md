@@ -60,7 +60,7 @@ Bilibili URL
 → Control play/pause/seek/stop
 ```
 
-The legacy `#36 → #23 → PR #37` route is superseded for first playback because #65 proved that the preserved #23 branch conflicts semantically with the accepted current SiteAdapter authority. Historical Evidence remains reference material; it is not the active delivery candidate.
+The legacy `#36 → #23 → PR #37` route is superseded for first playback because #65 proved that the preserved #23 branch conflicts semantically with the accepted current SiteAdapter authority. #23/#36 are now closed `not_planned`, and PR #37 is closed unmerged as historical Evidence.
 
 ## Functional expansion after first playback
 
@@ -68,8 +68,8 @@ Once the first Bilibili playback path is accepted, expand capabilities in generi
 
 ```text
 Continuous content
-→ SITE-NAVIGATION-PREP
-→ BILIBILI-NAVIGATION
+→ #71 SITE-NAVIGATION-PREP
+→ #72 BILIBILI-NAVIGATION
 
 Source-site accounts
 → #28 accepted auth foundation
@@ -77,9 +77,11 @@ Source-site accounts
 
 Native site controls
 → #33 accepted Browser/Native Panel contracts
-→ #27 R006-RUNTIME-FUNCTIONAL
+→ #27 future R006-RUNTIME-FUNCTIONAL child
 → concrete site panel interpretation
 ```
+
+#71/#72 are planning-only drafts. They must not displace the current first-playback critical path unless Coordinator explicitly reprioritizes.
 
 Navigation, authentication and Native Panel work may be planned in advance, but should not displace the current first-playback critical path unless they expose a hard dependency.
 
@@ -107,11 +109,11 @@ Physical-TV verification remains independent and should execute when the TV envi
 
 ```text
 #64 → #63
-   
+
 #66 → #67 → #68
-               ├→ Navigation capability/site mapping
-               ├→ Auth real-site work
-               └→ Native Panel functional runtime
+               ├→ #71 → #72
+               ├→ #26 future real-auth child
+               └→ #27 future functional Browser/Native Panel child
 
 #9 performance/capacity later
 ```
