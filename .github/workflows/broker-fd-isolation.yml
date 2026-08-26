@@ -133,6 +133,10 @@ jobs:
           cargo test -p generic-ytdlp --features runtime-prep --lib fd_isolation_tests -- --nocapture
           ! rg -n 'YTDLP_(FORCE|BYPASS)|FORCE_.*(FALLBACK|CLOSE_RANGE)|SKIP_.*FD|DISABLE_.*(SANDBOX|SECCOMP)' plugins/generic-ytdlp gateway-egress
           ! rg -n 'bilibili\.com|Bilibili' .github/workflows/broker-fd-isolation.yml
+          j4_job="$(sed -n '/^  j4-legacy-target:/,$p' .github/workflows/broker-fd-isolation.yml)"
+          ! grep -F 'generic-ytdlp-runtime-cache.py' <<<"$j4_job"
+          grep -F 'generic-ytdlp-offline-runtime.py verify' <<<"$j4_job"
+          grep -F 'generic-ytdlp-offline-runtime.py install' <<<"$j4_job"
 
   j4-legacy-target:
     name: J4 Linux 4.19 ARM64 legacy-kernel target proof
@@ -184,12 +188,25 @@ jobs:
           if observed != errno.ENOSYS:
               raise SystemExit(1)
           PY
-      - name: Reuse exact user-owned frozen runtime cache
+      - name: Transfer exact accepted #79 offline runtime bundle
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 32956386626
+          name: generic-ytdlp-offline-runtime-3a3de8ee2f9ac8b0e1e312735a9305db7569baef
+          path: ${{ runner.temp }}/broker-fd-isolation-offline-bundle
+      - name: Verify and consume exact #79 offline runtime bundle
         shell: bash --noprofile --norc -euo pipefail {0}
         run: |
-          cache_info="$(python3 scripts/generic-ytdlp-runtime-cache.py prepare)"
+          bundle_path="$RUNNER_TEMP/broker-fd-isolation-offline-bundle"
+          [[ -d "$bundle_path/generic-ytdlp-offline-runtime" ]] && bundle_path="$bundle_path/generic-ytdlp-offline-runtime"
+          test -d "$bundle_path"
+          python3 scripts/generic-ytdlp-offline-runtime.py verify "$bundle_path"
+          ! rg -n 'git\+https|pip install.*git|pip wheel.*git' "$bundle_path"
+          unset GH_TOKEN GITHUB_TOKEN ACTIONS_RUNTIME_TOKEN ACTIONS_RUNTIME_URL
+          cache_info="$(python3 scripts/generic-ytdlp-offline-runtime.py install "$bundle_path")"
           mapfile -t cache_lines <<<"$cache_info"
-          test "${cache_lines[0]}" = hit
+          [[ "${cache_lines[0]}" = hit || "${cache_lines[0]}" = prepared ]]
           printf 'YTDLP_SOURCE=%s\n' "${cache_lines[1]}" >> "$GITHUB_ENV"
       - name: Run deterministic BrokerProcessRunner target proof
         shell: bash --noprofile --norc -euo pipefail {0}
