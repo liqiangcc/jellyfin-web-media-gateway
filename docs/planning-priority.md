@@ -2,7 +2,7 @@
 
 This document records the current execution priority for the media gateway project.
 
-The detailed current product capability/task map is `product-roadmap.md`.
+The detailed capability/task map is `product-roadmap.md`. Live Task status and ownership remain GitHub Issue authority.
 
 The ordering is intentionally:
 
@@ -14,125 +14,222 @@ Environment readiness
 → Production hardening
 ```
 
-## Environment readiness
+## 1. Immediate critical path
 
-Environment work answers only whether a target can be used for functional development and verification:
-
-- Runner/host is reachable and schedulable;
-- low-privilege and workspace/Vault boundaries remain intact;
-- required build/runtime tools are present or the concrete missing capability is known;
-- the Gateway can be built/started/stopped in an isolated test location;
-- required public network paths can be exercised without credential/access-control bypass;
-- Evidence can be returned through GitHub Actions / the approved execution plane.
-
-Environment readiness must not claim CPU/RSS/temperature/throughput/soak feasibility.
-
-Current environment route:
+The current highest-priority product-mainline Task is:
 
 ```text
-#64 ENV-ARM64-RUST
-→ #63 ENV-ARM64-READY
+#67 GENERIC-YTDLP-BILIBILI-REAL — Attempt 4
 ```
 
-A fresh accepted Target Runner smoke and #63 Attempt 1 already prove the scheduling/security/direct-network slices, including direct/no-proxy HTTP 200 reachability for the frozen Bilibili sample. The remaining environment blocker is low-privilege functional toolchain/Gateway execution, not Bilibili network reachability.
+Its job is to obtain the first real brokered Bilibili extraction compatibility result on the accepted Ubuntu ARM64 target using the accepted offline runtime and ARM64 sandbox.
 
-## Functional closure
-
-After environment readiness, prioritize user-visible end-to-end behavior.
-
-The current first real-site playback route is:
+Expected decisive path:
 
 ```text
-#66 GENERIC-YTDLP-EXTRACT-PREP          [accepted]
-→ #73 GENERIC-YTDLP-REAL-HARNESS-PREP
-→ #67 GENERIC-YTDLP-BILIBILI-REAL
-→ #68 BILIBILI-WEB-E2E
+verified offline runtime
+→ ARM64 sandbox
+→ BrokerProcessRunner
+→ R008Broker
+→ broker_request_count > 0
+→ real compatibility result
 ```
 
-#73 is a hard Evidence/reproducibility dependency for #67. It adds the repository-owned safe command that connects the accepted #66 extraction library to the real R008Broker/BrokerProcessRunner path and emits only bounded, non-secret diagnostics. The phone must not invent ad-hoc real-site code.
+Do not interrupt #67 with speculative infrastructure work.
 
-#73 must not increase the current R008 96 KiB broker body limit, weaken egress/Secret policy, use ambient proxy authority, or enable generic-ytdlp production registration. Real compatibility failures remain Evidence for #67/Coordinator classification.
-
-Target user-visible path:
+If #67 PASSes with a current first-playback-compatible muxed `http-file` or `hls` shape, the immediate next product Task is:
 
 ```text
-Bilibili URL
+#68 BILIBILI-WEB-E2E
+```
+
+#68 closes:
+
+```text
+Control Bilibili URL
 → SiteAdapterRegistry
 → generic-ytdlp
-→ current ResolvedMedia
-→ Gateway
-→ Web Display
-→ Control play/pause/seek/stop
+→ SourceSession / PlaybackSession
+→ Gateway media capability
+→ Web Display <video>
+→ play / pause / seek / stop
+→ refresh / reconnect
 ```
 
-The legacy `#36 → #23 → PR #37` route is superseded for first playback because #65 proved that the preserved #23 branch conflicts semantically with the accepted current SiteAdapter authority. #23/#36 are closed `not_planned`, and PR #37 is closed unmerged as historical Evidence.
+## 2. Stop infrastructure expansion unless Evidence requires it
 
-## Current parallelism
+#79 and #83 were valid because prior real #67 Attempts exposed concrete runtime blockers. That pattern must not become an automatic expansion strategy.
 
-The two immediate lanes are independent until #67:
+Current rule:
 
 ```text
-phone environment: #64 → #63 ──┐
-                                ├→ #67
-Cloud harness:     #73 ─────────┘
+No new generic-ytdlp runtime/distribution/sandbox/security Task
+unless current #67/#68 Evidence identifies a concrete blocker.
 ```
 
-Therefore #73 and #64 should execute in parallel. #67 waits for both accepted harness Evidence and a ready selected target environment.
-
-## Functional expansion after first playback
-
-Once the first Bilibili playback path is accepted, expand capabilities in generic layers rather than rebuilding a monolithic site plugin:
+Minimal routing:
 
 ```text
-Continuous content
-→ #71 SITE-NAVIGATION-PREP
-→ #72 BILIBILI-NAVIGATION
+#67 PASS
+→ #68
 
-Source-site accounts
-→ #28 accepted auth foundation
-→ #26 future real-auth child
+#67 FAIL because current media shape is unsupported
+→ smallest generic media-format capability Task required by Evidence
 
-Native site controls
-→ #33 accepted Browser/Native Panel contracts
-→ #27 future R006-RUNTIME-FUNCTIONAL child
-→ concrete site panel interpretation
+#67 BLOCKED by a concrete R008/runtime/site condition
+→ one bounded repair/research Task
+
+no concrete blocker
+→ no infrastructure Task
 ```
 
-#71/#72 are planning-only drafts. They must not displace the current first-playback critical path unless Coordinator explicitly reprioritizes.
+Do not proactively optimize Actions artifact distribution, sandbox architecture, packaging, production registration or runtime abstractions while first playback is still unproven.
 
-Navigation, authentication and Native Panel work may be planned in advance, but should not displace the current first-playback critical path unless they expose a hard dependency.
+## 3. Physical TV is a parallel product Evidence lane
 
-## Performance / capacity
+Physical-TV behavior remains part of the intended TV-oriented product experience.
 
-R003-TARGET (#9) remains the authoritative Ubuntu ARM64 performance/resource verification task, including sustained Direct/Remux/Chromium scenarios, CPU/RSS/temperature and 5/30/60-minute Evidence.
+Current route:
 
-It is intentionally deferred until primary functional paths are stable enough that measurements are representative.
+```text
+#6 R002-PREP [done]
+→ #7 R002-TV [draft]
+```
+
+#7 may execute independently when the real prerequisites exist:
+
+- reachable accepted deployment;
+- physical target TV/browser;
+- real phone/control trigger path;
+- observable audible playback behavior.
+
+Do not publish #7 only to fill capacity when those prerequisites are unavailable.
+
+Important distinction:
+
+```text
+#68 PASS
+= Bilibili Web playback/control closure
+
+#7 PASS | acceptable CONDITIONAL PASS
+= physical-TV remote audible playback behavior established
+```
+
+Hosted/headless/browser Evidence cannot replace #7.
+
+## 4. Functional expansion is parked behind first playback
+
+The following capabilities are prepared but must not displace the current first-playback path:
+
+```text
+Navigation
+#71 [done] → #72 [draft; wait stable #68]
+
+Auth
+#28 [done] + #75 [done] + stable #68
+→ future evidence-driven AUTH-REAL child
+
+Native Site Panel
+#33 [done] + #75 [done]
+→ future real-site child only when product need selects it
+```
+
+#75 being accepted means the Browser runtime capability exists. It does **not** mean a Native Panel/Auth task should automatically be created next.
+
+## 5. Environment readiness is already sufficient for current functional work
+
+Accepted route:
+
+```text
+#64 ENV-ARM64-RUST [done]
+→ #63 ENV-ARM64-READY [done]
+```
+
+The current target is sufficiently ready for #67 functional verification under the accepted low-privilege/security boundaries.
+
+Do not reopen environment work unless a new concrete target failure invalidates that accepted Evidence.
+
+Environment readiness does not claim CPU/RSS/temperature/throughput/soak capacity.
+
+## 6. Performance / capacity remains later
+
+#9 R003-TARGET remains the authoritative phone resource/performance verification Task:
+
+```text
+CPU / RSS / temperature
+Direct / Remux / Chromium
+5 / 30 / 60-minute sustained Evidence
+```
+
+It is intentionally deferred until primary functional paths are stable enough to make measurements representative.
 
 Important separation:
 
 ```text
-Chromium/Gateway can function
+Gateway/Chromium functions
 !=
-Chromium/Gateway is performant enough for always-on production use
+phone is suitable for always-on production placement
 ```
 
-Functional runtime Tasks may therefore proceed before #9 when they make no resource/capacity claim.
+#9 must not retroactively block #67/#68 functional closure.
 
-## Physical-device gates
+## 7. Core feasibility synthesis is a later gate, not the current queue gate
 
-Physical-TV verification remains independent and should execute when the TV environment is available. Missing physical-TV Evidence must not be substituted by hosted browser evidence.
+#22 CORE-FEASIBILITY-REVIEW remains a later synthesis task requiring the relevant P0 Evidence, including R002 physical-TV and R003 target-performance conclusions.
 
-## Current top-level execution graph
+Interpret it as:
 
 ```text
-#64 → #63 ───────────────┐
-                        ├→ #67 → #68
-#66(done) → #73 ────────┘
-                              ├→ #71 → #72
-                              ├→ #26 future real-auth child
-                              └→ #27 future functional Browser/Native Panel child
-
-#9 performance/capacity later
+final/broader Core + deployment feasibility synthesis
 ```
 
-No-hard-dependency ready Tasks should execute in parallel.
+not as:
+
+```text
+permission required before current functional delivery can continue
+```
+
+## 8. Current execution graph
+
+```text
+ACTIVE PRODUCT MAINLINE
+#67 Attempt 4
+  ↓
+PASS → #68
+FAIL/BLOCKED → one evidence-driven minimal repair only
+
+PARALLEL WHEN REAL DEVICE AVAILABLE
+#6(done) → #7 physical TV
+
+PARKED UNTIL FIRST PLAYBACK STABLE
+#71(done) → #72
+#28(done) + #75(done) → future Auth-real
+#33(done) + #75(done) → future Native Panel real-site
+
+LATER
+#9 performance/capacity
+→ #22 broader Core/deployment feasibility synthesis
+```
+
+## 9. Coordinator scheduling rule
+
+Use this decision order whenever a Worker finishes:
+
+```text
+1. Is there a review-ready current product-mainline Task?
+   → review it first.
+
+2. Did real Evidence expose a blocker to the next user-visible milestone?
+   → create the smallest repair Task.
+
+3. Is the next product Task already drafted and its dependencies satisfied?
+   → Publication Gate and dispatch it.
+
+4. Is a real physical-device Evidence lane available now?
+   → run it in parallel if independent.
+
+5. Otherwise
+   → do not manufacture new work merely to keep Workers busy.
+```
+
+The project should optimize for **user-visible evidence throughput**, not number of active Issues or amount of infrastructure completed.
