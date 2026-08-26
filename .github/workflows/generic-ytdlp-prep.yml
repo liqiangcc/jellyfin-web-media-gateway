@@ -32,6 +32,7 @@ concurrency:
 
 env:
   CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+  PYTHON: python
 
 jobs:
   j1-conformance:
