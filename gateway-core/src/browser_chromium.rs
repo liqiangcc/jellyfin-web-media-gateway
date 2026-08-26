@@ -432,6 +432,7 @@ impl ChromiumBrowserWorker {
                 "--headless=new",
                 "--disable-gpu",
                 "--disable-dev-shm-usage",
+                "--no-sandbox",
                 "--disable-background-networking",
                 "--disable-component-update",
                 "--disable-default-apps",
