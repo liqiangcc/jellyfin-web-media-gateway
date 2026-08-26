@@ -1,20 +1,23 @@
 #![cfg(feature = "runtime-prep")]
 
-use gateway_core::{EgressPolicy, EgressPolicyError, EgressScope};
+use gateway_egress::{BrokerCancellation as EgressCancellation, R008Broker};
 use generic_ytdlp::{
-    BrokerBackend, BrokerProcessRunner, BrokerRequest, BrokerResponse, R008Broker, RuntimeLimits,
-    parse_machine_output,
+    BrokerBackend, BrokerCancellation, BrokerProcessRunner, BrokerRequest, BrokerResponse,
+    RuntimeLimits, parse_machine_output,
 };
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
 use std::time::Duration;
 use url::Url;
 
 struct FixtureBroker;
 
 impl BrokerBackend for FixtureBroker {
-    fn handle(&self, request: BrokerRequest) -> BrokerResponse {
+    fn handle(&self, request: BrokerRequest, _cancellation: BrokerCancellation) -> BrokerResponse {
         assert_eq!(request.operation, "http");
         assert_eq!(request.method, "GET");
         assert!(request.headers.keys().all(|name| name != "Cookie"));
@@ -31,23 +34,65 @@ impl BrokerBackend for FixtureBroker {
     }
 }
 
-fn runner(timeout: Duration) -> BrokerProcessRunner {
+fn runner_with_backend(
+    backend: Arc<dyn BrokerBackend>,
+    timeout: Duration,
+    descendant_pid_file: Option<PathBuf>,
+) -> BrokerProcessRunner {
     let pythonpath = std::env::var_os("YTDLP_SOURCE").map(PathBuf::from);
     let limits = RuntimeLimits {
         timeout,
         pythonpath,
+        descendant_pid_file,
         ..RuntimeLimits::default()
     };
     let sandbox = std::env::var_os("CARGO_BIN_EXE_ytdlp-sandbox")
         .map(PathBuf::from)
         .expect("cargo must provide the required sandbox binary");
     BrokerProcessRunner::new(
-        Arc::new(FixtureBroker),
+        backend,
         PathBuf::from(std::env::var_os("PYTHON").unwrap_or_else(|| "python3".into())),
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("worker/worker.py"),
         sandbox,
         limits,
     )
+}
+
+fn runner(timeout: Duration) -> BrokerProcessRunner {
+    runner_with_backend(Arc::new(FixtureBroker), timeout, None)
+}
+
+fn pid_marker(label: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "generic-ytdlp-{label}-{}-{}.pid",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ))
+}
+
+fn marked_pid(path: &PathBuf) -> i32 {
+    for _ in 0..400 {
+        if let Ok(contents) = fs::read_to_string(path) {
+            if let Ok(pid) = contents.trim().parse() {
+                return pid;
+            }
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    panic!("descendant marker was not written: {}", path.display());
+}
+
+fn assert_pid_gone(pid: i32) {
+    for _ in 0..200 {
+        if !PathBuf::from(format!("/proc/{pid}")).exists() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    panic!("descendant {pid} survived process-group cleanup");
 }
 
 #[test]
@@ -95,7 +140,10 @@ fn seccomp_denies_worker_custom_handler_and_child_but_ipc_survives() {
         "python_af_inet_denied",
         "python_af_inet6_denied",
         "custom_handler_denied",
+        "custom_unix_handler_denied",
+        "python_af_unix_denied",
         "child_af_inet_denied",
+        "child_af_unix_denied",
         "broker_ipc_usable",
         "no_new_privs",
         "seccomp_filter",
@@ -136,47 +184,158 @@ fn lifecycle_timeout_and_stdout_overflow_are_bounded() {
             .unwrap_err(),
         generic_ytdlp::ProcessError::StdoutLimitExceeded
     );
+
+    for (label, action, expected) in [
+        (
+            "timeout-descendant",
+            "timeout-descendant",
+            generic_ytdlp::ProcessError::TimedOut,
+        ),
+        (
+            "crash-descendant",
+            "crash-descendant",
+            generic_ytdlp::ProcessError::NonZeroExit,
+        ),
+        (
+            "overflow-descendant",
+            "overflow-descendant",
+            generic_ytdlp::ProcessError::StdoutLimitExceeded,
+        ),
+    ] {
+        let marker = pid_marker(label);
+        let descendant_runner = runner_with_backend(
+            Arc::new(FixtureBroker),
+            Duration::from_millis(300),
+            Some(marker.clone()),
+        );
+        assert_eq!(
+            descendant_runner
+                .run_action(
+                    action,
+                    &Url::parse("https://fixture.example.test/media").unwrap()
+                )
+                .unwrap_err(),
+            expected
+        );
+        let pid = marked_pid(&marker);
+        assert_pid_gone(pid);
+        let _ = fs::remove_file(marker);
+    }
+}
+
+struct BlockingBroker {
+    started: Arc<AtomicBool>,
+    finished: Arc<AtomicBool>,
+}
+
+impl BrokerBackend for BlockingBroker {
+    fn handle(&self, _request: BrokerRequest, cancellation: BrokerCancellation) -> BrokerResponse {
+        self.started.store(true, Ordering::Release);
+        while !cancellation.is_cancelled() {
+            thread::sleep(Duration::from_millis(5));
+        }
+        self.finished.store(true, Ordering::Release);
+        BrokerResponse::denied("BROKER_CANCELLED")
+    }
+}
+
+#[test]
+fn external_cancel_wins_over_in_flight_broker_and_reaps_descendant() {
+    let started = Arc::new(AtomicBool::new(false));
+    let finished = Arc::new(AtomicBool::new(false));
+    let backend = Arc::new(BlockingBroker {
+        started: Arc::clone(&started),
+        finished: Arc::clone(&finished),
+    });
+    let cancellation = BrokerCancellation::default();
+    let runner = runner_with_backend(backend, Duration::from_secs(30), None);
+    let cancel_for_thread = cancellation.clone();
+    let task = thread::spawn(move || {
+        runner.run_action_with_cancel(
+            "probe",
+            &Url::parse("https://fixture.example.test/media").unwrap(),
+            cancel_for_thread,
+        )
+    });
+    for _ in 0..100 {
+        if started.load(Ordering::Acquire) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert!(started.load(Ordering::Acquire));
+    cancellation.cancel();
+    let result = task.join().unwrap();
+    assert_eq!(result.unwrap_err(), generic_ytdlp::ProcessError::Cancelled);
+    assert!(finished.load(Ordering::Acquire));
+}
+
+#[test]
+fn diagnostics_consume_secret_sentinel_without_crossing_error_boundary() {
+    let error = runner(Duration::from_secs(5))
+        .run_action(
+            "diagnostic-sentinel",
+            &Url::parse("https://fixture.example.test/media").unwrap(),
+        )
+        .unwrap_err();
+    assert_eq!(error, generic_ytdlp::ProcessError::NonZeroExit);
+    let diagnostics = format!("{error:?}");
+    for sentinel in ["signed-query-secret", "secret-token", "session-secret"] {
+        assert!(!diagnostics.contains(sentinel));
+    }
 }
 
 #[test]
 fn r008_broker_rejects_secret_userinfo_and_private_targets_before_network() {
-    let broker = R008Broker::new(EgressPolicy::default(), Duration::from_secs(1));
-    let response = broker.handle(BrokerRequest {
-        operation: "http".into(),
-        method: "GET".into(),
-        url: "https://user:password@example.test/media".into(),
-        headers: BTreeMap::new(),
-        body: Vec::new(),
-    });
+    let broker = R008Broker::default();
+    let response = broker.handle(
+        BrokerRequest {
+            operation: "http".into(),
+            method: "GET".into(),
+            url: "https://user:password@example.test/media".into(),
+            headers: BTreeMap::new(),
+            body: Vec::new(),
+        },
+        EgressCancellation::default(),
+    );
     assert_eq!(response.error.as_deref(), Some("BROKER_URL_REJECTED"));
-    let response = broker.handle(BrokerRequest {
-        operation: "http".into(),
-        method: "GET".into(),
-        url: "http://127.0.0.1:9/metadata".into(),
-        headers: BTreeMap::from([(String::from("Authorization"), String::from("Bearer secret"))]),
-        body: Vec::new(),
-    });
+    let response = broker.handle(
+        BrokerRequest {
+            operation: "http".into(),
+            method: "GET".into(),
+            url: "http://127.0.0.1:9/metadata".into(),
+            headers: BTreeMap::from([(
+                String::from("Authorization"),
+                String::from("Bearer secret"),
+            )]),
+            body: Vec::new(),
+        },
+        EgressCancellation::default(),
+    );
     assert_eq!(
         response.error.as_deref(),
         Some("BROKER_SECRET_HEADER_REJECTED")
     );
-    let response = broker.handle(BrokerRequest {
-        operation: "http".into(),
-        method: "CONNECT".into(),
-        url: "https://example.test/".into(),
-        headers: BTreeMap::new(),
-        body: Vec::new(),
-    });
-    assert_eq!(response.error.as_deref(), Some("BROKER_OPERATION_REJECTED"));
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    assert_eq!(
-        runtime.block_on(EgressPolicy::default().validate(
-            &Url::parse("http://127.0.0.1/").unwrap(),
-            &EgressScope::PublicWeb,
-        )),
-        Err(EgressPolicyError::TargetRejected)
+    let response = broker.handle(
+        BrokerRequest {
+            operation: "http".into(),
+            method: "CONNECT".into(),
+            url: "https://example.test/".into(),
+            headers: BTreeMap::new(),
+            body: Vec::new(),
+        },
+        EgressCancellation::default(),
     );
+    assert_eq!(response.error.as_deref(), Some("BROKER_OPERATION_REJECTED"));
+    let response = broker.handle(
+        BrokerRequest {
+            operation: "http".into(),
+            method: "GET".into(),
+            url: "http://127.0.0.1/".into(),
+            headers: BTreeMap::new(),
+            body: Vec::new(),
+        },
+        EgressCancellation::default(),
+    );
+    assert_eq!(response.error.as_deref(), Some("BROKER_EGRESS_REJECTED"));
 }

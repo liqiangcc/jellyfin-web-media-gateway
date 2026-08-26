@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "display-adapter-api",
+  "gateway-egress",
   "site-adapter-api",
   "plugins/generic-direct",
   "plugins/generic-ytdlp",

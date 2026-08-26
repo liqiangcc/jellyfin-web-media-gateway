@@ -107,6 +107,20 @@ class DirectSocketRH(RequestHandler):
         raise AssertionError("direct socket unexpectedly allowed")
 
 
+class DirectUnixSocketRH(RequestHandler):
+    """Negative fixture: no second local socket authority is admitted."""
+
+    RH_NAME = "direct unix escape fixture"
+    _SUPPORTED_URL_SCHEMES = ("http", "https")
+    _SUPPORTED_PROXY_SCHEMES = ()
+    _SUPPORTED_FEATURES = ()
+
+    def _send(self, request: Request) -> Response:
+        del request
+        socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        raise AssertionError("direct unix socket unexpectedly allowed")
+
+
 class SilentLogger:
     def stdout(self, *args, **kwargs):
         del args, kwargs
@@ -195,6 +209,16 @@ def _network_matrix(url: str) -> dict[str, Any]:
     finally:
         direct.close()
 
+    unix_direct = RequestDirector(logger=logger, verbose=False)
+    unix_direct.add_handler(DirectUnixSocketRH(logger=logger))
+    try:
+        unix_direct.send(Request(url))
+        unix_denied = False
+    except Exception:
+        unix_denied = True
+    finally:
+        unix_direct.close()
+
     python_executable = os.readlink("/proc/self/exe")
     child = subprocess.run(
         [python_executable, "-c", "import socket; socket.socket(socket.AF_INET, socket.SOCK_STREAM)"],
@@ -203,6 +227,17 @@ def _network_matrix(url: str) -> dict[str, Any]:
         check=False,
     )
     child_denied = child.returncode != 0
+    child_unix = subprocess.run(
+        [
+            python_executable,
+            "-c",
+            "import socket; socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    child_unix_denied = child_unix.returncode != 0
     probe = _probe(url)
     no_new_privs = any(
         line.startswith("NoNewPrivs:") and line.split()[-1] == "1"
@@ -217,12 +252,30 @@ def _network_matrix(url: str) -> dict[str, Any]:
             "python_af_inet_denied": denied.get(str(socket.AF_INET), False),
             "python_af_inet6_denied": denied.get(str(socket.AF_INET6), False),
             "custom_handler_denied": custom_denied,
+            "custom_unix_handler_denied": unix_denied,
+            "python_af_unix_denied": unix_denied,
             "child_af_inet_denied": child_denied,
+            "child_af_unix_denied": child_unix_denied,
             "broker_ipc_usable": probe["title"] == "fixture media",
             "no_new_privs": no_new_privs,
             "seccomp_filter": seccomp,
         }
     }
+
+
+def _spawn_long_lived_descendant() -> None:
+    pid_file = os.environ.get("YTDLP_DESCENDANT_PID_FILE")
+    if not pid_file:
+        raise RuntimeError("descendant marker unavailable")
+    descendant = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    with open(pid_file, "w", encoding="ascii") as marker:
+        marker.write(str(descendant.pid))
+        marker.flush()
 
 
 def main() -> int:
@@ -244,10 +297,31 @@ def main() -> int:
 
         time.sleep(60)
         return 0
+    elif action in {"timeout-descendant", "cancel-descendant"}:
+        import time
+
+        _spawn_long_lived_descendant()
+        time.sleep(60)
+        return 0
+    elif action == "crash-descendant":
+        _spawn_long_lived_descendant()
+        os._exit(7)
+    elif action == "overflow-descendant":
+        _spawn_long_lived_descendant()
+        sys.stdout.write("x" * (512 * 1024))
+        sys.stdout.flush()
+        return 0
     elif action == "overflow":
         sys.stdout.write("x" * (512 * 1024))
         sys.stdout.flush()
         return 0
+    elif action == "diagnostic-sentinel":
+        sys.stderr.write(
+            "source=https://fixture.example.test/watch?sig=signed-query-secret "
+            "Authorization=Bearer secret-token Cookie=session-secret\n"
+        )
+        sys.stderr.flush()
+        return 65
     else:
         return 64
     sys.stdout.write(json.dumps(result, separators=(",", ":")))

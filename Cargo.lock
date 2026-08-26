@@ -240,6 +240,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "gateway-egress"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "gateway-core",
+ "reqwest",
+ "serde",
+ "site-adapter-api",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "generic-direct"
 version = "0.1.0"
 dependencies = [
@@ -251,15 +264,12 @@ dependencies = [
 name = "generic-ytdlp"
 version = "0.1.0"
 dependencies = [
- "futures-util",
- "gateway-core",
+ "gateway-egress",
  "generic-direct",
  "libc",
- "reqwest",
  "serde",
  "serde_json",
  "site-adapter-api",
- "tokio",
  "url",
 ]
 

@@ -37,7 +37,8 @@ mod runtime;
 
 #[cfg(feature = "runtime-prep")]
 pub use runtime::{
-    BrokerBackend, BrokerProcessRunner, BrokerRequest, BrokerResponse, R008Broker, RuntimeLimits,
+    BrokerBackend, BrokerCancellation, BrokerProcessRunner, BrokerRequest, BrokerResponse,
+    RuntimeLimits,
 };
 
 const MAX_INPUT_BYTES: usize = 16 * 1024;
@@ -119,6 +120,7 @@ pub enum ProcessError {
     InvalidLimits,
     SpawnFailed,
     IoFailure,
+    Cancelled,
     TimedOut,
     StdoutLimitExceeded,
     StderrLimitExceeded,

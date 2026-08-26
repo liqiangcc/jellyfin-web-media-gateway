@@ -1,8 +1,9 @@
 //! Small Linux launcher for the verification worker.
 //!
 //! The socketpair is created before this process starts. After the inherited
-//! descriptor is installed, no-new-privs and a seccomp filter deny AF_INET and
-//! AF_INET6 socket creation. The filter is inherited by Python and descendants.
+//! descriptor is installed, no-new-privs and a seccomp filter deny creation of
+//! any new socket. The inherited broker fd remains usable, and the filter is
+//! inherited by Python and descendants.
 
 use std::env;
 use std::process::{Command, ExitCode};
@@ -16,7 +17,6 @@ const EPERM: u32 = 1;
 const AUDIT_ARCH_X86_64: u32 = 0xc000_003e;
 const SECCOMP_DATA_ARCH: u32 = 4;
 const SECCOMP_DATA_NR: u32 = 0;
-const SECCOMP_DATA_ARG0: u32 = 16;
 
 fn stmt(code: u16, k: u32) -> libc::sock_filter {
     libc::sock_filter {
@@ -56,22 +56,12 @@ fn install_filter() -> Result<(), String> {
         jump(
             (libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K) as u16,
             libc::SYS_socket as u32,
-            0,
-            3,
-        ),
-        stmt(
-            (libc::BPF_LD | libc::BPF_W | libc::BPF_ABS) as u16,
-            SECCOMP_DATA_ARG0,
-        ),
-        jump(
-            (libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K) as u16,
-            libc::AF_INET as u32,
             2,
             0,
         ),
         jump(
             (libc::BPF_JMP | libc::BPF_JEQ | libc::BPF_K) as u16,
-            libc::AF_INET6 as u32,
+            libc::SYS_socketpair as u32,
             1,
             0,
         ),

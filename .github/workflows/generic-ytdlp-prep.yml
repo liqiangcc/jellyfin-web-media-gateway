@@ -11,6 +11,7 @@ on:
       - "site-adapter-api/**"
       - "plugins/generic-direct/**"
       - "plugins/generic-ytdlp/**"
+      - "gateway-egress/**"
       - "gateway-core/**"
       - "display-adapter-api/**"
       - "scripts/check-core-site-boundary.sh"
@@ -36,7 +37,7 @@ env:
 
 jobs:
   j1-conformance:
-    name: J1 fake process parser conformance and priority
+    name: J1 pinned worker broker flow parser and priority
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -66,13 +67,14 @@ jobs:
         run: |
           cargo fmt --all -- --check
           cargo clippy -p generic-ytdlp --all-targets -- -D warnings
+          cargo test -p gateway-egress --all-targets -- --nocapture
           cargo test -p site-adapter-api --all-targets -- --nocapture
           cargo test -p generic-direct --all-targets -- --nocapture
           cargo test -p generic-ytdlp --all-targets -- --nocapture
           cargo test -p generic-ytdlp --features runtime-prep --test runtime -- --nocapture
 
   j2-boundaries:
-    name: J2 argv limits secret negatives and disabled runtime
+    name: J2 sandbox and escape matrix
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -106,7 +108,9 @@ jobs:
         run: |
           ! grep -RInE 'yt-dlp|ytdlp|std::process|Command::new|reqwest|TcpStream' gateway-core/src
           ! grep -RInE 'curl_cffi|websockets|ftp://|file://' plugins/generic-ytdlp/worker
-          grep -q 'R008Broker' plugins/generic-ytdlp/src/runtime.rs
+          ! grep -RInE 'gateway-core|reqwest|EgressPolicy|R008Broker' plugins/generic-ytdlp/src plugins/generic-ytdlp/Cargo.toml
+          grep -q 'R008Broker' gateway-egress/src/lib.rs
+          grep -q 'SYS_socketpair' plugins/generic-ytdlp/src/bin/ytdlp-sandbox.rs
           grep -q 'DisabledRunner' plugins/generic-ytdlp/src/lib.rs
           bash scripts/check-core-site-boundary.sh
           bash scripts/check-core-site-boundary.sh --self-test
@@ -145,6 +149,7 @@ jobs:
           cargo test --workspace --all-targets
           cargo test -p gateway-core --test security_baseline -- --nocapture
           cargo test -p gateway-core --test media_gateway -- --nocapture
+          cargo test -p gateway-egress --all-targets -- --nocapture
           cargo test -p generic-ytdlp --features runtime-prep --test runtime r008_broker_rejects_secret_userinfo_and_private_targets_before_network -- --nocapture
 
   j4-lifecycle-regressions:
@@ -180,6 +185,7 @@ jobs:
           cargo test -p generic-ytdlp --all-targets -- --nocapture
           cargo test -p site-adapter-api --all-targets -- --nocapture
           cargo test -p generic-ytdlp --features runtime-prep --test runtime -- --nocapture
+          python -m py_compile plugins/generic-ytdlp/worker/worker.py
           grep -q 'Arc::new(DisabledRunner)' plugins/generic-ytdlp/src/lib.rs
           bash scripts/check-core-site-boundary.sh
           bash scripts/check-core-site-boundary.sh --self-test
