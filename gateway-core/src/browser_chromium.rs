@@ -52,6 +52,18 @@ const ALLOWED_BINARIES: &[(&str, &str)] = &[
     ("chromium", "chromium"),
     ("chromium-browser", "chromium-browser"),
 ];
+const TRUSTED_BINARY_DIRECTORIES: &[&str] = &[
+    "/usr/local/bin",
+    "/usr/bin",
+    "/usr/local/sbin",
+    "/usr/sbin",
+    "/sbin",
+    "/bin",
+    "/opt/google/chrome",
+    "/usr/lib/chromium",
+    "/usr/lib/chromium-browser",
+    "/snap/bin",
+];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChromiumBinaryInfo {
@@ -906,9 +918,16 @@ fn pointer_button(button: crate::browser::PointerButton) -> &'static str {
 }
 
 fn find_allowed_binary() -> Option<(String, PathBuf)> {
-    let path = std::env::var_os("PATH")?;
+    let directories = TRUSTED_BINARY_DIRECTORIES
+        .iter()
+        .map(|directory| Path::new(directory))
+        .collect::<Vec<_>>();
+    find_allowed_binary_in_directories(&directories)
+}
+
+fn find_allowed_binary_in_directories(directories: &[&Path]) -> Option<(String, PathBuf)> {
     for (class, name) in ALLOWED_BINARIES {
-        for directory in std::env::split_paths(&path) {
+        for directory in directories {
             let candidate = directory.join(name);
             if candidate.is_file() {
                 return Some(((*class).to_string(), candidate));
@@ -1266,5 +1285,45 @@ mod tests {
         assert!(environment.contains_key("HOME"));
 
         remove_profile(&profile_dir);
+    }
+
+    #[test]
+    fn browser_discovery_ignores_malicious_caller_path() {
+        let malicious_dir = std::env::temp_dir().join(format!(
+            "web-media-gateway-malicious-browser-path-{}",
+            Uuid::new_v4().simple()
+        ));
+        fs::create_dir(&malicious_dir).unwrap();
+        let fake_browser = malicious_dir.join("google-chrome-stable");
+        fs::write(&fake_browser, b"#!/bin/sh\nexit 0\n").unwrap();
+
+        let caller_path =
+            std::env::join_paths([malicious_dir.as_path(), Path::new("/usr/bin")]).unwrap();
+        let caller_directories = std::env::split_paths(&caller_path).collect::<Vec<_>>();
+        assert_eq!(
+            find_allowed_binary_in_directories(
+                &caller_directories
+                    .iter()
+                    .map(PathBuf::as_path)
+                    .collect::<Vec<_>>(),
+            )
+            .map(|(_, path)| path),
+            Some(fake_browser.clone())
+        );
+
+        let discovered = find_allowed_binary();
+        assert!(
+            discovered
+                .as_ref()
+                .is_none_or(|(_, path)| !path.starts_with(&malicious_dir)),
+            "caller-controlled PATH entry was selected: {discovered:?}"
+        );
+        assert!(
+            TRUSTED_BINARY_DIRECTORIES
+                .iter()
+                .all(|directory| Path::new(directory).is_absolute())
+        );
+
+        remove_profile(&malicious_dir);
     }
 }
