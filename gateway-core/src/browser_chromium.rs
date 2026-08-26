@@ -12,7 +12,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -28,6 +28,23 @@ const DEFAULT_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const BROWSER_START_TIMEOUT: Duration = Duration::from_secs(8);
 const CLOSE_WAIT: Duration = Duration::from_secs(2);
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const CHILD_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+const CHROMIUM_FIXED_ARGS: &[&str] = &[
+    "--headless=new",
+    "--disable-gpu",
+    "--disable-dev-shm-usage",
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-default-apps",
+    "--disable-extensions",
+    "--disable-features=Translate,OptimizationHints,MediaRouter",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--no-proxy-server",
+    "--remote-allow-origins=*",
+    "--remote-debugging-address=127.0.0.1",
+    "--window-size=1280,720",
+];
 
 const ALLOWED_BINARIES: &[(&str, &str)] = &[
     ("google-chrome-stable", "google-chrome-stable"),
@@ -443,23 +460,10 @@ impl ChromiumBrowserWorker {
         set_private_permissions(&profile_dir);
         let port = reserve_loopback_port().await?;
         let mut command = tokio::process::Command::new(executable);
+        configure_chromium_environment(&mut command, &profile_dir)
+            .map_err(|_| BrowserError::WorkerUnavailable)?;
         command
-            .args([
-                "--headless=new",
-                "--disable-gpu",
-                "--disable-dev-shm-usage",
-                "--no-sandbox",
-                "--disable-background-networking",
-                "--disable-component-update",
-                "--disable-default-apps",
-                "--disable-extensions",
-                "--disable-features=Translate,OptimizationHints,MediaRouter",
-                "--no-first-run",
-                "--no-default-browser-check",
-                "--remote-allow-origins=*",
-                "--remote-debugging-address=127.0.0.1",
-                "--window-size=1280,720",
-            ])
+            .args(CHROMIUM_FIXED_ARGS)
             .arg(format!("--remote-debugging-port={port}"))
             .arg(format!("--user-data-dir={}", profile_dir.display()))
             .arg("about:blank")
@@ -757,6 +761,32 @@ impl ChromiumBrowserWorker {
         );
         Ok(())
     }
+}
+
+fn configure_chromium_environment(
+    command: &mut tokio::process::Command,
+    profile_dir: &Path,
+) -> std::io::Result<()> {
+    let temp_dir = profile_dir.join("tmp");
+    let config_dir = profile_dir.join("config");
+    let cache_dir = profile_dir.join("cache");
+    fs::create_dir_all(&temp_dir)?;
+    fs::create_dir_all(&config_dir)?;
+    fs::create_dir_all(&cache_dir)?;
+    set_private_permissions(&temp_dir);
+    set_private_permissions(&config_dir);
+    set_private_permissions(&cache_dir);
+
+    command
+        .env_clear()
+        .env("HOME", profile_dir)
+        .env("TMPDIR", temp_dir)
+        .env("XDG_CONFIG_HOME", config_dir)
+        .env("XDG_CACHE_HOME", cache_dir)
+        .env("LANG", "C.UTF-8")
+        .env("LC_ALL", "C.UTF-8")
+        .env("PATH", CHILD_PATH);
+    Ok(())
 }
 
 impl BrowserWorker for ChromiumBrowserWorker {
@@ -1199,5 +1229,63 @@ mod tests {
             PanelPermissions,
             ChromiumBrowserWorker::new(),
         );
+    }
+
+    #[test]
+    fn chromium_launch_is_sandboxed_and_child_environment_is_allowlisted() {
+        let profile_dir = std::env::temp_dir().join(format!(
+            "web-media-gateway-chromium-config-test-{}",
+            Uuid::new_v4().simple()
+        ));
+        fs::create_dir(&profile_dir).unwrap();
+        let mut command = tokio::process::Command::new("google-chrome-stable");
+        command
+            .env("HTTP_PROXY", "proxy-sentinel")
+            .env("BROWSER_SECRET_SENTINEL", "secret-sentinel");
+        configure_chromium_environment(&mut command, &profile_dir).unwrap();
+        command.args(CHROMIUM_FIXED_ARGS);
+
+        let args = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(!args.iter().any(|arg| arg == "--no-sandbox"));
+        assert!(args.iter().any(|arg| arg == "--no-proxy-server"));
+
+        let environment = command
+            .as_std()
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        for forbidden in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+            "BROWSER_SECRET_SENTINEL",
+        ] {
+            assert!(
+                !environment.contains_key(forbidden),
+                "inherited {forbidden}"
+            );
+        }
+        assert_eq!(
+            environment.get("PATH").and_then(Option::as_deref),
+            Some(CHILD_PATH)
+        );
+        assert!(environment.contains_key("HOME"));
+        assert!(environment.contains_key("TMPDIR"));
+        assert!(environment.contains_key("XDG_CONFIG_HOME"));
+        assert!(environment.contains_key("XDG_CACHE_HOME"));
+
+        remove_profile(&profile_dir);
     }
 }
