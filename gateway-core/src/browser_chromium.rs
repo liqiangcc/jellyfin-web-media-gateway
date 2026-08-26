@@ -439,6 +439,7 @@ impl ChromiumBrowserWorker {
                 "--disable-features=Translate,OptimizationHints,MediaRouter",
                 "--no-first-run",
                 "--no-default-browser-check",
+                "--remote-allow-origins=*",
                 "--remote-debugging-address=127.0.0.1",
                 "--window-size=1280,720",
             ])
