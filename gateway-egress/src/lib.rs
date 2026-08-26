@@ -8,6 +8,7 @@ use gateway_core::{EgressPolicy, EgressScope};
 use serde::{Deserialize, Serialize};
 use site_adapter_api::security::is_secret_header;
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -123,14 +124,28 @@ impl R008Broker {
             return BrokerResponse::denied("BROKER_CANCELLED");
         }
 
-        let Ok(target) = self
-            .policy
-            .validate_and_resolve(&url, &EgressScope::PublicWeb)
-            .await
-        else {
-            return BrokerResponse::denied("BROKER_EGRESS_REJECTED");
+        // The deadline starts before R008 validation.  In particular, DNS
+        // resolution performed by validate_and_resolve is part of the broker
+        // operation and must not outlive the worker attempt.
+        let deadline = tokio::time::Instant::now() + self.timeout;
+        let target = match await_broker_stage(
+            self.policy
+                .validate_and_resolve(&url, &EgressScope::PublicWeb),
+            cancellation,
+            deadline,
+        )
+        .await
+        {
+            Ok(Ok(target)) => target,
+            Ok(Err(_)) => return BrokerResponse::denied("BROKER_EGRESS_REJECTED"),
+            Err(BrokerAbort::Cancelled) => return BrokerResponse::denied("BROKER_CANCELLED"),
+            Err(BrokerAbort::TimedOut) => return BrokerResponse::denied("BROKER_TIMEOUT"),
         };
-        let Ok(client) = target.pinned_client_with_timeout(Some(self.timeout)) else {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return BrokerResponse::denied("BROKER_TIMEOUT");
+        }
+        let Ok(client) = target.pinned_client_with_timeout(Some(remaining)) else {
             return BrokerResponse::denied("BROKER_CLIENT_REJECTED");
         };
         let method = match request.method.as_str() {
@@ -148,7 +163,10 @@ impl R008Broker {
             response = &mut send => response,
             _ = wait_for_cancel(cancellation.clone()) => {
                 return BrokerResponse::denied("BROKER_CANCELLED");
-            }
+            },
+            _ = tokio::time::sleep_until(deadline) => {
+                return BrokerResponse::denied("BROKER_TIMEOUT");
+            },
         };
         let Ok(response) = response else {
             return if cancellation.is_cancelled() {
@@ -180,7 +198,10 @@ impl R008Broker {
                 chunk = stream.next() => chunk,
                 _ = wait_for_cancel(cancellation.clone()) => {
                     return BrokerResponse::denied("BROKER_CANCELLED");
-                }
+                },
+                _ = tokio::time::sleep_until(deadline) => {
+                    return BrokerResponse::denied("BROKER_TIMEOUT");
+                },
             };
             let Some(chunk) = next else { break };
             let Ok(chunk) = chunk else {
@@ -198,6 +219,28 @@ impl R008Broker {
             body,
             error: None,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BrokerAbort {
+    Cancelled,
+    TimedOut,
+}
+
+async fn await_broker_stage<T, E, F>(
+    future: F,
+    cancellation: &BrokerCancellation,
+    deadline: tokio::time::Instant,
+) -> Result<Result<T, E>, BrokerAbort>
+where
+    F: Future<Output = Result<T, E>>,
+{
+    tokio::pin!(future);
+    tokio::select! {
+        result = &mut future => Ok(result),
+        _ = wait_for_cancel(cancellation.clone()) => Err(BrokerAbort::Cancelled),
+        _ = tokio::time::sleep_until(deadline) => Err(BrokerAbort::TimedOut),
     }
 }
 
@@ -230,4 +273,36 @@ fn secretish_name(name: &str) -> bool {
     ["token", "credential", "password", "proxy-auth", "api-key"]
         .iter()
         .any(|needle| name.contains(needle))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BrokerAbort, BrokerCancellation, await_broker_stage};
+    use std::future::pending;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn pre_transport_stage_cancellation_aborts_blocked_resolution() {
+        let cancellation = BrokerCancellation::default();
+        cancellation.cancel();
+        let result = await_broker_stage::<(), (), _>(
+            pending(),
+            &cancellation,
+            tokio::time::Instant::now() + Duration::from_secs(30),
+        )
+        .await;
+        assert_eq!(result, Err(BrokerAbort::Cancelled));
+    }
+
+    #[tokio::test]
+    async fn pre_transport_stage_deadline_aborts_blocked_resolution() {
+        let cancellation = BrokerCancellation::default();
+        let result = await_broker_stage::<(), (), _>(
+            pending(),
+            &cancellation,
+            tokio::time::Instant::now() + Duration::from_millis(20),
+        )
+        .await;
+        assert_eq!(result, Err(BrokerAbort::TimedOut));
+    }
 }

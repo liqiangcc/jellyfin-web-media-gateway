@@ -263,6 +263,58 @@ def _network_matrix(url: str) -> dict[str, Any]:
     }
 
 
+def _ambient_fd_report(url: str) -> dict[str, Any]:
+    # Keep fd 3 useful while proving that no other inherited descriptor is
+    # visible to the worker.
+    _probe(url)
+    ambient: dict[str, str] = {}
+    for entry in os.listdir("/proc/self/fd"):
+        try:
+            fd = int(entry)
+        except ValueError:
+            continue
+        if fd <= 3:
+            continue
+        try:
+            target = os.readlink(f"/proc/self/fd/{entry}")
+        except OSError:
+            continue
+        # /proc can briefly expose the descriptor used by listdir itself;
+        # it is not an inherited authority and disappears before exec.
+        if target.startswith("/proc/") and target.endswith("/fd"):
+            continue
+        ambient[entry] = target
+    child_code = (
+        "import json, os\n"
+        "result = {}\n"
+        "for name in os.listdir('/proc/self/fd'):\n"
+        "    try:\n"
+        "        fd = int(name)\n"
+        "        target = os.readlink('/proc/self/fd/' + name)\n"
+        "    except (OSError, ValueError):\n"
+        "        continue\n"
+        "    if fd > 3 and not (target.startswith('/proc/') and target.endswith('/fd')):\n"
+        "        result[name] = target\n"
+        "print(json.dumps(result))\n"
+    )
+    child = subprocess.run(
+        [sys.executable, "-c", child_code],
+        close_fds=False,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    try:
+        descendant_ambient = json.loads(child.stdout)
+    except json.JSONDecodeError:
+        descendant_ambient = {"child_exit": child.returncode}
+    return {
+        "ambient_fds": ambient,
+        "descendant_ambient_fds": descendant_ambient,
+        "broker_ipc_usable": True,
+    }
+
+
 def _spawn_long_lived_descendant() -> None:
     pid_file = os.environ.get("YTDLP_DESCENDANT_PID_FILE")
     if not pid_file:
@@ -292,6 +344,8 @@ def main() -> int:
         result = _probe(url)
     elif action == "network-matrix":
         result = _network_matrix(url)
+    elif action == "ambient-fd":
+        result = _ambient_fd_report(url)
     elif action == "timeout":
         import time
 
@@ -303,6 +357,9 @@ def main() -> int:
         _spawn_long_lived_descendant()
         time.sleep(60)
         return 0
+    elif action == "cancel-probe-descendant":
+        _spawn_long_lived_descendant()
+        result = _probe(url)
     elif action == "crash-descendant":
         _spawn_long_lived_descendant()
         os._exit(7)

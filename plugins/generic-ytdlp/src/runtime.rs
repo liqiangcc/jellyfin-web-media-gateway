@@ -129,6 +129,11 @@ impl BrokerProcessRunner {
                 if libc::dup2(child_fd, IPC_FD) < 0 {
                     return Err(io::Error::last_os_error());
                 }
+                // The worker receives only stdio and the per-attempt broker
+                // capability. Do not rely on every present or future parent
+                // descriptor having CLOEXEC set: close the entire ambient
+                // descriptor range after fd 3 has been installed.
+                close_unadmitted_fds()?;
                 Ok(())
             });
         }
@@ -284,6 +289,28 @@ fn resolve_program(program: &PathBuf) -> Option<PathBuf> {
     std::env::split_paths(&path)
         .map(|directory| directory.join(program))
         .find(|candidate| candidate.is_file())
+}
+
+#[cfg(target_os = "linux")]
+fn close_unadmitted_fds() -> io::Result<()> {
+    // fd 0..2 are the intentionally admitted stdio set and fd 3 is the
+    // broker socketpair endpoint. close_range is atomic with respect to the
+    // exec path and also closes the temporary child_socket descriptor.
+    let result =
+        unsafe { libc::syscall(libc::SYS_close_range as libc::c_long, 4u32, u32::MAX, 0u32) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn close_unadmitted_fds() -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "runtime-prep requires Linux close_range fd isolation",
+    ))
 }
 
 impl crate::ProcessRunner for BrokerProcessRunner {

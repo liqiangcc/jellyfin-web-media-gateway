@@ -7,6 +7,8 @@ use generic_ytdlp::{
 };
 use std::collections::BTreeMap;
 use std::fs;
+use std::fs::OpenOptions;
+use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -223,6 +225,45 @@ fn lifecycle_timeout_and_stdout_overflow_are_bounded() {
     }
 }
 
+#[test]
+fn non_cloexec_ambient_fd_is_not_admitted_beyond_broker_fd() {
+    let path = std::env::temp_dir().join(format!(
+        "generic-ytdlp-ambient-{}-{}.sentinel",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let sentinel = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    unsafe {
+        let fd = sentinel.as_raw_fd();
+        let flags = libc::fcntl(fd, libc::F_GETFD);
+        assert!(flags >= 0);
+        assert_eq!(libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC), 0);
+    }
+    let output = runner(Duration::from_secs(5))
+        .run_action(
+            "ambient-fd",
+            &Url::parse("https://fixture.example.test/media").unwrap(),
+        )
+        .unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["ambient_fds"].as_object().unwrap().len(), 0);
+    assert_eq!(
+        report["descendant_ambient_fds"].as_object().unwrap().len(),
+        0
+    );
+    assert_eq!(report["broker_ipc_usable"], true);
+    drop(sentinel);
+    let _ = fs::remove_file(path);
+}
+
 struct BlockingBroker {
     started: Arc<AtomicBool>,
     finished: Arc<AtomicBool>,
@@ -248,16 +289,17 @@ fn external_cancel_wins_over_in_flight_broker_and_reaps_descendant() {
         finished: Arc::clone(&finished),
     });
     let cancellation = BrokerCancellation::default();
-    let runner = runner_with_backend(backend, Duration::from_secs(30), None);
+    let marker = pid_marker("external-cancel");
+    let runner = runner_with_backend(backend, Duration::from_secs(30), Some(marker.clone()));
     let cancel_for_thread = cancellation.clone();
     let task = thread::spawn(move || {
         runner.run_action_with_cancel(
-            "probe",
+            "cancel-probe-descendant",
             &Url::parse("https://fixture.example.test/media").unwrap(),
             cancel_for_thread,
         )
     });
-    for _ in 0..100 {
+    for _ in 0..400 {
         if started.load(Ordering::Acquire) {
             break;
         }
@@ -268,6 +310,9 @@ fn external_cancel_wins_over_in_flight_broker_and_reaps_descendant() {
     let result = task.join().unwrap();
     assert_eq!(result.unwrap_err(), generic_ytdlp::ProcessError::Cancelled);
     assert!(finished.load(Ordering::Acquire));
+    let pid = marked_pid(&marker);
+    assert_pid_gone(pid);
+    let _ = fs::remove_file(marker);
 }
 
 #[test]
