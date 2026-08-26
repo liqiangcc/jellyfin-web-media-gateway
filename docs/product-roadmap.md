@@ -15,7 +15,7 @@ requirements.md
 
 `mvp-plan.md` remains the broader phase framework. When an older Task route in `mvp-plan.md` conflicts with this current delivery map, use this roadmap for **current Task sequencing/decomposition**, without weakening canonical architecture.
 
-Planning snapshot base: `cc03137175a14e61148f2c5b320e77313bba8346`.
+Steering snapshot base before this document update: `82aa6ef53451667c6130fb80849ed581c7f8c82f`.
 
 ---
 
@@ -31,9 +31,7 @@ Environment readiness
 → Production hardening
 ```
 
-Environment verification is not performance verification.
-
-A functional path should not be blocked by 30/60-minute resource/thermal work unless the function genuinely cannot be implemented or safely verified without that evidence.
+Environment verification is not performance verification. Hosted/browser functional Evidence is not physical-TV Evidence. A successful real-site extraction is not yet a user-visible playback closure.
 
 ### Rolling planning buffer
 
@@ -60,6 +58,33 @@ Worker executes current Task
 
 Do not create broad speculative Ready queues merely because execution is slow.
 
+### Evidence-driven anti-drift rule
+
+The first-playback lane has accumulated several runtime/security closure Tasks because real Target Evidence exposed concrete blockers. Those repairs remain valid, but they must not create an infrastructure-expansion habit.
+
+From the current #67 Attempt 4 onward:
+
+```text
+no new generic-ytdlp/runtime/sandbox/distribution Task
+unless current real #67/#68 Evidence exposes a concrete blocker
+```
+
+Result routing must be minimal:
+
+```text
+#67 PASS
+→ immediately materialize/publish #68
+
+#67 FAIL: unsupported current media shape
+→ create the smallest generic media-format capability Task required by Evidence
+
+#67 BLOCKED: concrete R008/runtime/site-access blocker
+→ create one bounded repair/research Task for that blocker
+
+otherwise
+→ do not invent additional infrastructure work
+```
+
 ---
 
 ## 2. Milestone A — Ubuntu ARM64 functional environment
@@ -71,17 +96,17 @@ User outcome:
 Route:
 
 ```text
-#64 ENV-ARM64-RUST
-→ #63 ENV-ARM64-READY Attempt 2
+#64 ENV-ARM64-RUST            [accepted]
+→ #63 ENV-ARM64-READY         [accepted]
 ```
 
-Acceptance gate:
+Accepted outcome:
 
-- `gateway-runner` remains non-root/no-sudo/no-admin;
-- user-owned Rust toolchain is available non-interactively;
-- Gateway exact approved baseline builds;
-- loopback start/routes/stop/cleanup pass;
-- normal direct public network remains usable.
+- `gateway-runner` is non-root/no-sudo/no-admin;
+- user-owned Rust toolchain is usable non-interactively;
+- Gateway can build/start/serve/stop on the accepted target;
+- normal direct public network is available;
+- target execution does not inherit production Secret/Vault authority.
 
 Explicitly not proved here:
 
@@ -90,83 +115,121 @@ Explicitly not proved here:
 
 ---
 
-## 3. Milestone B — First real Bilibili playback
+## 3. Milestone B — First real Bilibili Web playback
 
 User outcome:
 
 > A public Bilibili URL can be entered from Control and the resulting media can play through Gateway on Web Display.
 
-Current route:
+Current accepted route:
 
 ```text
 #66 GENERIC-YTDLP-EXTRACT-PREP          [accepted]
 → #73 GENERIC-YTDLP-REAL-HARNESS-PREP  [accepted]
-→ #79 GENERIC-YTDLP-OFFLINE-RUNTIME-PREP
-→ #67 GENERIC-YTDLP-BILIBILI-REAL
-→ #68 BILIBILI-WEB-E2E
+→ #79 GENERIC-YTDLP-OFFLINE-RUNTIME    [accepted]
+→ #83 GENERIC-YTDLP-SANDBOX-ARM64      [accepted]
+→ #67 GENERIC-YTDLP-BILIBILI-REAL      [Attempt 4 active]
+→ #68 BILIBILI-WEB-E2E                 [draft]
 ```
 
-Why #79 is now a hard verification dependency:
+Why the extra runtime Tasks exist:
 
-- #67 Attempts 1 and 2 both proved direct public/Bilibili HTTP 200 but stopped before extractor traffic at `FROZEN_RUNTIME_SETUP` with `broker_request_count=0`;
-- #73 R2 made target setup cacheable but cold preparation still depended on target-side `pip git+https` acquisition;
-- #79 moves frozen dependency acquisition/build to GitHub Actions, produces an immutable manifest+SHA256 offline runtime bundle, and verifies offline consumption on hosted Linux x86_64 and ARM64;
-- normal Target verification should consume a verified bundle and must not resolve/build the frozen runtime from source.
+- #67 Attempts 1/2 proved direct public/Bilibili reachability but stopped at frozen-runtime preparation before broker traffic;
+- #79 moved frozen runtime preparation to a repository-locked offline artifact rather than weakening Target or allowing ad-hoc source/package resolution;
+- #67 Attempt 3 then proved offline verification/install on the real ARM64 target but exposed an x86_64-only seccomp architecture gate;
+- #83 added target-bound AArch64 seccomp support while preserving `no_new_privs`, socket/socketpair denial and inherited broker IPC.
 
-Architecture path:
+These Tasks are therefore evidence-driven security/runtime closures, not a new product layer.
+
+### Current #67 Attempt 4
+
+Frozen runtime Candidate:
 
 ```text
-Bilibili public URL
+c23b49adbe1cad8a93ff4377dfeba3f12aac7ffe
+```
+
+Target path:
+
+```text
+exact #79 offline bundle
+→ repository trust-anchor verification
+→ low-privilege ARM64 cache hit/prepare
+→ direct/no-proxy Bilibili reachability
+→ accepted ARM64 ytdlp-sandbox
+→ BrokerProcessRunner
+→ R008Broker
+→ yt_dlp.extract_info(download=False)
+→ safe compatibility result
+```
+
+Decisive signal:
+
+```text
+runtime_cache: offline-hit | offline-prepared
+process_error != SANDBOX_UNAVAILABLE
+broker_request_count > 0
+```
+
+Only after broker traffic occurs may #67 classify real Bilibili compatibility.
+
+### #68 publication gate
+
+#68 remains `status:draft` until #67 is Final Accepted with a compatible current first-playback media shape.
+
+If #67 PASSes with muxed `http-file` or `hls`, #68 should become the immediate product-mainline Task:
+
+```text
+Control enters frozen public Bilibili URL
 → SiteAdapterRegistry
-→ generic-ytdlp Site Plugin
-→ verified offline frozen runtime
-→ R008-brokered extraction
-→ current ResolvedMedia
-→ Source/Session preparation
-→ Gateway media capability
-→ Web Display
-→ Control play/pause/seek/stop
+→ generic-ytdlp
+→ accepted real ResolvedMedia shape
+→ SourceSession / PlaybackSession
+→ Gateway same-origin media capability
+→ Web Display <video>
+→ play / pause / seek / stop
+→ refresh / reconnect
 ```
 
-First-playback format policy is intentionally bounded:
-
-- prefer one muxed audio+video HTTP/HLS format compatible with the current Web Display path;
-- separate DASH audio/video composition is not required for this milestone;
-- no login/Cookie/profile/access-control bypass;
-- production `GenericYtdlpAdapter::default()` stays disabled until a later explicit enablement/production gate.
-
-Acceptance gate:
-
-1. #66 deterministic brokered real extraction implementation accepted. **Done.**
-2. #73 safe real-site harness accepted. **Done.**
-3. #79 provides a durable immutable offline runtime and x86_64/ARM64 offline-consume Evidence.
-4. #64/#63 establish the selected low-privilege normal-network target environment. **Done.**
-5. #67 Attempt 3 executes the accepted offline runtime + harness on the frozen public Bilibili sample and classifies real compatibility without bypass.
-6. #68 proves the same accepted real-source shape reaches Gateway/Web Display and normal Control commands.
-
-### Rolling buffer for this milestone
-
-Current planning buffer:
-
-```text
-Active: #79
-Blocked waiting on #79: #67
-Draft materialized ahead: #68 Task Package
-  - task commit: 1a99830b753b7e43f520403451dc9899c855a341
-  - prompt commit: 4e8abb5554aeffa51b1dd6738bccfff3c13b1923
-```
-
-#68 may be designed while #79/#67 execute, but it must remain `status:draft` until #67 Final Acceptance PASS freezes the real media protocol/shape and exact Candidate.
+#68 must not become a second extraction experiment and must not add navigation, login, Native Site Panel, performance or production enablement.
 
 ---
 
-## 4. Milestone C — Continuous content / navigation
+## 4. Cross-cutting product gate — Physical TV remote playback
+
+The product target is not merely a hosted browser. The original Web-only Core experience includes a real TV/browser that can remain on `/display` and later receive playback from a phone/control browser with acceptably low interaction.
+
+Route:
+
+```text
+#6 R002-PREP             [accepted]
+→ #7 R002-TV             [draft; physical-TV Evidence]
+```
+
+#7 is independent of Bilibili extraction and may run in parallel whenever a concrete reachable deployment, physical target TV/browser and phone/remote trigger path are available.
+
+Required interpretation:
+
+```text
+#68 PASS
+= real Bilibili Web product path proven
+!= physical-TV audible autoplay/remote UX proven
+
+#7 PASS | acceptable CONDITIONAL PASS
+= physical-TV remote playback behavior proven
+```
+
+A first genuinely usable TV-oriented product milestone should consider both real-source Web playback Evidence and physical-TV behavior. Hosted Chromium, synthetic activation or desktop browser Evidence cannot substitute for #7.
+
+Do not publish #7 merely to fill the queue if the physical TV/deployment is unavailable; keep it draft until its real-device prerequisites are actually satisfied.
+
+---
+
+## 5. Milestone C — Continuous content / navigation
 
 User outcome:
 
 > The user can naturally play previous/next content such as Bilibili multipart videos without Core understanding BVID/page/episode semantics.
-
-This is a **generic capability first**, followed by site semantics.
 
 Route:
 
@@ -175,205 +238,167 @@ Route:
 → #72 BILIBILI-NAVIGATION [draft]
 ```
 
-Generic capability #71 owns:
+#72 hard-depends on a stable accepted public Bilibili playback baseline (#68 or later equivalent). It must not displace #67/#68 or physical-TV validation.
 
-```text
-SourceLocator
-→ generic navigation result / equivalent contract
-→ previous / next / bounded collection position
-→ Playback NextItem / PreviousItem preparation
-→ stale item/re-resolve protection under R007
-```
-
-Bilibili-specific implementation #72 owns:
-
-- BVID/page/part interpretation;
-- multipart ordering;
-- mapping each part to opaque/versioned `SourceLocator`;
-- real multipart Evidence.
-
-Core must not learn Bilibili identifiers or navigation algorithms.
-
-The old #23/PR #37 Navigation/ResolveContext implementation is historical Evidence only and is **not current API authority**.
-
-#72 publication hard-depends on #71 Final Acceptance and a stable accepted public Bilibili playback baseline (#68 or later equivalent).
+Bilibili-specific BVID/page/part interpretation remains in plugin code; Core consumes only generic opaque/versioned `SourceLocator` navigation results.
 
 ---
 
-## 5. Milestone D — Source-site accounts / login
-
-User outcome:
-
-> Source-site accounts can be managed, login can be performed through an approved interaction path, and an authenticated play intent can safely resume.
+## 6. Milestone D — Source-site accounts / login
 
 Accepted foundation:
 
 ```text
-#28 R005-AUTH-PREP
-→ SiteAccount / SiteSessionRef
-→ Session Vault
-→ scoped SiteAccessCapability
-→ AccountState / PendingIntent
-→ controlled Secret injection
+#28 R005-AUTH-PREP [accepted]
 ```
 
-Current umbrella:
+Umbrella:
 
 ```text
-#26 R005-AUTH
+#26 R005-AUTH [draft umbrella]
 ```
 
-Future real-auth child publication gate should require:
+A future real-auth child requires:
 
 - #28 accepted foundation;
-- a stable public playback baseline (normally #68 or a later accepted equivalent);
-- an approved interactive Auth Mode / Browser runtime path;
-- selected site/login sample and evidence-safe handling rules.
+- stable public playback baseline, normally #68;
+- approved interactive Browser/Auth Mode;
+- a legal frozen real-site login scenario and evidence-safe handling rules;
+- no Cookie/profile smuggling or access-control bypass.
 
-It must **not** depend on the superseded #23 Task reaching Final Acceptance.
-
-Bilibili may be the first real login site, but Core/Vault/Auth contracts remain site-generic.
-
----
-
-## 6. Milestone E — Native Site Panel / original-site controls
-
-User outcome:
-
-> Control can expose site-native interactions such as quality selection, danmaku, collection/favorite or other site UI while playback authority stays in Gateway.
-
-Accepted foundation:
-
-```text
-#33 R006-CONTRACT-PREP
-→ BrowserWorker
-→ BrowserCommand / BrowserEvent
-→ ProfileAttachmentRef
-→ NativePanelSession / short-lived control token
-```
-
-Current umbrella:
-
-```text
-#27 R006-DESIGN
-```
-
-Current functional child:
-
-```text
-#75 R006-RUNTIME-FUNCTIONAL-PREP
-→ prove real Chromium lifecycle + BrowserEvent + Native Panel function
-→ no performance/capacity claim
-```
-
-After #75 acceptance, Coordinator should choose the next child from actual Evidence rather than auto-publish both:
-
-```text
-R006-REAL-SITE / Native Panel functional child
-and/or
-future R005-AUTH-REAL child using approved Auth Mode
-```
-
-Later target performance work:
-
-```text
-#9 resource Evidence
-→ choose phone/external host placement
-→ always-on / on-demand / pool
-→ concurrency / idle timeout / resource envelope
-```
-
-Site semantics remain in Site Plugin interpretation, never Browser Worker/Core.
-
-Native Site Panel failure must not stop already-started playback.
+Do not auto-publish Auth work merely because Browser runtime now exists.
 
 ---
 
-## 7. Milestone F — Performance / capacity / production hardening
+## 7. Milestone E — Native Site Panel / original-site controls
 
-Only after the primary functional paths are stable:
+Accepted foundations:
 
 ```text
-#9 R003-TARGET
-→ CPU / RSS / temperature
-→ Direct / Remux / Chromium boundaries
-→ continuous 5/30/60-minute evidence
-→ capacity decisions
-
-then
-→ production hardening
+#33 R006-CONTRACT-PREP             [accepted]
+#75 R006-RUNTIME-FUNCTIONAL-PREP  [accepted]
 ```
 
-Performance evidence may constrain later runtime policy, but it should not retroactively be treated as a prerequisite for basic functional contract implementation.
+#75 proves a real bounded Chromium BrowserWorker runtime with R008 navigation boundaries, normal Chromium sandboxing, caller-env/proxy isolation, fixed trusted executable discovery, NativePanel token/input seam and lifecycle cleanup.
+
+This capability is now **parked until product Evidence requires it**. Acceptance of #75 is not a mandate to immediately create a real-site Native Panel child.
+
+Future real-site Browser/Auth work should be selected only after first public playback is stable and from concrete user/product need.
 
 ---
 
-## 8. Superseded legacy Bilibili route
+## 8. Performance / capacity / production hardening
 
-The following early route is no longer the current delivery path:
+#9 R003-TARGET remains the authoritative phone resource/performance verification Task:
+
+```text
+CPU / RSS / temperature
+Direct / Remux / Chromium
+continuous 5 / 30 / 60-minute Evidence
+capacity / placement decisions
+```
+
+It is intentionally later than the current functional critical path. Functional work may proceed without #9 when it makes no phone-capacity claim.
+
+Important separation:
+
+```text
+Gateway/Chromium can function
+!=
+phone is suitable for always-on production placement
+```
+
+#22 CORE-FEASIBILITY-REVIEW remains a later synthesis/final feasibility gate requiring the relevant P0 Evidence, including physical-TV and target-performance results. It must not be interpreted as a publication blocker for current #67/#68 functional delivery.
+
+---
+
+## 9. Superseded legacy Bilibili route
+
+The following route is historical only:
 
 ```text
 #23 R005-PUBLIC
 → #36 R005-PUBLIC-REAL
-→ PR #37 bilibili-public candidate
+→ PR #37
 ```
 
-Current durable disposition:
+Durable disposition:
 
-- #23: closed `not_planned`, explicitly **not** PASS;
-- #36: closed `not_planned`;
-- #65 integration attempt: closed `not_planned` after contract-invalidating conflict;
-- PR #37: closed unmerged and retained as historical reference.
+- #23 closed `not_planned`, explicitly not PASS;
+- #36 closed `not_planned`;
+- #65 closed `not_planned` after semantic conflict;
+- PR #37 closed unmerged.
 
-Historical Evidence must not be merged or reported as if it were current-main integration Evidence.
+Do not revive their old API authority.
 
 ---
 
-## 9. Current dependency graph
+## 10. Current dependency graph
 
 ```text
-Environment lane
-#64 → #63 ────────────────────────────────┐
-                                         │
-First-playback lane                      │
-#66(done) → #73(done) → #79 ─────────────┼→ #67 → #68
-                                         │
-                                         └ target readiness joins at #67
+Environment
+#64(done) → #63(done) ───────────────────────────────┐
+                                                    │
+First real Bilibili Web playback                    │
+#66(done) → #73(done) → #79(done) → #83(done) ─────┼→ #67(active) → #68(draft)
+                                                    │
+                                                    └ accepted ARM64 target joins at #67
+
+Physical TV product Evidence
+#6(done) → #7(draft; run when real TV/deployment available)
 
 Navigation
-#71(done) ─────────────────────────────────────→ #72
-                                                   ↑
-                                            wait stable #68
+#71(done) → #72(draft; wait stable #68)
 
 Browser / Native Panel
-#33(done) → #75
-              ↓
-       future evidence-driven child
-       ├→ R006 real-site/native-panel
-       └→ may unlock future AUTH-REAL
+#33(done) → #75(done) → parked until product Evidence selects next child
 
 Auth
-#28(done) + #75 accepted + stable #68
-→ future R005-AUTH-REAL child
+#28(done) + #75(done) + stable #68
+→ future evidence-driven AUTH-REAL child
 
-Performance later
-#9 R003-TARGET
+Performance / final feasibility
+#9 later
+→ #22 final Core/deployment feasibility synthesis
 ```
-
-Independent ready Tasks should still execute in parallel when no hard dependency exists.
 
 ---
 
-## 10. Planning rules for future site work
+## 11. Product-completion naming
+
+Use precise milestone language:
+
+```text
+#67 PASS
+= real Bilibili extraction compatibility
+
+#68 PASS
+= first real Bilibili Web playback/control closure
+
+#7 PASS or accepted CONDITIONAL PASS
+= physical-TV remote audible playback behavior established
+
+#68 + #7 accepted Evidence
+= first TV-oriented user journey can be evaluated as a product milestone
+
+#9 + #22 later
+= target capacity / broader Core feasibility and deployment decision
+```
+
+Do not call #68 alone “full TV MVP validated”, and do not call #67 alone “playback completed”.
+
+---
+
+## 12. Planning rules for future site work
 
 Before creating a concrete-site implementation Task, classify the requested behavior:
 
 ```text
 media extraction
-→ generic or site SiteAdapter resolution
+→ SiteAdapter resolution
 
-runtime dependency distribution
-→ immutable offline artifact + cross-architecture verification
+runtime/distribution/sandbox repair
+→ only when current real Evidence proves a blocker
 
 real-site verification
 → repository-owned safe harness + exact target Evidence
@@ -382,16 +407,19 @@ previous/next/playlist semantics
 → generic navigation capability + concrete plugin mapping
 
 account/session/login
-→ #26 / Vault / SiteAccess / Auth Mode
+→ Vault / SiteAccess / approved Auth Mode
 
 site-native UI operations
-→ #27 / Browser Worker / Native Panel + concrete Site Plugin interpretation
+→ Browser Worker / Native Panel + concrete Site Plugin interpretation
 
 playback mutation
 → existing Playback/R007 command authority
 
+physical TV behavior
+→ manual/real-device Evidence, never hosted substitution
+
 performance/resource decision
-→ #9 / target-specific Evidence
+→ #9 target-specific Evidence
 ```
 
-Do not let a concrete plugin or a target-only smoke script silently redefine shared SiteAdapter, ResolvedMedia, Playback or security contracts. If a real site proves a generic contract is insufficient, open a generic capability/contract Task first, then implement the site mapping.
+Do not let a concrete plugin or target-only smoke script silently redefine shared SiteAdapter, ResolvedMedia, Playback or security contracts. If real Evidence proves a generic contract is insufficient, open only the smallest generic capability/contract Task required by that Evidence.
