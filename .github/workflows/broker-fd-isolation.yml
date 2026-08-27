@@ -123,20 +123,21 @@ jobs:
           import shutil
           import subprocess
 
-          def executable(build_log: str) -> Path:
+          def executable(build_log: str, target_name: str) -> Path:
               for line in Path(build_log).read_text(encoding="utf-8").splitlines():
                   try:
                       record = json.loads(line)
                   except json.JSONDecodeError:
                       continue
+                  target = record.get("target") or {}
                   value = record.get("executable")
-                  if value:
+                  if value and target.get("name") == target_name:
                       return Path(value)
-              raise SystemExit(f"no executable in {build_log}")
+              raise SystemExit(f"no {target_name} test executable in {build_log}")
 
           sources = {
-              "generic-ytdlp-fd-isolation": executable("j4-lib-build.json"),
-              "generic-ytdlp-runtime": executable("j4-runtime-build.json"),
+              "generic-ytdlp-fd-isolation": executable("j4-lib-build.json", "generic_ytdlp"),
+              "generic-ytdlp-runtime": executable("j4-runtime-build.json", "runtime"),
           }
           files = {}
           for name, source in sources.items():
