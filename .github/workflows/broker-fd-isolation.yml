@@ -109,6 +109,59 @@ jobs:
           cargo test -p generic-ytdlp --features runtime-prep --test runtime -- --nocapture
           cargo test -p generic-ytdlp --features runtime-prep --bin ytdlp-sandbox -- --nocapture
           cargo test -p generic-ytdlp --features runtime-prep --lib fd_isolation_tests -- --nocapture
+      - name: Build exact Candidate ARM64 J4 test executables
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          mkdir -p j4-arm64-tests
+          cargo test -p generic-ytdlp --features runtime-prep --lib --no-run --message-format=json > j4-lib-build.json
+          cargo test -p generic-ytdlp --features runtime-prep --test runtime --no-run --message-format=json > j4-runtime-build.json
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+
+          def executable(build_log: str) -> Path:
+              for line in Path(build_log).read_text(encoding="utf-8").splitlines():
+                  try:
+                      record = json.loads(line)
+                  except json.JSONDecodeError:
+                      continue
+                  value = record.get("executable")
+                  if value:
+                      return Path(value)
+              raise SystemExit(f"no executable in {build_log}")
+
+          sources = {
+              "generic-ytdlp-fd-isolation": executable("j4-lib-build.json"),
+              "generic-ytdlp-runtime": executable("j4-runtime-build.json"),
+          }
+          files = {}
+          for name, source in sources.items():
+              destination = Path("j4-arm64-tests") / name
+              shutil.copy2(source, destination)
+              destination.chmod(0o755)
+              digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+              files[name] = {"sha256": digest, "size": destination.stat().st_size}
+          manifest = {
+              "schema_version": 1,
+              "candidate_sha": os.environ["CANDIDATE_SHA"],
+              "target": "aarch64-unknown-linux-gnu",
+              "files": files,
+          }
+          Path("j4-arm64-tests/manifest.json").write_text(
+              json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          PY
+      - name: Upload exact Candidate ARM64 J4 test executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: broker-fd-isolation-j4-arm64-tests-${{ env.CANDIDATE_SHA }}
+          path: j4-arm64-tests
+          if-no-files-found: error
+          retention-days: 14
 
   j3-forced-legacy:
     name: J3 forced ENOSYS descriptor isolation proof
@@ -138,10 +191,15 @@ jobs:
           ! grep -F 'generic-ytdlp-runtime-cache.py' <<<"$j4_job"
           grep -F 'generic-ytdlp-offline-runtime.py verify' <<<"$j4_job"
           grep -F 'generic-ytdlp-offline-runtime.py install' <<<"$j4_job"
+          ! grep -E 'cargo (fetch|test|build|check)|crates\.io' <<<"$j4_job"
+          grep -F 'actions/download-artifact@v4' <<<"$j4_job"
+          grep -F 'broker-fd-isolation-j4-arm64-tests-' <<<"$j4_job"
+          grep -F 'sha256' <<<"$j4_job"
 
   j4-legacy-target:
     name: J4 Linux 4.19 ARM64 legacy-kernel target proof
     if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: j2-hosted-arm64
     runs-on: [self-hosted, linux, ARM64, ubuntu-arm64, target-device]
     timeout-minutes: 35
     steps:
@@ -155,6 +213,47 @@ jobs:
         with:
           ref: ${{ inputs.candidate_sha }}
           persist-credentials: false
+      - name: Transfer exact Candidate ARM64 J4 test executables
+        uses: actions/download-artifact@v4
+        with:
+          name: broker-fd-isolation-j4-arm64-tests-${{ inputs.candidate_sha }}
+          path: ${{ runner.temp }}/broker-fd-isolation-j4-arm64-tests
+      - name: Verify exact Candidate ARM64 test executables
+        shell: bash --noprofile --norc -euo pipefail {0}
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          test_dir="$RUNNER_TEMP/broker-fd-isolation-j4-arm64-tests"
+          [[ -d "$test_dir/j4-arm64-tests" ]] && test_dir="$test_dir/j4-arm64-tests"
+          test -d "$test_dir"
+          python3 - "$test_dir" "$CANDIDATE_SHA" <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import sys
+
+          root = Path(sys.argv[1])
+          candidate = sys.argv[2]
+          manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+          assert manifest == {
+              "candidate_sha": candidate,
+              "files": manifest["files"],
+              "schema_version": 1,
+              "target": "aarch64-unknown-linux-gnu",
+          }
+          assert set(manifest["files"]) == {
+              "generic-ytdlp-fd-isolation",
+              "generic-ytdlp-runtime",
+          }
+          for name, metadata in manifest["files"].items():
+              path = root / name
+              assert path.is_file() and os.access(path, os.X_OK)
+              assert path.stat().st_size == metadata["size"]
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == metadata["sha256"]
+          PY
+          file "$test_dir/generic-ytdlp-fd-isolation" "$test_dir/generic-ytdlp-runtime" | tee j4-arm64-test-binaries.txt
+          grep -q 'ARM aarch64' j4-arm64-test-binaries.txt
       - name: Record target boundary and exact checkout
         shell: bash --noprofile --norc -euo pipefail {0}
         env:
@@ -212,17 +311,10 @@ jobs:
       - name: Run deterministic BrokerProcessRunner target proof
         shell: bash --noprofile --norc -euo pipefail {0}
         run: |
-          cargo test --offline -p generic-ytdlp --features runtime-prep --lib fd_isolation_tests -- --nocapture | tee j4-fd-isolation.log
-          cargo test --offline -p generic-ytdlp --features runtime-prep --test runtime -- --nocapture | tee j4-broker-runtime.log
-      - name: Verify target cleanup and safe checkout
-        if: always()
-        shell: bash --noprofile --norc -euo pipefail {0}
-        run: |
-          test -z "$(git status --porcelain)"
-          ! pgrep -af 'generic-ytdlp-real-smoke|ytdlp-sandbox|plugins/generic-ytdlp/worker/worker.py' || true
-          if [[ -e /var/lib/web-media-gateway/vault ]]; then
-            ! test -r /var/lib/web-media-gateway/vault
-          fi
+          test_dir="$RUNNER_TEMP/broker-fd-isolation-j4-arm64-tests"
+          [[ -d "$test_dir/j4-arm64-tests" ]] && test_dir="$test_dir/j4-arm64-tests"
+          "$test_dir/generic-ytdlp-fd-isolation" fd_isolation_tests --nocapture | tee j4-fd-isolation.log
+          "$test_dir/generic-ytdlp-runtime" --nocapture | tee j4-broker-runtime.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -230,7 +322,23 @@ jobs:
           path: |
             j4-target-identity.txt
             j4-close-range-probe.txt
+            j4-arm64-test-binaries.txt
             j4-fd-isolation.log
             j4-broker-runtime.log
           if-no-files-found: warn
           retention-days: 14
+      - name: Verify target cleanup and safe checkout
+        if: always()
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test -z "$(git diff --name-only)"
+          test -z "$(git diff --cached --name-only)"
+          if pgrep -af 'generic-ytdlp-real-smoke|ytdlp-sandbox|plugins/generic-ytdlp/worker/worker.py'; then
+            exit 1
+          fi
+          if [[ -e /var/lib/web-media-gateway/vault ]]; then
+            ! test -r /var/lib/web-media-gateway/vault
+          fi
+          rm -rf -- "$RUNNER_TEMP/broker-fd-isolation-offline-bundle" "$RUNNER_TEMP/broker-fd-isolation-j4-arm64-tests"
+          rm -f -- j4-target-identity.txt j4-close-range-probe.txt j4-arm64-test-binaries.txt j4-fd-isolation.log j4-broker-runtime.log
+          test -z "$(git status --porcelain)"
