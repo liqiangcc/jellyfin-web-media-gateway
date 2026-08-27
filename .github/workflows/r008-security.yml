@@ -113,7 +113,7 @@ jobs:
         run: |
           cargo fmt --all -- --check
           cargo clippy --workspace --all-targets -- -D warnings
-          cargo test --workspace --all-targets
+          cargo test --workspace --all-targets -- --test-threads=1
           cargo test -p generic-ytdlp --features runtime-prep --test runtime r008_broker_rejects_secret_userinfo_and_private_targets_before_network -- --nocapture
           python -m py_compile plugins/generic-ytdlp/worker/worker.py
       - name: Verify broker architecture and production default remain bounded
