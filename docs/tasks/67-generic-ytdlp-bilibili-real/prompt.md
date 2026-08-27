@@ -151,6 +151,10 @@ Report Claims R1-R9 from `task.md`, including:
 - cleanup/target safety;
 - downstream #68 readiness yes/no + reason.
 
+## Publication lifecycle
+
+This bootstrap is only execution authority after Coordinator Publication Gate records `Decision: PUBLISH` and live #67 is `status:ready + env:ubuntu-arm64 + no active owner`.
+
 ## Stop boundary
 
 Normal completion:
