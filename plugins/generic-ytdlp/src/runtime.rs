@@ -747,8 +747,8 @@ fn read_frame<T: for<'de> Deserialize<'de>>(stream: &mut impl Read) -> io::Resul
 mod protocol_tests {
     use super::{
         BrokerResponse, LEGACY_MAX_FRAME_BYTES, MAX_BODY_BYTES, MAX_FRAME_BYTES, MAX_HEADER_COUNT,
-        MAX_HEADER_NAME_BYTES, MAX_HEADER_VALUE_BYTES, WireBrokerRequest,
-        WireBrokerResponse, decode_body_hex, encode_body_hex, read_frame, write_frame,
+        MAX_HEADER_NAME_BYTES, MAX_HEADER_VALUE_BYTES, WireBrokerRequest, WireBrokerResponse,
+        decode_body_hex, encode_body_hex, read_frame, write_frame,
     };
     use std::collections::BTreeMap;
     use std::io::Cursor;
