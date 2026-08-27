@@ -168,7 +168,6 @@ jobs:
     env:
       REMOTE_URL: https://github.com/liqiangcc/jellyfin-web-media-gateway.git
       AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      OUTPUT_DIR: ${{ runner.temp }}/smarthttp-target-output-${{ github.run_id }}
     steps:
       - name: Target pre-checkout identity and boundary
         shell: bash --noprofile --norc -euo pipefail {0}
@@ -240,13 +239,14 @@ jobs:
         shell: bash --noprofile --norc -euo pipefail {0}
         run: |
           umask 077
-          mkdir -m 700 -p "$OUTPUT_DIR"
+          output_dir="$RUNNER_TEMP/smarthttp-target-output-$GITHUB_RUN_ID"
+          mkdir -m 700 -p "$output_dir"
           work="$RUNNER_TEMP/smarthttp-probe-$GITHUB_RUN_ID"
           mkdir -m 700 -p "$work"
           trap 'rm -rf -- "$work"' EXIT
           : "${AUTH_TOKEN:?workflow token is unavailable}"
-          printf 'candidate_sha=%s\n' "$CANDIDATE_SHA" > "$OUTPUT_DIR/summary.txt"
-          printf 'remote=%s\n' "$REMOTE_URL" >> "$OUTPUT_DIR/summary.txt"
+          printf 'candidate_sha=%s\n' "$CANDIDATE_SHA" > "$output_dir/summary.txt"
+          printf 'remote=%s\n' "$REMOTE_URL" >> "$output_dir/summary.txt"
 
           run_ls_remote() {
             local mode="$1" log="$work/${1}-advertisement.log" rc
@@ -263,10 +263,10 @@ jobs:
             rc=$?
             set -e
             if [[ "$rc" -eq 0 ]]; then
-              printf '%s_advertisement=PASS\n' "$mode" | tee -a "$OUTPUT_DIR/summary.txt"
+              printf '%s_advertisement=PASS\n' "$mode" | tee -a "$output_dir/summary.txt"
               return 0
             fi
-            printf '%s_advertisement=FAIL\n' "$mode" | tee -a "$OUTPUT_DIR/summary.txt"
+            printf '%s_advertisement=FAIL\n' "$mode" | tee -a "$output_dir/summary.txt"
             return 1
           }
 
@@ -297,11 +297,11 @@ jobs:
             fi
             set -e
             if [[ "$rc" -eq 0 ]]; then
-              printf '%s_%s_fetch=PASS\n' "$mode" "$variant" | tee -a "$OUTPUT_DIR/summary.txt"
+              printf '%s_%s_fetch=PASS\n' "$mode" "$variant" | tee -a "$output_dir/summary.txt"
               rm -rf -- "$repo"
               return 0
             fi
-            printf '%s_%s_fetch=FAIL\n' "$mode" "$variant" | tee -a "$OUTPUT_DIR/summary.txt"
+            printf '%s_%s_fetch=FAIL\n' "$mode" "$variant" | tee -a "$output_dir/summary.txt"
             rm -rf -- "$repo"
             return 1
           }
@@ -328,11 +328,11 @@ jobs:
           fi
 
           if [[ "$anonymous_advertisement" -eq 0 && "$token_advertisement" -eq 0 && "$token_exact" -ne 0 ]]; then
-            echo 'failure_layer=advertisement_pass_object_transfer_or_upload_pack_failure' | tee -a "$OUTPUT_DIR/summary.txt"
+            echo 'failure_layer=advertisement_pass_object_transfer_or_upload_pack_failure' | tee -a "$output_dir/summary.txt"
           elif [[ "$token_exact" -eq 0 ]]; then
-            echo 'failure_layer=exact_object_transfer_passed' | tee -a "$OUTPUT_DIR/summary.txt"
+            echo 'failure_layer=exact_object_transfer_passed' | tee -a "$output_dir/summary.txt"
           else
-            echo 'failure_layer=connection_or_advertisement' | tee -a "$OUTPUT_DIR/summary.txt"
+            echo 'failure_layer=connection_or_advertisement' | tee -a "$output_dir/summary.txt"
           fi
 
           if [[ "$token_exact" -eq 0 ]]; then
@@ -345,9 +345,9 @@ jobs:
           else
             smart_repetitions=0
           fi
-          printf 'smart_http_exact_fetch_3x=%s/3\n' "$smart_repetitions" | tee -a "$OUTPUT_DIR/summary.txt"
+          printf 'smart_http_exact_fetch_3x=%s/3\n' "$smart_repetitions" | tee -a "$output_dir/summary.txt"
           if [[ "$smart_repetitions" -eq 3 ]]; then
-            echo 'SMARTHTTP_RECOVERY_ELIGIBLE_FOR_#89=yes' | tee -a "$OUTPUT_DIR/summary.txt"
+            echo 'SMARTHTTP_RECOVERY_ELIGIBLE_FOR_#89=yes' | tee -a "$output_dir/summary.txt"
           else
             echo 'SMARTHTTP_RECOVERY_ELIGIBLE_FOR_#89=no' | tee -a "$OUTPUT_DIR/summary.txt"
           fi
@@ -471,18 +471,18 @@ jobs:
             if verify_bundle "$RUNNER_TEMP/smarthttp-download-$attempt" "$work/extract-$attempt"; then
               bundle_success=$((bundle_success + 1))
             else
-              echo "bundle_attempt_${attempt}=FAIL" | tee -a "$OUTPUT_DIR/summary.txt"
+              echo "bundle_attempt_${attempt}=FAIL" | tee -a "$output_dir/summary.txt"
             fi
           done
-          printf 'trusted_source_bundle_verify_3x=%s/3\n' "$bundle_success" | tee -a "$OUTPUT_DIR/summary.txt"
+          printf 'trusted_source_bundle_verify_3x=%s/3\n' "$bundle_success" | tee -a "$output_dir/summary.txt"
           if [[ "$bundle_success" -eq 3 ]]; then
-            echo 'TRUSTED_SOURCE_BUNDLE_ELIGIBLE_FOR_#85=yes' | tee -a "$OUTPUT_DIR/summary.txt"
+            echo 'TRUSTED_SOURCE_BUNDLE_ELIGIBLE_FOR_#85=yes' | tee -a "$output_dir/summary.txt"
           else
-            echo 'TRUSTED_SOURCE_BUNDLE_ELIGIBLE_FOR_#85=no' | tee -a "$OUTPUT_DIR/summary.txt"
+            echo 'TRUSTED_SOURCE_BUNDLE_ELIGIBLE_FOR_#85=no' | tee -a "$output_dir/summary.txt"
             exit 1
           fi
-          echo "token_persistence=command_scoped_only" | tee -a "$OUTPUT_DIR/summary.txt"
-          echo "tls_verification=enabled" | tee -a "$OUTPUT_DIR/summary.txt"
+          echo "token_persistence=command_scoped_only" | tee -a "$output_dir/summary.txt"
+          echo "tls_verification=enabled" | tee -a "$output_dir/summary.txt"
           unset AUTH_TOKEN
 
       - name: Upload sanitized target evidence
