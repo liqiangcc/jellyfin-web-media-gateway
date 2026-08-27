@@ -1,8 +1,0 @@
-/target/
-/dist/
-/.env
-/*.log
-/data/
-/sessions/
-/transcodes/
-__pycache__/

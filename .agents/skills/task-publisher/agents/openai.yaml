@@ -1,6 +1,0 @@
-interface:
-  display_name: "Task Publisher"
-  short_description: "Publish a verified GitHub Task Package"
-  default_prompt: "Publish the requested independent Worker Task through the repository Task Publication Gate."
-policy:
-  allow_implicit_invocation: false

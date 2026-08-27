@@ -1,6 +1,0 @@
-interface:
-  display_name: "Task Reviewer"
-  short_description: "Review, iterate, and close a Task"
-  default_prompt: "Review the requested Task Attempt against its frozen Contract and durable GitHub Evidence."
-policy:
-  allow_implicit_invocation: false

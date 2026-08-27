@@ -254,6 +254,17 @@ fn accepted_response_near_r008_body_limit_crosses_actual_broker_ipc() {
 }
 
 #[test]
+fn debug_near_r008_body_limit() {
+    let output = runner(Duration::from_secs(5))
+        .run_action(
+            "debug-probe",
+            &Url::parse("https://fixture.example.test/media?item=near-limit").unwrap(),
+        )
+        .unwrap();
+    println!("bounded debug result: {}", String::from_utf8_lossy(&output.stdout));
+}
+
+#[test]
 fn seccomp_denies_worker_custom_handler_and_child_but_ipc_survives() {
     let output = runner(Duration::from_secs(5))
         .run_action(
