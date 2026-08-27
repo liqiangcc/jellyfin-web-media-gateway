@@ -25,6 +25,8 @@ Sample: BV14V411W7r5
 Harness: scripts/generic-ytdlp-real-smoke.sh
 ```
 
+Formal R7 bootstrap freeze was materialized while #67 was `status:draft`; it becomes executable only after Coordinator Publication Gate publishes the Issue.
+
 Read `AGENTS.md`, Issue #67/comments, `task.md`, lifecycle/freshness protocols, #97 Final Acceptance, and accepted #95/#85/#83/#79/#63/#73/#66/#60 authorities before claim.
 
 Attempt 6 reached R008 2xx with `broker_request_count: 1` but reproduced `process_error: BROKER_PROTOCOL` 2/2. #97 proved the root cause and was Final Accepted/merged as `d9c038547ed2df695571f8dd4f732bdcdd4d5c19`.
