@@ -17,7 +17,20 @@ use std::time::{Duration, Instant};
 use url::Url;
 
 const IPC_FD: i32 = 3;
-const MAX_FRAME_BYTES: usize = 128 * 1024;
+const MAX_BODY_BYTES: usize = gateway_egress::MAX_BODY_BYTES;
+const MAX_HEADER_COUNT: usize = gateway_egress::MAX_HEADERS;
+const MAX_HEADER_NAME_BYTES: usize = gateway_egress::MAX_HEADER_NAME_BYTES;
+const MAX_HEADER_VALUE_BYTES: usize = gateway_egress::MAX_HEADER_VALUE_BYTES;
+// BrokerRequest/BrokerResponse bodies use a compact, fixed-width hex string
+// on the wire instead of serde_json's decimal Vec<u8> array. The frame bound
+// is derived from the existing R008 body/header bounds. Header names/values
+// are allowed a conservative 2x JSON-escaping allowance; 4 KiB is fixed
+// punctuation/metadata overhead, not caller-configurable payload capacity.
+const MAX_FRAME_BYTES: usize = MAX_BODY_BYTES * 2
+    + MAX_HEADER_COUNT * (2 * (MAX_HEADER_NAME_BYTES + MAX_HEADER_VALUE_BYTES) + 8)
+    + 4 * 1024;
+#[cfg(test)]
+const LEGACY_MAX_FRAME_BYTES: usize = 128 * 1024;
 const FROZEN_YTDLP_VERSION: &str = "2026.08.19";
 const FROZEN_YTDLP_COMMIT: &str = "3a08beaf031ab68f966401ead017ac81fe8486cf";
 
@@ -284,7 +297,15 @@ impl BrokerProcessRunner {
                     Ok(response) => {
                         let (_, _, join) = broker_call.take().expect("broker call exists");
                         let _ = join.join();
-                        if write_frame(&mut parent_socket, &response).is_err() {
+                        let wire_response = match WireBrokerResponse::try_from(response) {
+                            Ok(response) => response,
+                            Err(_) => {
+                                terminate_group(&mut child);
+                                broker_error = true;
+                                break;
+                            }
+                        };
+                        if write_frame(&mut parent_socket, &wire_response).is_err() {
                             terminate_group(&mut child);
                             broker_error = true;
                             break;
@@ -301,8 +322,16 @@ impl BrokerProcessRunner {
                 }
                 continue;
             }
-            match read_frame::<BrokerRequest>(&mut parent_socket) {
+            match read_frame::<WireBrokerRequest>(&mut parent_socket) {
                 Ok(request) => {
+                    let request = match request.into_request() {
+                        Ok(request) => request,
+                        Err(_) => {
+                            terminate_group(&mut child);
+                            protocol_error = true;
+                            break;
+                        }
+                    };
                     let backend = Arc::clone(&self.backend);
                     let broker_cancel = BrokerCancellation::default();
                     let thread_cancel = broker_cancel.clone();
@@ -590,6 +619,101 @@ fn capped_reader<R: Read + Send + 'static>(
     })
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct WireBrokerRequest {
+    operation: String,
+    method: String,
+    url: String,
+    #[serde(default)]
+    headers: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    body_hex: String,
+}
+
+impl WireBrokerRequest {
+    fn into_request(self) -> io::Result<BrokerRequest> {
+        Ok(BrokerRequest {
+            operation: self.operation,
+            method: self.method,
+            url: self.url,
+            headers: self.headers,
+            body: decode_body_hex(&self.body_hex)?,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct WireBrokerResponse {
+    status: u16,
+    reason: String,
+    #[serde(default)]
+    headers: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    body_hex: String,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+impl TryFrom<BrokerResponse> for WireBrokerResponse {
+    type Error = io::Error;
+
+    fn try_from(response: BrokerResponse) -> Result<Self, Self::Error> {
+        if response.body.len() > MAX_BODY_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "response body exceeds R008 bound",
+            ));
+        }
+        Ok(Self {
+            status: response.status,
+            reason: response.reason,
+            headers: response.headers,
+            body_hex: encode_body_hex(&response.body),
+            error: response.error,
+        })
+    }
+}
+
+fn encode_body_hex(body: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(body.len().saturating_mul(2));
+    for byte in body {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
+}
+
+fn decode_body_hex(encoded: &str) -> io::Result<Vec<u8>> {
+    if encoded.len() > MAX_BODY_BYTES.saturating_mul(2) || !encoded.len().is_multiple_of(2) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "body encoding exceeds R008 bound",
+        ));
+    }
+    let bytes = encoded.as_bytes();
+    let mut body = Vec::with_capacity(bytes.len() / 2);
+    for pair in bytes.chunks_exact(2) {
+        let high = hex_value(pair[0])
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid body encoding"))?;
+        let low = hex_value(pair[1])
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid body encoding"))?;
+        body.push((high << 4) | low);
+    }
+    Ok(body)
+}
+
+fn hex_value(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
 fn write_frame<T: Serialize>(stream: &mut impl Write, value: &T) -> io::Result<()> {
     let payload = serde_json::to_vec(value)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "frame serialization"))?;
@@ -618,6 +742,114 @@ fn read_frame<T: for<'de> Deserialize<'de>>(stream: &mut impl Read) -> io::Resul
     stream.read_exact(&mut payload)?;
     serde_json::from_slice(&payload)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "frame decode"))
+}
+
+#[cfg(test)]
+mod protocol_tests {
+    use super::{
+        BrokerResponse, LEGACY_MAX_FRAME_BYTES, MAX_BODY_BYTES, MAX_FRAME_BYTES, MAX_HEADER_COUNT,
+        MAX_HEADER_NAME_BYTES, MAX_HEADER_VALUE_BYTES, WireBrokerRequest, WireBrokerResponse,
+        decode_body_hex, encode_body_hex, read_frame, write_frame,
+    };
+    use std::collections::BTreeMap;
+    use std::io::Cursor;
+
+    fn framed(payload: &[u8]) -> Cursor<Vec<u8>> {
+        let mut frame = (payload.len() as u32).to_be_bytes().to_vec();
+        frame.extend_from_slice(payload);
+        Cursor::new(frame)
+    }
+
+    #[test]
+    fn legacy_decimal_body_serialization_reproduces_broker_protocol_overflow() {
+        let response = BrokerResponse {
+            status: 200,
+            reason: "OK".into(),
+            headers: BTreeMap::new(),
+            body: vec![0; MAX_BODY_BYTES],
+            error: None,
+        };
+        let legacy_payload = serde_json::to_vec(&response).unwrap();
+        assert!(legacy_payload.len() > LEGACY_MAX_FRAME_BYTES);
+    }
+
+    #[test]
+    fn bounded_hex_wire_response_fits_derived_frame_bound_at_r008_limits() {
+        let headers = (0..MAX_HEADER_COUNT)
+            .map(|index| {
+                (
+                    format!("x-{:0width$}", index, width = MAX_HEADER_NAME_BYTES - 2),
+                    "v".repeat(MAX_HEADER_VALUE_BYTES),
+                )
+            })
+            .collect();
+        let response = WireBrokerResponse::try_from(BrokerResponse {
+            status: 200,
+            reason: "OK".into(),
+            headers,
+            body: vec![0; MAX_BODY_BYTES],
+            error: None,
+        })
+        .unwrap();
+        let mut frame = Vec::new();
+        write_frame(&mut frame, &response).unwrap();
+        assert!(frame.len() <= MAX_FRAME_BYTES + 4);
+        assert_eq!(
+            decode_body_hex(&response.body_hex).unwrap().len(),
+            MAX_BODY_BYTES
+        );
+    }
+
+    #[test]
+    fn zero_truncated_malformed_and_oversize_frames_fail_closed() {
+        assert!(read_frame::<WireBrokerRequest>(&mut framed(&[])).is_err());
+        assert!(read_frame::<WireBrokerRequest>(&mut Cursor::new(vec![0, 0, 0])).is_err());
+        assert!(read_frame::<WireBrokerRequest>(&mut framed(b"{")).is_err());
+        let oversize = (MAX_FRAME_BYTES as u32 + 1).to_be_bytes();
+        assert!(read_frame::<WireBrokerRequest>(&mut Cursor::new(oversize.to_vec())).is_err());
+    }
+
+    #[test]
+    fn malformed_body_encoding_and_response_over_r008_bound_fail_closed() {
+        let request = WireBrokerRequest {
+            operation: "http".into(),
+            method: "GET".into(),
+            url: "https://fixture.example.test/".into(),
+            headers: BTreeMap::new(),
+            body_hex: "0".into(),
+        };
+        assert!(request.into_request().is_err());
+        assert!(decode_body_hex("zz").is_err());
+        assert!(
+            WireBrokerResponse::try_from(BrokerResponse {
+                status: 200,
+                reason: "OK".into(),
+                headers: BTreeMap::new(),
+                body: vec![0; MAX_BODY_BYTES + 1],
+                error: None,
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn contained_response_secret_is_absent_from_wire_envelope() {
+        let response = WireBrokerResponse::try_from(BrokerResponse {
+            status: 200,
+            reason: "OK".into(),
+            headers: BTreeMap::from([(String::from("content-type"), String::from("text/plain"))]),
+            body: b"safe-public-body".to_vec(),
+            error: None,
+        })
+        .unwrap();
+        let wire = serde_json::to_string(&response).unwrap();
+        assert!(!wire.contains("fixture-response-secret"));
+        assert!(wire.contains("73616665"));
+        assert_eq!(
+            decode_body_hex(&encode_body_hex(b"safe-public-body")).unwrap(),
+            b"safe-public-body"
+        );
+    }
 }
 
 fn terminate_group(child: &mut Child) {

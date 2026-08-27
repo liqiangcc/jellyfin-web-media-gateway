@@ -7,6 +7,7 @@ installs the inherited seccomp/no-new-privs boundary before this module runs.
 
 from __future__ import annotations
 
+import binascii
 import errno
 import io
 import json
@@ -24,8 +25,17 @@ from yt_dlp.version import __version__
 
 EXPECTED_VERSION = "2026.08.19"
 EXPECTED_COMMIT = "3a08beaf031ab68f966401ead017ac81fe8486cf"
-MAX_FRAME = 128 * 1024
 MAX_BODY = 96 * 1024
+MAX_HEADERS = 32
+MAX_HEADER_NAME = 128
+MAX_HEADER_VALUE = 4096
+# Keep this in lockstep with the Rust protocol bound. It is derived from the
+# existing R008 body/header bounds and fixed JSON-escaping/protocol overhead.
+MAX_FRAME = (
+    MAX_BODY * 2
+    + MAX_HEADERS * (2 * (MAX_HEADER_NAME + MAX_HEADER_VALUE) + 8)
+    + 4 * 1024
+)
 _BROKER_STREAM: socket.socket | None = None
 
 
@@ -50,6 +60,8 @@ def _broker_request(request: dict[str, Any]) -> dict[str, Any]:
     fd = int(os.environ.get("YTDLP_BROKER_FD", "3"))
     if _BROKER_STREAM is None:
         _BROKER_STREAM = socket.socket(fileno=fd)
+    request = dict(request)
+    request["body_hex"] = binascii.hexlify(bytes(request.pop("body", b""))).decode("ascii")
     payload = json.dumps(request, separators=(",", ":")).encode()
     if not payload or len(payload) > MAX_FRAME:
         raise RequestError("broker frame rejected")
@@ -58,10 +70,17 @@ def _broker_request(request: dict[str, Any]) -> dict[str, Any]:
     if length == 0 or length > MAX_FRAME:
         raise RequestError("broker frame rejected")
     response = json.loads(_read_exact(_BROKER_STREAM, length))
+    if not isinstance(response, dict):
+        raise RequestError("broker envelope rejected")
     if response.get("error"):
         raise RequestError("broker request rejected")
-    if len(response.get("body", [])) > MAX_BODY:
+    body_hex = response.get("body_hex", "")
+    if not isinstance(body_hex, str) or len(body_hex) > MAX_BODY * 2:
         raise RequestError("broker body rejected")
+    try:
+        response["body"] = binascii.unhexlify(body_hex)
+    except (binascii.Error, ValueError):
+        raise RequestError("broker body rejected") from None
     return response
 
 
@@ -90,7 +109,9 @@ class BrokerRH(RequestHandler):
                 "body": list(request.data or b""),
             }
         )
-        body = bytes(response.get("body", []))
+        body = response.get("body", b"")
+        if not isinstance(body, bytes):
+            raise RequestError("broker body rejected")
         return Response(
             io.BytesIO(body),
             request.url,
