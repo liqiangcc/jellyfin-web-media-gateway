@@ -17,25 +17,26 @@ If Issue state is `status:draft`, `status:blocked`, `status:review`, or already 
 ## Frozen execution
 
 ```text
-Contract Revision: R7
-Attempt: 7
-Exact Candidate: d9c038547ed2df695571f8dd4f732bdcdd4d5c19
+Contract Revision: R8
+Attempt: 8
+Exact Candidate: cd95db5f0becb875455789f168b92c44a96a5260
 Target: accepted Ubuntu ARM64 phone / gateway-runner
 Sample: BV14V411W7r5
 Harness: scripts/generic-ytdlp-real-smoke.sh
 ```
 
-Formal R7 bootstrap freeze was materialized while #67 was `status:draft`; it becomes executable only after Coordinator Publication Gate publishes the Issue.
+Formal R8 bootstrap freeze was materialized while #67 was `status:draft`; it becomes executable only after Coordinator Publication Gate publishes the Issue.
 
-Read `AGENTS.md`, Issue #67/comments, `task.md`, lifecycle/freshness protocols, #97 Final Acceptance, and accepted #95/#85/#83/#79/#63/#73/#66/#60 authorities before claim.
+Read `AGENTS.md`, Issue #67/comments, `task.md`, lifecycle/freshness protocols, #99 and #97 Final Acceptance, and accepted #95/#85/#83/#79/#63/#73/#66/#60 authorities before claim.
 
-Attempt 6 reached R008 2xx with `broker_request_count: 1` but reproduced `process_error: BROKER_PROTOCOL` 2/2. #97 proved the root cause and was Final Accepted/merged as `d9c038547ed2df695571f8dd4f732bdcdd4d5c19`.
+Attempt 7 preserved exact runtime and Target identity and proved direct/no-proxy Bilibili reachability, but returned `process_error: SANDBOX_UNAVAILABLE` with `broker_request_count: 0` before the accepted sandbox path. #99 proved and repaired the clean-build sibling artifact closure, including a native ARM64 clean-built pair reaching the broker through the fixed sibling, and was Final Accepted/merged as `cd95db5f0becb875455789f168b92c44a96a5260`.
 
 Required path:
 
 ```text
 #79 offline runtime
 → direct/no-proxy frozen Bilibili sample
+→ #99 exact-Candidate clean-build sibling binding
 → accepted ARM64 sandbox
 → #85 fd fallback
 → R008 + #95 response containment
@@ -64,7 +65,7 @@ YTDLP_OFFLINE_BUNDLE=<verified-bundle-path> \
   'https://www.bilibili.com/video/BV14V411W7r5/'
 ```
 
-Decisive Attempt-7 signals:
+Decisive Attempt-8 signals:
 
 ```text
 runtime_cache: offline-hit | offline-prepared
