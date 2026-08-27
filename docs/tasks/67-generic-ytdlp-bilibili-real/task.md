@@ -6,9 +6,9 @@
 GitHub Issue: #67
 Task ID: GENERIC-YTDLP-BILIBILI-REAL
 Task kind: verification-only / real public network
-Contract Revision: R7
-Next Attempt: 7
-Exact Execution Candidate: d9c038547ed2df695571f8dd4f732bdcdd4d5c19
+Contract Revision: R8
+Next Attempt: 8
+Exact Execution Candidate: cd95db5f0becb875455789f168b92c44a96a5260
 Preferred worker: ubuntu-arm64
 Eligible environment after publication: env:ubuntu-arm64
 Accepted extraction upstream: #66 Final Accepted
@@ -18,15 +18,16 @@ Accepted ARM64 sandbox authority: #83 Final Accepted
 Accepted legacy-kernel fd-isolation authority: #85 Final Accepted / merge 76b2032410b19ee18cfb14f00317b97f84e3b691
 Accepted anonymous response Secret containment authority: #95 Final Accepted / merge 804fd60343b081e5e055ba87f68e7939b106bb19
 Accepted broker IPC/wire authority: #97 Final Accepted / merge d9c038547ed2df695571f8dd4f732bdcdd4d5c19
+Accepted clean-build sandbox binding authority: #99 Final Accepted / merge cd95db5f0becb875455789f168b92c44a96a5260
 Accepted target environment: #63 Final Accepted
 Accepted security/runtime authority: #60 + R008 + ADR 0007
 Downstream: #68 BILIBILI-WEB-E2E
 Freshness policy: dependency-aware / exact Candidate
 Publication state: status:draft until Coordinator Publication Gate passes
-Formal R7 draft freeze: recorded after #67 lifecycle transition to status:draft
+Formal R8 draft freeze: recorded after #67 Attempt 7 blocker and #99 Final Acceptance
 ```
 
-#67 remains verification-only. Attempt 6 reached real R008 2xx and #95 containment but reproduced `BROKER_PROTOCOL` 2/2. #97 proved the decimal-JSON binary-body framing overflow and was Final Accepted / merged as `d9c038547ed2df695571f8dd4f732bdcdd4d5c19`.
+#67 remains verification-only. Attempt 7 verified the exact offline runtime, low-privilege Linux 4.19 ARM64 Target and direct/no-proxy Bilibili reachability, but stopped before broker traffic with `SANDBOX_UNAVAILABLE` because the clean smoke build did not produce its required sibling sandbox. #99 closed that artifact-wiring defect without weakening the accepted sandbox and was Final Accepted / merged as `cd95db5f0becb875455789f168b92c44a96a5260`.
 
 ## Frozen sample and runtime
 
@@ -49,6 +50,7 @@ trust anchor: scripts/generic-ytdlp-offline-runtime.lock.json
 #79 offline runtime
 → direct/no-proxy frozen Bilibili sample
 → scripts/generic-ytdlp-real-smoke.sh
+→ #99 exact-Candidate clean-build sibling binding
 → #83 ARM64 sandbox
 → BrokerProcessRunner + #85 ENOSYS fd fallback
 → R008Broker + #95 response Secret containment
@@ -61,7 +63,7 @@ trust anchor: scripts/generic-ytdlp-offline-runtime.lock.json
 Exact runtime Candidate:
 
 ```text
-d9c038547ed2df695571f8dd4f732bdcdd4d5c19
+cd95db5f0becb875455789f168b92c44a96a5260
 ```
 
 Do not substitute moving main. If accepted semantic changes touch `plugins/generic-ytdlp/**`, `scripts/generic-ytdlp-*`, `gateway-egress/**`/R008/ADR0007, sandbox/fd-isolation, or current SiteAdapter/ResolvedMedia authority before claim, STOP for Coordinator freshness review.
@@ -111,7 +113,7 @@ J4 — verify no staging/worker/sandbox/descendant/media payload leftovers; veri
 
 ## Result semantics
 
-PASS requires exact Candidate, accepted #79/#83/#85/#95/#97 path, direct site reachability, former SANDBOX/SPAWN/SECRET/BROKER_PROTOCOL blockers cleared, `broker_request_count > 0`, harness PASS, protocol `http-file | hls`, at least one current-contract muxed stream, and cleanup/security PASS.
+PASS requires exact Candidate, accepted #79/#83/#85/#95/#97/#99 path, direct site reachability, former SANDBOX/SPAWN/SECRET/BROKER_PROTOCOL blockers cleared, `broker_request_count > 0`, harness PASS, protocol `http-file | hls`, at least one current-contract muxed stream, and cleanup/security PASS.
 
 CONDITIONAL PASS is only a bounded non-security condition with valid current ResolvedMedia that still permits explicit #68 routing; Coordinator decides.
 
@@ -122,7 +124,7 @@ BLOCKED includes offline provenance/transfer failure, repeated SANDBOX/SPAWN/SEC
 ## Claims
 
 ```text
-R1 exact #79/#83/#85/#95/#97 runtime authority
+R1 exact #79/#83/#85/#95/#97/#99 runtime authority
 R2 Target dependency independence
 R3 direct/no-bypass public accessibility
 R4 ARM64 sandbox + #85 fd/broker integrity
@@ -153,7 +155,7 @@ Attempt / worker / environment / UTC
 host arch/kernel/uid privilege class
 Exact Candidate SHA
 BV14V411W7r5
-#85/#95/#97 accepted merge SHAs
+#85/#95/#97/#99 accepted merge SHAs
 bundle transfer class + trust-anchor/wheel/provenance result
 runtime_cache
 direct public/Bilibili status class
