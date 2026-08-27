@@ -44,11 +44,7 @@ ResolvedMedia: not reached
 
 This established that the remaining blocker was not Target setup, sandbox startup, fd isolation, BrokerProcessRunner, or generic GitHub transport. #95 was split to own the independent R008 response-Secret compatibility/security implementation.
 
-#95 is now Final Accepted. Its exact Candidate `0738e1826b17400a92aff483cba4bd37f683e673` passed exact-Candidate J1-J3 in workflow `33061040363`; PR #96 was squash-merged as:
-
-```text
-804fd60343b081e5e055ba87f68e7939b106bb19
-```
+#95 is now Final Accepted. Its exact Candidate `0738e1826b17400a92aff483cba4bd37f683e673` passed exact-Candidate J1-J3 in workflow `33061040363`; PR #96 was squash-merged as `804fd60343b081e5e055ba87f68e7939b106bb19`.
 
 Accepted #95 semantics:
 
@@ -59,7 +55,7 @@ worker/extractor request Secret material
 origin response
 → existing Secret classifier remains authoritative
 → Secret response headers remain Secret
-→ consume the existing bounded response-header budget
+→ consume existing bounded response-header budget
 → CONTAIN before BrokerResponse / broker IPC
 → no cookie/auth store or replay
 → safe status/body/non-Secret headers continue only when all other R008 checks pass
@@ -67,7 +63,7 @@ origin response
 
 `Set-Cookie` and other accepted Secret classes were not declassified. R008 DNS/public-IP/address-pinning/TLS/per-hop redirect/body/frame/time/cancellation authority remains unchanged. Production `GenericYtdlpAdapter::default()` remains disabled.
 
-Attempt 6 resumes the same verification-only real-site Goal on the first exact Candidate containing both the accepted #85 Linux 4.19 fd-isolation fix and accepted #95 response Secret containment implementation. No #67 product/security implementation is authorized.
+Attempt 6 resumes the same verification-only real-site Goal on the first exact Candidate containing both #85 and #95. No #67 product/security implementation is authorized.
 
 ## Accepted offline runtime identities
 
@@ -96,7 +92,7 @@ source: https://www.bilibili.com/video/BV14V411W7r5/
 formal site network class: normal direct / no bypass proxy
 ```
 
-The source URL is Task input. Durable Evidence must not publish full resolved/signed media URLs, query tokens, Cookie, Authorization, profile/account state, artifact-transfer credentials, raw worker stderr, page body, response Secret header names/values, or media payload.
+Durable Evidence must not publish full resolved/signed media URLs, query tokens, Cookie, Authorization, profile/account state, artifact-transfer credentials, raw worker stderr, page body, response Secret header names/values, or media payload.
 
 ## Goal
 
@@ -110,8 +106,8 @@ exact #79 offline bundle
 → direct/no-proxy Bilibili reachability
 → scripts/generic-ytdlp-real-smoke.sh
 → accepted ARM64 ytdlp-sandbox
-→ BrokerProcessRunner with accepted #85 ENOSYS fallback
-→ R008Broker with accepted #95 response Secret containment
+→ BrokerProcessRunner with #85 ENOSYS fallback
+→ R008Broker with #95 response Secret containment
 → yt_dlp.extract_info(download=False)
 → GenericYtdlpAdapter
 → current ResolvedMedia
@@ -140,7 +136,7 @@ Execute runtime/product code exactly at:
 
 This Candidate contains the accepted #66 extraction path, #73 real-site harness, #79 offline runtime/trust anchor, #83 ARM64 sandbox, #85 legacy-kernel fd-isolation support and #95 R008 anonymous response Secret containment.
 
-Task/prompt documentation may be newer than the runtime Candidate by design. Do not substitute moving `main`. If an accepted semantic change touches `plugins/generic-ytdlp/**`, `scripts/generic-ytdlp-*`, `gateway-egress/**`/R008/ADR 0007, the fd-isolation implementation, or material SiteAdapter output authority before claim, STOP for Coordinator freshness review.
+Task/prompt documentation may be newer than the runtime Candidate by design. Do not substitute moving `main`. If an accepted semantic change touches `plugins/generic-ytdlp/**`, `scripts/generic-ytdlp-*`, `gateway-egress/**`/R008/ADR 0007, fd-isolation implementation, or material SiteAdapter output authority before claim, STOP for Coordinator freshness review.
 
 ## Host / environment authority
 
@@ -150,7 +146,7 @@ Use the Final Accepted #63 Ubuntu ARM64 phone environment:
 - low-privilege `gateway-runner` uid999, non-root/no-sudo/no-admin;
 - Python 3.12, pip, git, curl and user Rust toolchain available;
 - direct/no-proxy public HTTPS and frozen Bilibili page previously HTTP 200;
-- Linux kernel is expected to report `close_range=ENOSYS` and must use the accepted #85 fallback without security weakening.
+- Linux kernel is expected to report `close_range=ENOSYS` and must use accepted #85 fallback without security weakening.
 
 No root/sudo/system package installation is permitted.
 
@@ -173,12 +169,12 @@ Requirements:
 
 1. checkout equals `804fd60343b081e5e055ba87f68e7939b106bb19`;
 2. runtime user matches accepted low-privilege Target class;
-3. obtain the exact #79 offline bundle without rebuilding/resolving it on Target;
-4. permitted transfer shapes are authenticated download of accepted #79 artifact or Coordinator/operator-provided exact local copy;
+3. obtain exact #79 offline bundle without rebuilding/resolving it on Target;
+4. permitted transfer is authenticated download of accepted #79 artifact or Coordinator/operator-provided exact local copy;
 5. transfer credentials are transport-only and removed before extraction;
 6. no Target-side source/package-index resolution may create/replace yt-dlp.
 
-If direct target Git checkout is unreliable, a trusted exact-Candidate source-bundle transport already accepted by #90/#85 may be used, provided exact SHA/tree identity is verified locally before execution. Transport choice is not site Evidence.
+If direct Target Git checkout is unreliable, accepted trusted exact-source transport from #90/#85 may be used, provided exact SHA/tree identity is verified locally before execution. Transport choice is not site Evidence.
 
 ## J1 — Trust anchor + offline runtime/cache verification
 
@@ -222,7 +218,7 @@ YTDLP_OFFLINE_BUNDLE=<verified-bundle-path> \
 
 Do not replace the harness with ad-hoc yt-dlp/Python/Rust/CLI code.
 
-Before extractor execution the accepted harness scrubs proxy state. Extractor HTTP(S) remains R008Broker + BrokerProcessRunner authority; the worker has no direct socket authority.
+Before extractor execution the accepted harness scrubs proxy state. Extractor HTTP(S) remains R008Broker + BrokerProcessRunner authority; worker has no direct socket authority.
 
 Attempt 6 must confirm both accepted downstream effects on the real path:
 
@@ -233,7 +229,7 @@ broker_request_count > 0
 broker_error_code != BROKER_RESPONSE_SECRET_REJECTED
 ```
 
-Do not publish or infer the concrete real response Secret header name/value. #95 deterministic fixtures own the policy proof; #67 only verifies that the accepted containment permits or safely rejects the real flow.
+Do not publish or infer the concrete real response Secret header name/value. #95 deterministic fixtures own policy proof; #67 only verifies that accepted containment permits or safely rejects the real flow.
 
 Capture only safe fields:
 
@@ -250,7 +246,7 @@ title_length
 process_error
 ```
 
-A repeated `SANDBOX_UNAVAILABLE` or `SPAWN_FAILED` is BLOCKED and must not be bypassed. A repeated `BROKER_RESPONSE_SECRET_REJECTED` on exact R6 Candidate is also BLOCKED as a concrete regression/new response condition; do not weaken R008 inside #67.
+Repeated `SANDBOX_UNAVAILABLE`, `SPAWN_FAILED`, or `BROKER_RESPONSE_SECRET_REJECTED` on exact R6 Candidate is BLOCKED and must not be bypassed or "fixed" inside #67.
 
 ## J4 — Post-run safety / cleanup
 
@@ -260,7 +256,7 @@ Verify:
 - verified final user-owned cache may remain;
 - no smoke/worker/sandbox/descendant process remains;
 - no media payload/file was downloaded;
-- checkout remains exact/unmodified apart from explicit task-owned evidence files if the transport workflow produces them;
+- checkout remains exact/unmodified apart from explicit task-owned evidence files if transport workflow produces them;
 - no production Vault/profile/Secret state was touched;
 - safe-output scan contains no full resolved URL, signed query, Cookie/Auth/token/account/profile/transfer credential or response Secret material.
 
@@ -275,8 +271,8 @@ All must hold:
 - runtime cache is `offline-hit` or `offline-prepared`;
 - direct/no-proxy sample is normally reachable;
 - ARM64 sandbox starts without `SANDBOX_UNAVAILABLE`;
-- accepted #85 legacy-kernel fallback clears the former `SPAWN_FAILED` blocker;
-- accepted #95 containment clears the former whole-response `BROKER_RESPONSE_SECRET_REJECTED` blocker without Secret leakage or cookie/auth replay;
+- accepted #85 fallback clears former `SPAWN_FAILED`;
+- accepted #95 containment clears former whole-response `BROKER_RESPONSE_SECRET_REJECTED` without Secret leakage or cookie/auth replay;
 - harness reaches brokered extraction and returns `result: PASS`;
 - `broker_request_count > 0`;
 - protocol is `http-file` or `hls`;
@@ -292,7 +288,7 @@ Only if brokered extraction produces a valid current `ResolvedMedia` with a boun
 
 ### FAIL
 
-Use only after accepted runtime + sandbox + BrokerProcessRunner/R008 path execute correctly and site is normally reachable, but the result cannot be represented by the current first-playback contract, for example stable `UNSUPPORTED_FORMAT` / separate A/V.
+Use only after accepted runtime + sandbox + BrokerProcessRunner/R008 path execute correctly and site is normally reachable, but result cannot be represented by current first-playback contract, e.g. stable `UNSUPPORTED_FORMAT` / separate A/V.
 
 Do not implement DASH/remux/FFmpeg inside #67.
 
@@ -308,13 +304,13 @@ Examples:
 - direct site no longer normally reachable;
 - safe Evidence cannot be produced.
 
-A bounded broker error such as `BROKER_RESPONSE_TOO_LARGE` must remain a bounded code/count; do not change R008 limits here.
+A bounded broker error such as `BROKER_RESPONSE_TOO_LARGE` remains a bounded code/count; do not change R008 limits here.
 
 ## Claims
 
 ```text
 R1 — Exact accepted runtime
-#79 offline runtime + #83 ARM64 sandbox + #85 legacy fd-isolation + #95 response Secret containment authorities are present in exact Candidate 804fd603... and execute without fallback outside accepted semantics.
+#79 offline runtime + #83 ARM64 sandbox + #85 fd-isolation + #95 response Secret containment authorities are present in exact Candidate 804fd603... and execute without fallback outside accepted semantics.
 
 R2 — Target build/dependency independence
 Target consumes locked/accepted inputs; no source/package-index resolution.
@@ -323,13 +319,13 @@ R3 — Normal-network public accessibility
 Frozen Bilibili sample is reachable on accepted direct/no-bypass route independently of artifact/source transfer.
 
 R4 — ARM64 sandbox + broker integrity on Linux 4.19
-Accepted AArch64 seccomp sandbox starts fail-closed, close_range ENOSYS uses the accepted bounded fd fallback, direct socket creation remains denied, broker fd 3/inherited IPC remains usable, and extractor HTTP(S) is under R008Broker/BrokerProcessRunner authority.
+Accepted AArch64 seccomp sandbox starts fail-closed, close_range ENOSYS uses accepted bounded fd fallback, direct socket creation remains denied, broker fd 3/inherited IPC remains usable, and extractor HTTP(S) is under R008Broker/BrokerProcessRunner authority.
 
 R5 — R008 response Secret containment on real flow
 Real origin response Secret material remains contained before broker IPC with no disclosure/store/replay, and otherwise safe public response material can continue according to accepted #95 semantics.
 
 R6 — Current ResolvedMedia compatibility
-Safe result establishes whether the sample maps to current muxed HTTP/HLS first-playback contract.
+Safe result establishes whether sample maps to current muxed HTTP/HLS first-playback contract.
 
 R7 — Secret/evidence boundary
 No Secret, signed media URL, raw page/media payload, proxy/transfer credential, response Secret material or profile/account state enters durable Evidence.
@@ -341,13 +337,13 @@ No staging/process/media payload persists; verified cache may persist; low-privi
 ## Success criteria
 
 1. J0-J4 execute or a concrete bounded blocker is preserved.
-2. Exact Candidate, #79 trust anchor/wheel SHA/provenance, #83 sandbox authority, #85 legacy-kernel authority and #95 response-containment authority are verified.
+2. Exact Candidate, #79 trust anchor/wheel SHA/provenance, #83 sandbox, #85 fd-isolation and #95 containment authorities are verified.
 3. No Target-side source/package-index resolution occurs.
 4. Direct/no-proxy Bilibili reachability is separated from artifact/source transfer.
 5. `SANDBOX_UNAVAILABLE` remains cleared.
-6. Former Linux 4.19 `SPAWN_FAILED` remains cleared by accepted #85 behavior unless a new concrete regression is proven.
+6. Former Linux 4.19 `SPAWN_FAILED` remains cleared unless a new concrete regression is proven.
 7. Brokered traffic reaches R008 (`broker_request_count > 0`) unless a new pre-broker blocker is explicitly classified.
-8. Former whole-response `BROKER_RESPONSE_SECRET_REJECTED` is cleared by accepted #95 behavior or a new concrete bounded R008 blocker is reported without security weakening.
+8. Former whole-response `BROKER_RESPONSE_SECRET_REJECTED` is cleared or a new concrete bounded R008 blocker is reported without security weakening.
 9. Safe result classifies PASS / CONDITIONAL PASS / FAIL / BLOCKED.
 10. R1-R8 are explicitly reported.
 11. No implementation/security-policy modification occurs.
