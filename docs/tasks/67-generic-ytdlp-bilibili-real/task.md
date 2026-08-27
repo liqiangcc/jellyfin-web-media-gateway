@@ -6,15 +6,16 @@
 GitHub Issue: #67
 Task ID: GENERIC-YTDLP-BILIBILI-REAL
 Task kind: verification-only / real public network
-Contract Revision: R4
-Next Attempt: 4
-Exact Execution Candidate: c23b49adbe1cad8a93ff4377dfeba3f12aac7ffe
+Contract Revision: R5
+Next Attempt: 5
+Exact Execution Candidate: 76b2032410b19ee18cfb14f00317b97f84e3b691
 Preferred worker: ubuntu-arm64
 Eligible environment after publication: env:ubuntu-arm64
 Accepted extraction upstream: #66 Final Accepted
 Accepted harness authority: #73 R2 Final Accepted
 Accepted offline runtime authority: #79 Attempt 2 Final Accepted
 Accepted ARM64 sandbox authority: #83 Final Accepted
+Accepted legacy-kernel fd isolation authority: #85 Final Accepted / merge 76b2032410b19ee18cfb14f00317b97f84e3b691
 Accepted target environment: #63 Final Accepted
 Accepted security/runtime authority: #60 + R008
 Downstream: #68 BILIBILI-WEB-E2E
@@ -23,57 +24,47 @@ Freshness policy: dependency-aware / exact Candidate
 
 > #67 owns only real-site compatibility Evidence for the frozen public Bilibili sample. It does not implement fixes, weaken security, add DASH/remux, enable production generic-ytdlp, or start #68.
 
-## Trigger / why Attempt 4
+## Trigger / why Attempt 5
 
-Attempt 3 made decisive progress over Attempts 1/2:
-
-```text
-offline bundle transfer: PASS
-repository trust-anchor verification: PASS
-offline install: PASS
-runtime_cache: offline-prepared
-direct public HTTPS: HTTP 200
-direct frozen Bilibili page: HTTP 200
-```
-
-It then stopped immediately before extractor execution:
+Attempt 4 reached the accepted Ubuntu ARM64 Target with the exact #79 offline runtime and accepted ARM64 sandbox, then exposed a generic runtime portability blocker before broker traffic:
 
 ```text
-result: BLOCKED
-process_error: SANDBOX_UNAVAILABLE
+runtime_cache: offline-hit
+formal Bilibili direct/no-proxy: 2xx
+ARM64 ytdlp-sandbox: built
+process_error: SPAWN_FAILED
 broker_request_count: 0
+close_range_syscall: ENOSYS
+kernel: 4.19.113-964403 / aarch64
 ```
 
-The blocker was not Bilibili compatibility and not the offline runtime. The accepted `ytdlp-sandbox` at that Candidate had an x86_64-only seccomp audit-architecture gate while the Target is Linux `aarch64`.
-
-#83 is now Final Accepted and merged, providing target-bound Linux x86_64 + AArch64 seccomp support while preserving the fail-closed security model.
-
-Accepted #83 identities:
+The blocker was not Bilibili compatibility. #85 has now been Final Accepted and merged. Its exact real-target proof established on Linux `4.19.113-964403` / aarch64:
 
 ```text
-Accepted Candidate: a26995dd96d4765185b5c7c428c19ad2b56ba854
-Merged main / #67 Attempt-4 Execution Candidate: c23b49adbe1cad8a93ff4377dfeba3f12aac7ffe
-PR: #84
-Exact-Candidate workflow: 32961265996
-x86_64 J1: 98154582893 PASS
-AArch64 J2: 98154583068 PASS on ubuntu-24.04-arm
-J3: 98154583117 PASS
-J4: 98154583090 PASS
+modern Linux -> close_range fast path preserved
+close_range == ENOSYS -> bounded fail-closed legacy close path
+retain stdio + broker fd 3
+close ambient fd >=4
+non-ENOSYS close_range errors remain fail-closed
+BrokerProcessRunner target proof: PASS
+fd-isolation focused tests: 2/2 PASS
+runtime integration tests: 12/12 PASS
 ```
 
-Accepted security result:
+Accepted #85 identities:
 
 ```text
-Linux x86_64 -> target-bound AUDIT_ARCH_X86_64
-Linux aarch64 -> target-bound AUDIT_ARCH_AARCH64
-unsupported target -> compile-time fail closed
-no_new_privs -> preserved
-seccomp -> preserved
-new socket/socketpair -> denied
-inherited broker IPC -> usable
-R008/BrokerProcessRunner -> unchanged authority
-production DisabledRunner -> preserved
+Task Candidate: 9b874c3b4404a776da35fd37d37abe040fb06a2b
+Merged main / #67 Attempt-5 Execution Candidate: 76b2032410b19ee18cfb14f00317b97f84e3b691
+PR: #86
+workflow: 33045463590
+J1 x86_64: 98428559107 PASS
+J2 AArch64: 98428559073 PASS
+J3 forced ENOSYS: 98428559066 PASS
+J4 Linux 4.19 ARM64: 98428782004 PASS
 ```
+
+Attempt 5 resumes the same verification-only real-site Goal on a re-frozen Candidate containing the accepted #85 legacy-kernel fix. No #67 product/security implementation is authorized.
 
 ## Accepted offline runtime identities
 
@@ -81,27 +72,16 @@ production DisabledRunner -> preserved
 
 ```text
 Accepted Candidate: 3a3de8ee2f9ac8b0e1e312735a9305db7569baef
-Merged main containing trust anchor: 290268c3cabe5ac16022b1ae5e4fa7716ee5deae
 Artifact: yt_dlp-2026.8.19-py3-none-any.whl
 Wheel SHA256: 86a521c89017200d7cc20173b9f1d04c6588dda4eabad324b5c76d5269ee1bf9
 Trust anchor: scripts/generic-ytdlp-offline-runtime.lock.json
 Manifest schema: 1
 yt-dlp version: 2026.08.19
 Source commit: 3a08beaf031ab68f966401ead017ac81fe8486cf
-Platform: py3-none-any verified on hosted Linux x86_64 + ARM64
+CI transport: run 32956386626 / artifact 9602124791
 ```
 
-Accepted CI transfer convenience:
-
-```text
-workflow run: 32956386626
-artifact name: generic-ytdlp-offline-runtime-3a3de8ee2f9ac8b0e1e312735a9305db7569baef
-artifact id: 9602124791
-```
-
-The Actions artifact ID/name is transport only, not the trust root. Durable trust remains the exact repository lock + wheel SHA + manifest/provenance checks.
-
-Attempt 3 intentionally removed the transferred bundle after execution but retained the verified final user-owned cache. Because the accepted smoke harness still requires `YTDLP_OFFLINE_BUNDLE` even for an `offline-hit`, Attempt 4 must provision the exact #79 bundle again or receive an operator-provided exact local copy. This is transport, not dependency resolution.
+Artifact transport is not a trust root. Target trust remains the exact repository lock + wheel SHA/provenance verification.
 
 ## Frozen sample
 
@@ -123,26 +103,24 @@ Required path:
 
 ```text
 exact #79 offline bundle
-→ transfer/provision to accepted Ubuntu ARM64 Target
-→ repository lock + wheel SHA verification
-→ offline install/reuse in gateway-runner user cache
-→ runtime_cache: offline-hit | offline-prepared
+→ Target verify/offline cache hit-or-prepare
 → direct/no-proxy Bilibili reachability
 → scripts/generic-ytdlp-real-smoke.sh
 → accepted ARM64 ytdlp-sandbox
-→ BrokerProcessRunner
+→ BrokerProcessRunner with accepted #85 ENOSYS fallback
 → R008Broker
-→ frozen yt_dlp.extract_info(download=False)
+→ yt_dlp.extract_info(download=False)
 → GenericYtdlpAdapter
 → current ResolvedMedia
 → evidence-safe summary only
 ```
 
-The decisive Attempt-4 signal is:
+Decisive Attempt-5 signal:
 
 ```text
 runtime_cache: offline-hit | offline-prepared
 process_error != SANDBOX_UNAVAILABLE
+process_error != SPAWN_FAILED
 broker_request_count > 0
 ```
 
@@ -153,12 +131,12 @@ Only after broker traffic occurs may #67 classify actual Bilibili compatibility.
 Execute runtime/product code exactly at:
 
 ```text
-c23b49adbe1cad8a93ff4377dfeba3f12aac7ffe
+76b2032410b19ee18cfb14f00317b97f84e3b691
 ```
 
-This Candidate contains the accepted #66 extraction path, #73 safe harness, #79 offline runtime/trust anchor, and #83 Linux ARM64 seccomp sandbox support.
+This Candidate contains the accepted #66 extraction path, #73 real-site harness, #79 offline runtime/trust anchor, #83 ARM64 sandbox and #85 legacy-kernel fd-isolation support.
 
-Task/prompt documentation is newer than the runtime Candidate by design. Do not substitute moving `main`. If an accepted semantic change touches `plugins/generic-ytdlp/**`, `scripts/generic-ytdlp-*`, `gateway-egress/**`/R008 or material SiteAdapter output authority before claim, stop for Coordinator freshness review.
+Task/prompt documentation may be newer than the runtime Candidate by design. Do not substitute moving `main`. If an accepted semantic change touches `plugins/generic-ytdlp/**`, `scripts/generic-ytdlp-*`, `gateway-egress/**`/R008, the fd-isolation implementation, or material SiteAdapter output authority before claim, STOP for Coordinator freshness review.
 
 ## Host / environment authority
 
@@ -166,20 +144,20 @@ Use the Final Accepted #63 Ubuntu ARM64 phone environment:
 
 - Linux ARM64/aarch64;
 - low-privilege `gateway-runner` uid999, non-root/no-sudo/no-admin;
-- Python 3.12, pip, git, curl available;
-- user Rust toolchain available;
+- Python 3.12, pip, git, curl and user Rust toolchain available;
 - direct/no-proxy public HTTPS and frozen Bilibili page previously HTTP 200;
-- FFmpeg/Chromium/Node are not required.
+- Linux kernel is expected to report `close_range=ENOSYS` and must use the accepted #85 fallback without security weakening.
 
 No root/sudo/system package installation is permitted.
 
 ## J0 — Exact identity + bundle provisioning
 
-Record only bounded safe Evidence:
+Record bounded safe Evidence:
 
 ```text
 UTC time
 uname -m
+kernel
 uid / privilege class
 exact checkout SHA
 python3 version
@@ -189,16 +167,14 @@ bundle transfer class
 
 Requirements:
 
-1. checkout equals `c23b49adbe1cad8a93ff4377dfeba3f12aac7ffe`;
+1. checkout equals `76b2032410b19ee18cfb14f00317b97f84e3b691`;
 2. runtime user matches accepted low-privilege Target class;
 3. obtain the exact #79 offline bundle without rebuilding/resolving it on Target;
-4. permitted transfer shapes:
-   - authenticated download of accepted #79 artifact from run `32956386626`, or
-   - Coordinator/operator-provided exact local copy;
-5. transfer credentials are transport-only and must be removed before extraction;
-6. do not use Target-side git/source/package-index resolution to create or replace yt-dlp.
+4. permitted transfer shapes are authenticated download of accepted #79 artifact or Coordinator/operator-provided exact local copy;
+5. transfer credentials are transport-only and removed before extraction;
+6. no Target-side source/package-index resolution may create/replace yt-dlp.
 
-If the exact bundle cannot be placed on Target, report BLOCKED as `OFFLINE_BUNDLE_TRANSFER`.
+If direct target Git checkout is unreliable, a trusted exact-Candidate source-bundle transport already accepted by #90/#85 may be used, provided exact SHA/tree identity is verified locally before execution. Transport choice is not site Evidence.
 
 ## J1 — Trust anchor + offline runtime/cache verification
 
@@ -207,8 +183,6 @@ Before real-site extraction:
 ```text
 python3 scripts/generic-ytdlp-offline-runtime.py verify "$YTDLP_OFFLINE_BUNDLE"
 ```
-
-Then exercise the exact offline install/reuse path through the accepted helper/harness.
 
 Required Evidence:
 
@@ -220,29 +194,19 @@ runtime provenance: yt-dlp 2026.08.19 / accepted source commit
 runtime cache: offline-hit | offline-prepared
 ```
 
-A retained Attempt-3 cache should normally produce `offline-hit`; `offline-prepared` remains acceptable only when the exact accepted bundle verifies and a fresh user-owned cache is atomically prepared.
-
-Rules:
-
-- install consumes supplied wheel only;
-- no package index/source network for install;
-- no global/system yt-dlp fallback;
-- lock/manifest/hash/provenance mismatch is BLOCKED;
-- no same-version replacement wheel.
+No package index/source network, global/system yt-dlp fallback, same-version replacement wheel, or provenance mismatch is allowed.
 
 ## J2 — Direct/no-bypass site reachability
 
 Independently re-confirm formal site Evidence:
 
-- clear upper/lowercase proxy variables for the reachability checks;
+- clear upper/lowercase proxy variables for reachability checks;
 - use `curl --noproxy '*'` with bounded timeouts;
 - record only public HTTPS status class and frozen Bilibili page status/error class.
 
-No Cookie/Auth/login, proxy rotation, fingerprint spoofing, CAPTCHA automation or access-control bypass.
+No Cookie/Auth/login, proxy rotation, fingerprint spoofing, CAPTCHA automation or access-control bypass. Artifact/source-bundle transfer routing is not site Evidence.
 
-Artifact-transfer routing is not site Evidence.
-
-## J3 — Accepted real-site smoke on ARM64 sandbox
+## J3 — Accepted real-site smoke on ARM64 sandbox + legacy kernel
 
 Run only:
 
@@ -254,16 +218,15 @@ YTDLP_OFFLINE_BUNDLE=<verified-bundle-path> \
 
 Do not replace the harness with ad-hoc yt-dlp/Python/Rust/CLI code.
 
-Network/security separation:
+Before extractor execution the accepted harness scrubs proxy state. Extractor HTTP(S) remains R008Broker + BrokerProcessRunner authority; the worker has no direct socket authority.
+
+Attempt 5 must confirm the #85 downstream effect on the real path:
 
 ```text
-Artifact transfer network
-!= Offline runtime install
-!= Formal Bilibili direct reachability
-!= Extractor network authority
+close_range_syscall: ENOSYS (when probed/reported)
+process_error != SPAWN_FAILED
+broker_request_count > 0
 ```
-
-Before extractor execution the accepted harness scrubs proxy state. Extractor HTTP(S) remains R008Broker + BrokerProcessRunner authority; the worker has no direct socket authority.
 
 Capture only safe fields:
 
@@ -280,7 +243,7 @@ title_length
 process_error
 ```
 
-Attempt 4 specifically proves the accepted ARM64 sandbox reaches the extractor/broker path. A repeated `SANDBOX_UNAVAILABLE` is BLOCKED and contradicts the expected #83 downstream effect; do not bypass the sandbox.
+A repeated `SANDBOX_UNAVAILABLE` or `SPAWN_FAILED` is BLOCKED and must not be bypassed.
 
 ## J4 — Post-run safety / cleanup
 
@@ -290,7 +253,7 @@ Verify:
 - verified final user-owned cache may remain;
 - no smoke/worker/sandbox/descendant process remains;
 - no media payload/file was downloaded;
-- checkout remains exact/unmodified;
+- checkout remains exact/unmodified apart from explicit task-owned evidence files if the transport workflow produces them;
 - no production Vault/profile/Secret state was touched;
 - safe-output scan contains no full resolved URL, signed query, Cookie/Auth/token/account/profile/transfer credential data.
 
@@ -300,11 +263,12 @@ Verify:
 
 All must hold:
 
-- exact Candidate `c23b49ad...` used;
+- exact Candidate `76b2032410b19ee18cfb14f00317b97f84e3b691` used;
 - accepted #79 bundle/trust anchor/provenance verifies;
 - runtime cache is `offline-hit` or `offline-prepared`;
 - direct/no-proxy sample is normally reachable;
 - ARM64 sandbox starts without `SANDBOX_UNAVAILABLE`;
+- accepted #85 legacy-kernel fallback clears the former `SPAWN_FAILED` blocker;
 - harness reaches brokered extraction and returns `result: PASS`;
 - `broker_request_count > 0`;
 - protocol is `http-file` or `hls`;
@@ -320,7 +284,7 @@ Only if brokered extraction produces a valid current `ResolvedMedia` with a boun
 
 ### FAIL
 
-Use only after accepted runtime + sandbox + broker path execute correctly and site is normally reachable, but the result cannot be represented by the current first-playback contract, for example stable `UNSUPPORTED_FORMAT` / separate A/V.
+Use only after accepted runtime + sandbox + BrokerProcessRunner/R008 path execute correctly and site is normally reachable, but the result cannot be represented by the current first-playback contract, for example stable `UNSUPPORTED_FORMAT` / separate A/V.
 
 Do not implement DASH/remux/FFmpeg inside #67.
 
@@ -331,6 +295,7 @@ Examples:
 - `OFFLINE_BUNDLE_TRANSFER`;
 - `FROZEN_RUNTIME_VERIFY`;
 - repeated `SANDBOX_UNAVAILABLE`;
+- repeated `SPAWN_FAILED` despite the accepted #85 Candidate;
 - direct site no longer normally reachable;
 - R008 policy/limit prevents compatibility determination;
 - safe Evidence cannot be produced.
@@ -341,16 +306,16 @@ A bounded broker error such as `BROKER_RESPONSE_TOO_LARGE` must remain a bounded
 
 ```text
 R1 — Exact accepted runtime
-#79 offline runtime + #83 ARM64 sandbox identities are present in exact Candidate c23b49ad... and execute without fallback.
+#79 offline runtime + #83 ARM64 sandbox + #85 legacy fd-isolation authority are present in exact Candidate 76b203... and execute without fallback outside accepted semantics.
 
-R2 — Target build independence
-Target consumes the locked bundle; no source/package-index resolution.
+R2 — Target build/dependency independence
+Target consumes locked/accepted inputs; no source/package-index resolution.
 
 R3 — Normal-network public accessibility
-Frozen Bilibili sample is reachable on accepted direct/no-bypass route independently of artifact transfer.
+Frozen Bilibili sample is reachable on accepted direct/no-bypass route independently of artifact/source transfer.
 
-R4 — ARM64 sandbox + broker integrity
-Accepted AArch64 seccomp sandbox starts fail-closed, direct socket creation remains denied, inherited broker IPC remains usable, and extractor HTTP(S) is under R008Broker/BrokerProcessRunner authority.
+R4 — ARM64 sandbox + broker integrity on Linux 4.19
+Accepted AArch64 seccomp sandbox starts fail-closed, close_range ENOSYS uses the accepted bounded fd fallback, direct socket creation remains denied, broker fd 3/inherited IPC remains usable, and extractor HTTP(S) is under R008Broker/BrokerProcessRunner authority.
 
 R5 — Current ResolvedMedia compatibility
 Safe result establishes whether the sample maps to current muxed HTTP/HLS first-playback contract.
@@ -365,15 +330,16 @@ No staging/process/media payload persists; verified cache may persist; low-privi
 ## Success criteria
 
 1. J0-J4 execute or a concrete bounded blocker is preserved.
-2. Exact Candidate, #79 trust anchor/wheel SHA/provenance and #83 sandbox authority are verified.
+2. Exact Candidate, #79 trust anchor/wheel SHA/provenance, #83 sandbox authority and #85 legacy-kernel authority are verified.
 3. No Target-side source/package-index resolution occurs.
-4. Direct/no-proxy Bilibili reachability is separated from artifact transfer.
-5. `SANDBOX_UNAVAILABLE` is cleared by the accepted ARM64 sandbox unless a new concrete regression is proven.
-6. Brokered traffic reaches R008 (`broker_request_count > 0`) unless a new pre-broker blocker is explicitly classified.
-7. Safe result classifies PASS / CONDITIONAL PASS / FAIL / BLOCKED.
-8. R1-R7 are explicitly reported.
-9. No implementation/security-policy modification occurs.
-10. Worker reports, releases ownership and STOPs; it does not execute #68.
+4. Direct/no-proxy Bilibili reachability is separated from artifact/source transfer.
+5. `SANDBOX_UNAVAILABLE` remains cleared.
+6. Former Linux 4.19 `SPAWN_FAILED` is cleared by accepted #85 behavior unless a new concrete regression is proven.
+7. Brokered traffic reaches R008 (`broker_request_count > 0`) unless a new pre-broker blocker is explicitly classified.
+8. Safe result classifies PASS / CONDITIONAL PASS / FAIL / BLOCKED.
+9. R1-R7 are explicitly reported.
+10. No implementation/security-policy modification occurs.
+11. Worker reports, releases ownership and STOPs; it does not execute #68.
 
 ## Evidence contract
 
@@ -382,10 +348,10 @@ No staging/process/media payload persists; verified cache may persist; low-privi
 ```text
 Attempt / worker / environment
 UTC time
-Host class / arch / uid privilege class
+Host class / arch / kernel / uid privilege class
 Exact Candidate SHA
 Frozen selector: BV14V411W7r5
-#83 accepted Candidate / merged SHA
+#85 accepted Candidate / merge SHA
 Offline bundle transfer class
 Repository trust-anchor result
 Accepted wheel SHA verification
@@ -395,6 +361,7 @@ formal site network class: direct/no-proxy | blocked
 Direct public HTTPS status class
 Direct Bilibili page status class
 ARM64 sandbox result
+close_range / legacy-fd-isolation result
 Harness result
 protocol: http-file | hls | n/a
 stream_count
@@ -416,39 +383,21 @@ Never publish transfer credentials, full resolved/signed media URLs, signed quer
 
 Semantic authorities:
 
-- exact Execution Candidate `c23b49adbe1cad8a93ff4377dfeba3f12aac7ffe`;
+- exact Execution Candidate `76b2032410b19ee18cfb14f00317b97f84e3b691`;
 - #79 offline-runtime helper + lock;
 - `scripts/generic-ytdlp-real-smoke.sh`;
-- `plugins/generic-ytdlp/**`, especially `ytdlp-sandbox.rs`;
+- `plugins/generic-ytdlp/**`, especially sandbox and BrokerProcessRunner/fd-isolation logic;
 - `gateway-egress/**` / R008;
 - `site-adapter-api/**` only if an accepted change materially alters extraction output/conformance before claim.
 
-#75 Browser work is normally unrelated. Planning/doc-only changes are normally `UNRELATED`. Any accepted semantic change in the authorities above before claim requires Coordinator re-freeze.
+Planning/doc-only changes and #90/#92 diagnostic infrastructure are normally `UNRELATED`. Any accepted semantic change in authorities above before claim requires Coordinator re-freeze.
 
 ## Out of scope
 
-- code changes/fixes;
-- sandbox bypass;
+- repository/product/security code changes;
+- sandbox or fd-isolation bypass;
 - R008 policy/limit weakening;
 - Cookie/login/profile/auth/access-control bypass;
 - DASH/separate A/V composition/remux/FFmpeg;
-- Bilibili navigation/multipart (#72);
-- Browser Worker/Native Panel;
-- Web Display/control E2E (#68);
-- production generic-ytdlp enablement;
-- performance/capacity/thermal/soak (#9).
-
-## Completion protocol
-
-```text
-status:ready
-→ claim / Attempt 4
-→ status:in-progress
-→ J0-J4
-→ [EXECUTION REPORT] or [BLOCKER REPORT]
-→ status:review or status:blocked
-→ release owner
-→ STOP
-```
-
-Worker cannot set `status:done`, close #67, execute #68, or modify product/security policy.
+- Browser/Web E2E/performance work;
+- starting #68.
