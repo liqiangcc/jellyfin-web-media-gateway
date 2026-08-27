@@ -261,14 +261,20 @@ fn debug_near_r008_body_limit() {
             &Url::parse("https://fixture.example.test/media?item=near-limit").unwrap(),
         )
         .unwrap();
-    println!("bounded debug result: {}", String::from_utf8_lossy(&output.stdout));
+    println!(
+        "bounded debug result: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
     let output = runner(Duration::from_secs(5))
         .run_action(
             "debug-probe",
             &Url::parse("https://fixture.example.test/media?item=near-limit").unwrap(),
         )
         .unwrap();
-    println!("bounded debug result: {}", String::from_utf8_lossy(&output.stdout));
+    println!(
+        "bounded debug result: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
 }
 
 #[test]
