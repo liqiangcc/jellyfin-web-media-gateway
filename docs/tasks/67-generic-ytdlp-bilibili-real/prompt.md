@@ -151,7 +151,7 @@ PASS + broker_request_count > 0 + protocol http-file|hls
 
 UNSUPPORTED_FORMAT / separate A/V after real brokered extraction
 → FAIL
-→ Coordinator plans only the smallest generic media-format capability required by Evidence
+→ Coordinator plans only smallest generic media-format capability required by Evidence
 
 R008 / response containment / sandbox / SPAWN_FAILED / site / transfer / trust blocker
 → BLOCKED
