@@ -104,6 +104,15 @@ DNS 解析、连接前和每次 redirect 都重新校验。
 
 Site Browser Worker 默认使用 public web 或更窄的站点 allowlist。
 
+匿名 R008 broker 的请求与响应 Secret 权限必须分开处理：
+
+- Caller、Worker、Extractor 提供的 URL userinfo、Cookie、Authorization、proxy-auth、API-token 以及 Basic/Bearer 请求材料，在产生受禁止的网络副作用前拒绝；
+- Origin 响应中的 `Set-Cookie`、认证挑战头和 Basic/Bearer/API-token 值仍由共享 Secret classifier 标记为 Secret，但不因此拒绝整个安全的公共响应；
+- Secret 响应头在构造 `BrokerResponse`、跨 broker IPC 之前被过滤/包含。状态、受限 body 和非 Secret 公共响应头可以在其他 R008 校验通过时继续；
+- 包含的响应头不会写入 Cookie/auth store，不会被匿名请求重放，也不会进入 Worker、SiteAdapter、`ResolvedMedia`、日志或 artifacts；响应头总量、名称和值的既有上限仍适用于被过滤的头，无法安全包含时 fail closed。
+
+这不是给匿名 generic-ytdlp 增加凭据能力；生产 `GenericYtdlpAdapter::default()` 仍保持 disabled。R008 的 DNS、public-IP、address pinning、TLS、逐跳 redirect、body、frame、timeout 和 cancellation authority 不因响应 Secret containment 改变。
+
 ## 6. Site Plugin Threat Model
 
 Site Plugin 属于高变化、高风险边缘代码。

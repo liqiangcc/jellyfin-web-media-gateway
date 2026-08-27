@@ -389,6 +389,7 @@ dependencies = [
  "gateway-core",
  "reqwest",
  "serde",
+ "serde_json",
  "site-adapter-api",
  "tokio",
  "url",

@@ -178,18 +178,26 @@ impl R008Broker {
         let status = response.status();
         let reason = status.canonical_reason().unwrap_or("Unknown").to_string();
         let mut headers = BTreeMap::new();
+        let mut response_header_count = 0;
         for (name, value) in response.headers() {
             let Ok(value) = value.to_str() else {
                 return BrokerResponse::denied("BROKER_RESPONSE_HEADER_REJECTED");
             };
-            if headers.len() >= MAX_HEADERS
-                || name.as_str().len() > MAX_HEADER_NAME_BYTES
-                || value.len() > MAX_HEADER_VALUE_BYTES
-                || is_secret_header(name.as_str(), value)
-            {
-                return BrokerResponse::denied("BROKER_RESPONSE_SECRET_REJECTED");
+            match admit_response_header(
+                &mut headers,
+                &mut response_header_count,
+                name.as_str(),
+                value,
+            ) {
+                Ok(ResponseHeaderDisposition::Public) => {}
+                Ok(ResponseHeaderDisposition::ContainedSecret) => continue,
+                Err(ResponseHeaderError::Malformed) => {
+                    return BrokerResponse::denied("BROKER_RESPONSE_HEADER_REJECTED");
+                }
+                Err(ResponseHeaderError::BoundExceeded) => {
+                    return BrokerResponse::denied("BROKER_RESPONSE_SECRET_REJECTED");
+                }
             }
-            headers.insert(name.as_str().into(), value.into());
         }
         let mut body = Vec::new();
         let mut stream = response.bytes_stream();
@@ -220,6 +228,50 @@ impl R008Broker {
             error: None,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResponseHeaderDisposition {
+    Public,
+    ContainedSecret,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResponseHeaderError {
+    Malformed,
+    BoundExceeded,
+}
+
+/// Validate and classify one origin response header before it is copied into
+/// the broker IPC response. Secret headers still consume the bounded origin
+/// header budget, but their names and values are never admitted to the public
+/// map. This keeps response-only Secret material contained without creating a
+/// cookie/auth replay capability or an unbounded filtering sink.
+fn admit_response_header(
+    public_headers: &mut BTreeMap<String, String>,
+    total_headers: &mut usize,
+    name: &str,
+    value: &str,
+) -> Result<ResponseHeaderDisposition, ResponseHeaderError> {
+    *total_headers = total_headers
+        .checked_add(1)
+        .ok_or(ResponseHeaderError::BoundExceeded)?;
+    if *total_headers > MAX_HEADERS {
+        return Err(ResponseHeaderError::BoundExceeded);
+    }
+    if name.is_empty()
+        || name.len() > MAX_HEADER_NAME_BYTES
+        || value.len() > MAX_HEADER_VALUE_BYTES
+        || name.chars().any(char::is_control)
+        || value.chars().any(char::is_control)
+    {
+        return Err(ResponseHeaderError::Malformed);
+    }
+    if is_secret_header(name, value) {
+        return Ok(ResponseHeaderDisposition::ContainedSecret);
+    }
+    public_headers.insert(name.into(), value.into());
+    Ok(ResponseHeaderDisposition::Public)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -278,10 +330,11 @@ fn secretish_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        BrokerAbort, BrokerBackend, BrokerCancellation, BrokerRequest, R008Broker,
-        await_broker_stage,
+        BrokerAbort, BrokerBackend, BrokerCancellation, BrokerRequest, BrokerResponse, R008Broker,
+        ResponseHeaderDisposition, ResponseHeaderError, admit_response_header, await_broker_stage,
     };
     use gateway_core::{EgressDnsResolver, EgressPolicy, EgressResolutionFuture};
+    use std::collections::BTreeMap;
     use std::future::pending;
     use std::pin::Pin;
     use std::sync::Arc;
@@ -332,6 +385,148 @@ mod tests {
             headers: Default::default(),
             body: Vec::new(),
         }
+    }
+
+    #[test]
+    fn response_secret_headers_are_contained_while_public_response_continues() {
+        let fixtures = [
+            ("Set-Cookie", "fixture-set-cookie-secret"),
+            ("WWW-Authenticate", "Basic fixture-basic-secret"),
+            ("X-Challenge", "Bearer fixture-bearer-secret"),
+            ("X-API-Key", "fixture-api-key-secret"),
+            ("Location", "https://public.example/next"),
+            ("Content-Type", "application/json"),
+        ];
+        let mut public_headers = BTreeMap::new();
+        let mut total_headers = 0;
+        let mut contained = 0;
+        for (name, value) in fixtures {
+            match admit_response_header(&mut public_headers, &mut total_headers, name, value)
+                .expect("synthetic response header fixture should be bounded")
+            {
+                ResponseHeaderDisposition::Public => {}
+                ResponseHeaderDisposition::ContainedSecret => contained += 1,
+            }
+        }
+
+        assert_eq!(contained, 4);
+        assert_eq!(total_headers, 6);
+        assert_eq!(
+            public_headers,
+            BTreeMap::from([
+                ("Location".into(), "https://public.example/next".into()),
+                ("Content-Type".into(), "application/json".into()),
+            ])
+        );
+        let response = BrokerResponse {
+            status: 302,
+            reason: "Found".into(),
+            headers: public_headers,
+            body: b"public-body".to_vec(),
+            error: None,
+        };
+        let wire = serde_json::to_string(&response).unwrap();
+        for sentinel in [
+            "fixture-set-cookie-secret",
+            "fixture-basic-secret",
+            "fixture-bearer-secret",
+            "fixture-api-key-secret",
+        ] {
+            assert!(!wire.contains(sentinel), "response leaked {sentinel}");
+        }
+        assert_eq!(response.body, b"public-body");
+        assert!(wire.contains("public.example/next"));
+    }
+
+    #[test]
+    fn contained_secret_headers_do_not_bypass_response_header_bound() {
+        let mut public_headers = BTreeMap::new();
+        let mut total_headers = 0;
+        for index in 0..super::MAX_HEADERS {
+            let name = format!("X-Public-{index}");
+            assert_eq!(
+                admit_response_header(
+                    &mut public_headers,
+                    &mut total_headers,
+                    &name,
+                    "bounded-value",
+                ),
+                Ok(ResponseHeaderDisposition::Public)
+            );
+        }
+        assert_eq!(
+            admit_response_header(
+                &mut public_headers,
+                &mut total_headers,
+                "Set-Cookie",
+                "fixture-overflow-secret",
+            ),
+            Err(ResponseHeaderError::BoundExceeded)
+        );
+        assert_eq!(total_headers, super::MAX_HEADERS + 1);
+    }
+
+    #[test]
+    fn malformed_response_headers_fail_closed() {
+        let mut public_headers = BTreeMap::new();
+        let mut total_headers = 0;
+        assert_eq!(
+            admit_response_header(
+                &mut public_headers,
+                &mut total_headers,
+                "X-Bad\nHeader",
+                "value",
+            ),
+            Err(ResponseHeaderError::Malformed)
+        );
+        assert!(public_headers.is_empty());
+    }
+
+    #[derive(Debug)]
+    struct CountingResolver {
+        called: Arc<AtomicBool>,
+    }
+
+    impl EgressDnsResolver for CountingResolver {
+        fn resolve<'a>(&'a self, _: &'a str, _: u16) -> EgressResolutionFuture<'a> {
+            self.called.store(true, Ordering::Release);
+            Box::pin(async { Err(()) })
+        }
+    }
+
+    #[test]
+    fn request_secret_material_is_rejected_before_egress() {
+        let called = Arc::new(AtomicBool::new(false));
+        let broker = R008Broker::new(
+            EgressPolicy::with_resolver(Arc::new(CountingResolver {
+                called: Arc::clone(&called),
+            })),
+            Duration::from_secs(1),
+        );
+        for (name, value) in [
+            ("Cookie", "fixture-cookie-secret"),
+            ("Authorization", "Bearer fixture-authorization-secret"),
+            ("Proxy-Authorization", "Basic fixture-proxy-secret"),
+            ("X-API-Key", "fixture-api-key-secret"),
+            ("X-Trace", "Basic fixture-basic-secret"),
+            ("X-Trace", "Bearer fixture-bearer-secret"),
+        ] {
+            let response = broker.handle(
+                BrokerRequest {
+                    operation: "http".into(),
+                    method: "GET".into(),
+                    url: "https://public.example/media".into(),
+                    headers: BTreeMap::from([(name.into(), value.into())]),
+                    body: Vec::new(),
+                },
+                BrokerCancellation::default(),
+            );
+            assert_eq!(
+                response.error.as_deref(),
+                Some("BROKER_SECRET_HEADER_REJECTED")
+            );
+        }
+        assert!(!called.load(Ordering::Acquire));
     }
 
     #[tokio::test]
