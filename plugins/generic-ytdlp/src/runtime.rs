@@ -29,6 +29,7 @@ const MAX_HEADER_VALUE_BYTES: usize = gateway_egress::MAX_HEADER_VALUE_BYTES;
 const MAX_FRAME_BYTES: usize = MAX_BODY_BYTES * 2
     + MAX_HEADER_COUNT * (2 * (MAX_HEADER_NAME_BYTES + MAX_HEADER_VALUE_BYTES) + 8)
     + 4 * 1024;
+#[cfg(test)]
 const LEGACY_MAX_FRAME_BYTES: usize = 128 * 1024;
 const FROZEN_YTDLP_VERSION: &str = "2026.08.19";
 const FROZEN_YTDLP_COMMIT: &str = "3a08beaf031ab68f966401ead017ac81fe8486cf";

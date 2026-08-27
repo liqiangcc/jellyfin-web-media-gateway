@@ -29,7 +29,7 @@ impl BrokerBackend for FixtureBroker {
         } else if request.url.contains("item=near-limit") {
             let prefix =
                 br#"{"fixture":"generic-ytdlp-broker","title":"fixture media","padding":""#;
-            let suffix = br#"}"#;
+            let suffix = br#""}"#;
             let padding_len = gateway_egress::MAX_BODY_BYTES - prefix.len() - suffix.len();
             let mut body = Vec::with_capacity(gateway_egress::MAX_BODY_BYTES);
             body.extend_from_slice(&prefix[..prefix.len() - 1]);
