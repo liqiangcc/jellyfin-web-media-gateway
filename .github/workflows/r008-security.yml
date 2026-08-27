@@ -123,6 +123,6 @@ jobs:
           grep -q 'Arc::new(DisabledRunner)' plugins/generic-ytdlp/src/lib.rs
           grep -q 'set-cookie' site-adapter-api/src/security.rs
           grep -q 'is_secret_header' gateway-egress/src/lib.rs
-          grep -q 'response Secret' docs/security.md
+          grep -q 'Secret 响应头' docs/security.md
           bash scripts/check-core-site-boundary.sh
           bash scripts/check-core-site-boundary.sh --self-test
