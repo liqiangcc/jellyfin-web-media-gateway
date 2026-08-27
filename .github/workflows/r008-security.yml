@@ -54,7 +54,7 @@ jobs:
         run: |
           cargo test -p gateway-egress --all-targets -- --nocapture 2>&1 | tee gateway-egress-test.log
           cargo test -p site-adapter-api --all-targets -- --nocapture 2>&1 | tee site-adapter-api-test.log
-          ! rg -n 'fixture-(set-cookie|basic|bearer|api-key|overflow)-secret' \
+          ! grep -En 'fixture-(set-cookie|basic|bearer|api-key|overflow)-secret' \
             gateway-egress-test.log site-adapter-api-test.log
 
   j2-state-redirect-negatives:
@@ -85,7 +85,7 @@ jobs:
           cargo test -p gateway-core --test media_gateway -- --nocapture 2>&1 | tee media-test.log
       - name: Verify fixture output contains no secret sentinel
         run: |
-          ! rg -n 'fixture-(set-cookie|basic|bearer|api-key|overflow)-secret|r008-fixture-secret|fixture-test-secret|r001-fixture-secret' \
+          ! grep -En 'fixture-(set-cookie|basic|bearer|api-key|overflow)-secret|r008-fixture-secret|fixture-test-secret|r001-fixture-secret' \
             gateway-egress-negative.log security-test.log http-security-test.log auth-contract-test.log media-test.log
 
   j3-broker-regressions:
