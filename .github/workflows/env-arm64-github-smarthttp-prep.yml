@@ -245,6 +245,7 @@ jobs:
           mkdir -m 700 -p "$work"
           trap 'rm -rf -- "$work"' EXIT
           : "${AUTH_TOKEN:?workflow token is unavailable}"
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$AUTH_TOKEN" | base64 | tr -d '\\n')"
           printf 'candidate_sha=%s\n' "$CANDIDATE_SHA" > "$output_dir/summary.txt"
           printf 'remote=%s\n' "$REMOTE_URL" >> "$output_dir/summary.txt"
 
@@ -253,7 +254,7 @@ jobs:
             set +e
             if [[ "$mode" == token ]]; then
               GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraheader \
-                GIT_CONFIG_VALUE_0="AUTHORIZATION: bearer ${AUTH_TOKEN}" \
+                GIT_CONFIG_VALUE_0="$AUTH_HEADER" \
                 GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c core.askPass= -c http.sslVerify=true \
                 ls-remote --refs "$REMOTE_URL" > /dev/null 2>"$log"
             else
@@ -278,7 +279,7 @@ jobs:
             set +e
             if [[ "$mode" == token ]]; then
               GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraheader \
-                GIT_CONFIG_VALUE_0="AUTHORIZATION: bearer ${AUTH_TOKEN}" \
+                GIT_CONFIG_VALUE_0="$AUTH_HEADER" \
                 GIT_TERMINAL_PROMPT=0 git -C "$repo" -c credential.helper= -c core.askPass= \
                 -c http.sslVerify=true -c "$variant" fetch --no-tags --depth=1 origin "$CANDIDATE_SHA" > /dev/null 2>"$log"
             else
