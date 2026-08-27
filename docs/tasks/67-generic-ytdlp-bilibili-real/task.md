@@ -27,7 +27,7 @@ Freshness policy: dependency-aware / exact Candidate
 
 ## Trigger / why Attempt 6
 
-Attempt 5 cleared every previous Target/runtime blocker and reached the accepted real R008 broker path on the Ubuntu ARM64 target:
+Attempt 5 cleared every previous Target/runtime blocker and reached accepted real R008 broker traffic on the Ubuntu ARM64 target:
 
 ```text
 runtime_cache: offline-hit
@@ -65,7 +65,7 @@ Attempt 6 resumes the same verification-only real-site Goal on the first exact C
 
 ## Accepted offline runtime identities
 
-#79 remains the immutable runtime authority:
+#79 remains immutable runtime authority:
 
 ```text
 Accepted Candidate: 3a3de8ee2f9ac8b0e1e312735a9305db7569baef
@@ -78,7 +78,7 @@ Source commit: 3a08beaf031ab68f966401ead017ac81fe8486cf
 CI transport: run 32956386626 / artifact 9602124791
 ```
 
-Artifact transport is not a trust root. Target trust remains the exact repository lock + wheel SHA/provenance verification.
+Artifact transport is not a trust root. Target trust remains exact repository lock + wheel SHA/provenance verification.
 
 ## Frozen sample
 
@@ -94,7 +94,7 @@ Durable Evidence must not publish full resolved/signed media URLs, query tokens,
 
 ## Goal
 
-Determine whether the accepted generic-ytdlp path can resolve the frozen public Bilibili sample on the accepted Ubuntu ARM64 phone/network to the current first-playback muxed HTTP/HLS `ResolvedMedia` contract.
+Determine whether accepted generic-ytdlp can resolve the frozen public Bilibili sample on the accepted Ubuntu ARM64 phone/network to the current first-playback muxed HTTP/HLS `ResolvedMedia` contract.
 
 Required path:
 
@@ -134,17 +134,17 @@ Execute runtime/product code exactly at:
 
 This Candidate contains accepted #66 extraction, #73 real-site harness, #79 offline runtime/trust anchor, #83 ARM64 sandbox, #85 legacy-kernel fd isolation and #95 anonymous response Secret containment.
 
-Task/prompt documentation may be newer than the runtime Candidate by design. Do not substitute moving `main`. If accepted semantic changes touch `plugins/generic-ytdlp/**`, `scripts/generic-ytdlp-*`, `gateway-egress/**` / R008 / ADR 0007, fd-isolation implementation, or material SiteAdapter output authority before claim, STOP for Coordinator freshness review.
+Task/prompt documentation may be newer than runtime Candidate by design. Do not substitute moving `main`. If accepted semantic changes touch `plugins/generic-ytdlp/**`, `scripts/generic-ytdlp-*`, `gateway-egress/**` / R008 / ADR 0007, fd-isolation implementation, or material SiteAdapter output authority before claim, STOP for Coordinator freshness review.
 
 ## Host / environment authority
 
-Use the Final Accepted #63 Ubuntu ARM64 phone environment:
+Use Final Accepted #63 Ubuntu ARM64 phone environment:
 
 - Linux ARM64/aarch64;
 - low-privilege `gateway-runner` uid999, non-root/no-sudo/no-admin;
 - Python 3.12, pip, git, curl and user Rust toolchain available;
 - direct/no-proxy public HTTPS and frozen Bilibili page previously HTTP 200;
-- Linux kernel is expected to report `close_range=ENOSYS` and must use accepted #85 fallback without security weakening.
+- Linux kernel expected to report `close_range=ENOSYS` and must use accepted #85 fallback without security weakening.
 
 No root/sudo/system package installation is permitted.
 
@@ -227,7 +227,7 @@ broker_request_count > 0
 broker_error_code != BROKER_RESPONSE_SECRET_REJECTED
 ```
 
-Do not publish or infer concrete real response Secret header names/values. #95 deterministic fixtures own policy proof; #67 only verifies that accepted containment permits or safely rejects the real flow.
+Do not publish or infer concrete real response Secret header names/values. #95 deterministic fixtures own policy proof; #67 only verifies accepted containment on the real flow.
 
 Capture only safe fields:
 
@@ -267,7 +267,7 @@ All must hold:
 - exact Candidate `804fd60343b081e5e055ba87f68e7939b106bb19` used;
 - #79 bundle/trust anchor/provenance verifies;
 - runtime cache is `offline-hit` or `offline-prepared`;
-- direct/no-proxy sample is normally reachable;
+- direct/no-proxy sample normally reachable;
 - ARM64 sandbox starts without `SANDBOX_UNAVAILABLE`;
 - #85 fallback clears former `SPAWN_FAILED`;
 - #95 containment clears former whole-response `BROKER_RESPONSE_SECRET_REJECTED` without Secret leakage or cookie/auth replay;
@@ -278,11 +278,11 @@ All must hold:
 - no security/Secret/policy violation;
 - J4 PASS.
 
-PASS means the frozen source is compatible with current generic-ytdlp first-playback resolution contract. It does not prove #68 browser playback.
+PASS means frozen source is compatible with current generic-ytdlp first-playback resolution contract. It does not prove #68 browser playback.
 
 ### CONDITIONAL PASS
 
-Only if brokered extraction produces valid current `ResolvedMedia` with a bounded non-security condition that still permits an explicit #68 route. Coordinator decides.
+Only if brokered extraction produces valid current `ResolvedMedia` with a bounded non-security condition that still permits explicit #68 route. Coordinator decides.
 
 ### FAIL
 
