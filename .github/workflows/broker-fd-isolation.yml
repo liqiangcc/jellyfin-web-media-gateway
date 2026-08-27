@@ -138,6 +138,7 @@ jobs:
           sources = {
               "generic-ytdlp-fd-isolation": executable("j4-lib-build.json", "generic_ytdlp"),
               "generic-ytdlp-runtime": executable("j4-runtime-build.json", "runtime"),
+              "ytdlp-sandbox": executable("j4-runtime-build.json", "ytdlp-sandbox"),
           }
           files = {}
           for name, source in sources.items():
@@ -231,7 +232,8 @@ jobs:
           test -d "$test_dir"
           test -f "$test_dir/generic-ytdlp-fd-isolation"
           test -f "$test_dir/generic-ytdlp-runtime"
-          chmod 0755 "$test_dir/generic-ytdlp-fd-isolation" "$test_dir/generic-ytdlp-runtime"
+          test -f "$test_dir/ytdlp-sandbox"
+          chmod 0755 "$test_dir/generic-ytdlp-fd-isolation" "$test_dir/generic-ytdlp-runtime" "$test_dir/ytdlp-sandbox"
           python3 - "$test_dir" "$CANDIDATE_SHA" <<'PY'
           import hashlib
           import json
@@ -251,6 +253,7 @@ jobs:
           assert set(manifest["files"]) == {
               "generic-ytdlp-fd-isolation",
               "generic-ytdlp-runtime",
+              "ytdlp-sandbox",
           }
           for name, metadata in manifest["files"].items():
               path = root / name
@@ -264,7 +267,7 @@ jobs:
           from pathlib import Path
 
           root = Path(sys.argv[1])
-          for name in ("generic-ytdlp-fd-isolation", "generic-ytdlp-runtime"):
+          for name in ("generic-ytdlp-fd-isolation", "generic-ytdlp-runtime", "ytdlp-sandbox"):
               header = (root / name).read_bytes()[:20]
               assert header[:4] == b"\x7fELF"
               assert header[4] == 2
@@ -333,7 +336,8 @@ jobs:
           test_dir="$RUNNER_TEMP/broker-fd-isolation-j4-arm64-tests"
           [[ -d "$test_dir/j4-arm64-tests" ]] && test_dir="$test_dir/j4-arm64-tests"
           "$test_dir/generic-ytdlp-fd-isolation" fd_isolation_tests --nocapture | tee j4-fd-isolation.log
-          "$test_dir/generic-ytdlp-runtime" --nocapture | tee j4-broker-runtime.log
+          CARGO_BIN_EXE_ytdlp-sandbox="$test_dir/ytdlp-sandbox" \
+            "$test_dir/generic-ytdlp-runtime" --nocapture | tee j4-broker-runtime.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
