@@ -139,7 +139,7 @@ broker_error_code != BROKER_RESPONSE_SECRET_REJECTED
 - extractor HTTP(S) remains R008Broker + BrokerProcessRunner authority;
 - ARM64 sandbox and #85 fd-isolation must remain enabled; never bypass/weaken seccomp/no_new_privs/socket/fd boundaries;
 - #95 response Secret containment must remain exactly accepted: do not declassify Set-Cookie/auth/token response material, create cookie/auth state, replay response credentials, weaken header/body/redirect/TLS/SSRF bounds, or expose response Secret material;
-- invoke only the accepted harness with `YTDLP_OFFLINE_BUNDLE=<verified path>`; no ad-hoc extractor/global fallback;
+- invoke only accepted harness with `YTDLP_OFFLINE_BUNDLE=<verified path>`; no ad-hoc extractor/global fallback;
 - preserve only bounded safe summary fields;
 - never durable-log full resolved/signed URL, Cookie/Auth/token, response Secret header name/value, transfer credential, raw worker stderr, page body or media payload;
 - verified final cache may persist; staging/process/media payload must not;
