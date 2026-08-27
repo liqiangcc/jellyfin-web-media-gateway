@@ -251,8 +251,17 @@ jobs:
         env:
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
-          test_dir="$RUNNER_TEMP/broker-fd-isolation-j4-arm64-tests"
-          [[ -d "$test_dir/j4-arm64-tests" ]] && test_dir="$test_dir/j4-arm64-tests"
+          test_root="$RUNNER_TEMP/broker-fd-isolation-j4-arm64-tests"
+          test_dir="$(python3 - "$test_root" <<'PY'
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          matches = list(root.rglob("generic-ytdlp-fd-isolation"))
+          assert len(matches) == 1
+          print(matches[0].parent)
+          PY
+          )"
           test -d "$test_dir"
           test -f "$test_dir/generic-ytdlp-fd-isolation"
           test -f "$test_dir/generic-ytdlp-runtime"
@@ -357,8 +366,17 @@ jobs:
       - name: Run deterministic BrokerProcessRunner target proof
         shell: bash --noprofile --norc -euo pipefail {0}
         run: |
-          test_dir="$RUNNER_TEMP/broker-fd-isolation-j4-arm64-tests"
-          [[ -d "$test_dir/j4-arm64-tests" ]] && test_dir="$test_dir/j4-arm64-tests"
+          test_root="$RUNNER_TEMP/broker-fd-isolation-j4-arm64-tests"
+          test_dir="$(python3 - "$test_root" <<'PY'
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          matches = list(root.rglob("generic-ytdlp-fd-isolation"))
+          assert len(matches) == 1
+          print(matches[0].parent)
+          PY
+          )"
           "$test_dir/generic-ytdlp-fd-isolation" fd_isolation_tests --nocapture | tee j4-fd-isolation.log
           env \
             "CARGO_BIN_EXE_ytdlp-sandbox=$test_dir/ytdlp-sandbox" \
