@@ -13,6 +13,7 @@ on:
       - "plugins/generic-ytdlp/**"
       - "scripts/generic-ytdlp-runtime-cache.py"
       - "scripts/generic-ytdlp-real-smoke.sh"
+      - "scripts/test-generic-ytdlp-clean-build.sh"
       - "scripts/tests/test_generic_ytdlp_runtime_cache.py"
       - "gateway-egress/**"
       - "gateway-core/**"
@@ -40,7 +41,7 @@ env:
 
 jobs:
   j1-conformance:
-    name: J1 pinned worker broker flow parser and priority
+    name: J1 hosted x86_64 clean build and sandbox matrix
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -88,6 +89,7 @@ jobs:
           python -m unittest discover -s scripts/tests -p 'test_*.py' -v
       - name: Run conformance, parser and direct-priority tests
         run: |
+          bash scripts/test-generic-ytdlp-clean-build.sh
           cargo fmt --all -- --check
           cargo clippy -p generic-ytdlp --all-targets -- -D warnings
           cargo test -p gateway-egress --all-targets -- --nocapture
@@ -100,7 +102,7 @@ jobs:
           bash -n scripts/generic-ytdlp-real-smoke.sh
 
   j2-boundaries:
-    name: J2 sandbox and escape matrix
+    name: J2 native hosted ARM64 clean build and sandbox matrix
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
@@ -138,6 +140,7 @@ jobs:
           python -m unittest discover -s scripts/tests -p 'test_*.py' -v
       - name: Run bounded process and parser negatives
         run: |
+          bash scripts/test-generic-ytdlp-clean-build.sh
           cargo test -p generic-ytdlp --all-targets -- --nocapture
           cargo test -p generic-ytdlp --features runtime-prep --test smoke safe_broker -- --nocapture
           cargo test -p generic-ytdlp --features runtime-prep --test runtime -- --nocapture
@@ -163,7 +166,7 @@ jobs:
           bash scripts/check-core-site-boundary.sh --self-test
 
   j3-regressions:
-    name: J3 workspace R001 R008 and architecture regressions
+    name: J3 security and static guards
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -196,13 +199,18 @@ jobs:
           python -m unittest discover -s scripts/tests -p 'test_*.py' -v
       - name: Run exact-Candidate workspace and affected regressions
         run: |
-          cargo fmt --all -- --check
-          cargo clippy --workspace --all-targets -- -D warnings
-          cargo test --workspace --all-targets
           cargo test -p gateway-core --test security_baseline -- --nocapture
           cargo test -p gateway-core --test media_gateway -- --nocapture
           cargo test -p gateway-egress --all-targets -- --nocapture
           cargo test -p generic-ytdlp --features runtime-prep --test runtime r008_broker_rejects_secret_userinfo_and_private_targets_before_network -- --nocapture
+          ! grep -RInE 'YTDLP_SANDBOX|SANDBOX_PATH|PATH.*ytdlp-sandbox|unsandboxed' scripts/generic-ytdlp-real-smoke.sh plugins/generic-ytdlp/src
+          grep -q -- '--bin ytdlp-sandbox' scripts/generic-ytdlp-real-smoke.sh
+          grep -q 'symlink_metadata' plugins/generic-ytdlp/src/bin/generic-ytdlp-real-smoke.rs
+          grep -q 'Arc::new(DisabledRunner)' plugins/generic-ytdlp/src/lib.rs
+          bash -n scripts/generic-ytdlp-real-smoke.sh
+          bash -n scripts/test-generic-ytdlp-clean-build.sh
+          bash scripts/check-core-site-boundary.sh
+          bash scripts/check-core-site-boundary.sh --self-test
 
       - name: Verify warm cache remains usable without setup network
         shell: bash --noprofile --norc -euo pipefail {0}
@@ -213,7 +221,7 @@ jobs:
           PYTHONPATH="$YTDLP_SOURCE" python -c 'import yt_dlp; assert yt_dlp.version.__version__ == "2026.08.19"'
 
   j4-lifecycle-regressions:
-    name: J4 lifecycle descendants and production-disabled regressions
+    name: J4 full affected regressions
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -247,8 +255,9 @@ jobs:
       - name: Run lifecycle, parser and DisabledRunner proof
         run: |
           cargo fmt --all -- --check
-          cargo test -p generic-ytdlp --all-targets -- --nocapture
-          cargo test -p site-adapter-api --all-targets -- --nocapture
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace --all-targets
+          cargo test -p gateway-egress --all-targets
           cargo test -p generic-ytdlp --features runtime-prep --test runtime -- --nocapture
           python -m py_compile plugins/generic-ytdlp/worker/worker.py
           grep -q 'Arc::new(DisabledRunner)' plugins/generic-ytdlp/src/lib.rs

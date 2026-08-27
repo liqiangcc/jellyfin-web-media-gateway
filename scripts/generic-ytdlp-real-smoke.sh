@@ -87,6 +87,11 @@ cd -- "$repo_root"
 # Setup-only proxy/network state must not enter the extractor process. The
 # worker itself also uses env_clear and only receives the inherited R008 fd.
 unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+# The smoke binary resolves only a fixed sibling sandbox. Build that sibling
+# explicitly from this checkout before cargo starts the smoke binary so a clean
+# target directory cannot depend on an artifact left by an earlier command.
+cargo build --quiet -p generic-ytdlp --features runtime-prep \
+  --bin ytdlp-sandbox 2>"$setup_log"
 set +e
 output=$(YTDLP_PREP_PYTHONPATH="$site_dir" \
   cargo run --quiet -p generic-ytdlp --features runtime-prep \

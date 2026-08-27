@@ -7,6 +7,9 @@ use generic_ytdlp::{
 };
 use site_adapter_api::SiteAdapter;
 use std::env;
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -80,8 +83,14 @@ fn main() -> ExitCode {
 
 fn sandbox_path() -> Option<PathBuf> {
     let current = env::current_exe().ok()?;
+    sandbox_path_for_executable(&current)
+}
+
+fn sandbox_path_for_executable(current: &Path) -> Option<PathBuf> {
     let candidate = current.parent()?.join("ytdlp-sandbox");
-    candidate.is_file().then_some(candidate)
+    let metadata = fs::symlink_metadata(&candidate).ok()?;
+    (metadata.file_type().is_file() && metadata.permissions().mode() & 0o111 != 0)
+        .then_some(candidate)
 }
 
 fn blocked(error_code: &'static str, exit_code: u8) -> ExitCode {
@@ -91,4 +100,55 @@ fn blocked(error_code: &'static str, exit_code: u8) -> ExitCode {
     );
     print!("{output}");
     ExitCode::from(exit_code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sandbox_path_for_executable;
+    use std::fs;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::path::PathBuf;
+
+    fn fixture_dir(label: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "generic-ytdlp-sandbox-binding-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn fixed_sibling_must_be_a_regular_executable_file() {
+        let dir = fixture_dir("validation");
+        let smoke = dir.join("generic-ytdlp-real-smoke");
+        let sandbox = dir.join("ytdlp-sandbox");
+        fs::write(&smoke, b"smoke").unwrap();
+
+        assert_eq!(sandbox_path_for_executable(&smoke), None);
+
+        fs::create_dir(&sandbox).unwrap();
+        assert_eq!(sandbox_path_for_executable(&smoke), None);
+        fs::remove_dir(&sandbox).unwrap();
+
+        fs::write(&sandbox, b"sandbox").unwrap();
+        fs::set_permissions(&sandbox, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(sandbox_path_for_executable(&smoke), None);
+
+        fs::set_permissions(&sandbox, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(sandbox_path_for_executable(&smoke), Some(sandbox.clone()));
+
+        fs::remove_file(&sandbox).unwrap();
+        let external = dir.join("external-sandbox");
+        fs::write(&external, b"external").unwrap();
+        fs::set_permissions(&external, fs::Permissions::from_mode(0o700)).unwrap();
+        symlink(&external, &sandbox).unwrap();
+        assert_eq!(sandbox_path_for_executable(&smoke), None);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
 }
