@@ -121,6 +121,7 @@ jobs:
           import os
           from pathlib import Path
           import shutil
+          import subprocess
 
           def executable(build_log: str) -> Path:
               for line in Path(build_log).read_text(encoding="utf-8").splitlines():
@@ -141,6 +142,7 @@ jobs:
           for name, source in sources.items():
               destination = Path("j4-arm64-tests") / name
               shutil.copy2(source, destination)
+              subprocess.run(["strip", "--strip-debug", str(destination)], check=True)
               destination.chmod(0o755)
               digest = hashlib.sha256(destination.read_bytes()).hexdigest()
               files[name] = {"sha256": digest, "size": destination.stat().st_size}
