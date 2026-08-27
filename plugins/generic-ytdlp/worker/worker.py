@@ -222,30 +222,6 @@ def _probe(url: str) -> dict[str, Any]:
     }
 
 
-def _debug_probe(url: str) -> dict[str, Any]:
-    try:
-        with _ydl() as ydl:
-            response = ydl.urlopen(Request(url))
-            raw = response.read(MAX_BODY)
-        return {"read_length": len(raw), "prefix": raw[:80].decode("ascii", "replace")}
-    except Exception as error:
-        return {
-            "error_type": type(error).__name__,
-            "error_text": str(error)[:160],
-        }
-
-
-def _debug_broker(url: str) -> dict[str, Any]:
-    try:
-        response = _broker_request(
-            {"operation": "http", "method": "GET", "url": url, "headers": {}, "body": []}
-        )
-        body = response["body"]
-        return {"body_length": len(body), "prefix": body[:80].decode("ascii", "replace")}
-    except Exception as error:
-        return {"error_type": type(error).__name__, "error_text": str(error)[:160]}
-
-
 def _is_secret_header(name: str, value: str) -> bool:
     normalized_name = name.lower().replace("_", "-")
     normalized_value = value.strip().lower()
@@ -491,10 +467,6 @@ def main() -> int:
     url = sys.argv[2] if len(sys.argv) > 2 else "https://fixture.example.test/media"
     if action == "probe":
         result = _probe(url)
-    elif action == "debug-probe":
-        result = _debug_probe(url)
-    elif action == "debug-broker":
-        result = _debug_broker(url)
     elif action == "extract":
         try:
             result = _extract(url)

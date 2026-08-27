@@ -32,7 +32,7 @@ impl BrokerBackend for FixtureBroker {
             let suffix = br#""}"#;
             let padding_len = gateway_egress::MAX_BODY_BYTES - prefix.len() - suffix.len();
             let mut body = Vec::with_capacity(gateway_egress::MAX_BODY_BYTES);
-            body.extend_from_slice(&prefix[..prefix.len() - 1]);
+            body.extend_from_slice(prefix);
             body.extend(std::iter::repeat_n(b'a', padding_len));
             body.extend_from_slice(suffix);
             ("application/json", body)
@@ -251,30 +251,6 @@ fn accepted_response_near_r008_body_limit_crosses_actual_broker_ipc() {
     let media = parse_machine_output(&output.stdout).unwrap();
     assert_eq!(media.title, "fixture media");
     assert_eq!(media.streams.len(), 1);
-}
-
-#[test]
-fn debug_near_r008_body_limit() {
-    let output = runner(Duration::from_secs(5))
-        .run_action(
-            "debug-broker",
-            &Url::parse("https://fixture.example.test/media?item=near-limit").unwrap(),
-        )
-        .unwrap();
-    println!(
-        "bounded debug result: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-    let output = runner(Duration::from_secs(5))
-        .run_action(
-            "debug-probe",
-            &Url::parse("https://fixture.example.test/media?item=near-limit").unwrap(),
-        )
-        .unwrap();
-    println!(
-        "bounded debug result: {}",
-        String::from_utf8_lossy(&output.stdout)
-    );
 }
 
 #[test]
