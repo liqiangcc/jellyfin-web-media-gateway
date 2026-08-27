@@ -1,0 +1,3 @@
+# Security-semantic pin. Do not replace with a moving branch or an unpinned
+# PyPI/latest selector without Coordinator reclassification.
+yt-dlp @ git+https://github.com/yt-dlp/yt-dlp.git@3a08beaf031ab68f966401ead017ac81fe8486cf

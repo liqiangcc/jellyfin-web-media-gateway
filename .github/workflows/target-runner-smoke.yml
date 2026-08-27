@@ -1,0 +1,403 @@
+name: target-runner-smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Allowlisted diagnostics profile"
+        required: false
+        default: baseline
+        type: choice
+        options:
+          - baseline
+          - github-transport
+      candidate_sha:
+        description: "Explicit trusted candidate commit to verify"
+        required: true
+        type: string
+      repetitions:
+        description: "Bounded transport probe repetitions"
+        required: false
+        default: "1"
+        type: choice
+        options:
+          - "1"
+          - "3"
+          - "5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: target-runner-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Ubuntu ARM64 target runner diagnostics
+    runs-on: [self-hosted, linux, ARM64, ubuntu-arm64, target-device]
+    timeout-minutes: 10
+    steps:
+      - name: Run bounded target diagnostics
+        id: diagnostics
+        shell: bash --noprofile --norc -euo pipefail {0}
+        env:
+          PROFILE: ${{ inputs.profile }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          REPETITIONS: ${{ inputs.repetitions }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          set -u -o pipefail
+
+          # This repository-owned URL is deliberately fixed. It is not a workflow input.
+          TARGET_REPOSITORY="https://github.com/liqiangcc/jellyfin-web-media-gateway.git"
+          diagnostics_dir="${RUNNER_TEMP:-/tmp}/target-runner-diagnostics"
+          diagnostics_path="$diagnostics_dir/diagnostics.json"
+          mkdir -p -- "$diagnostics_dir"
+          mkdir_status=$?
+
+          profile="$PROFILE"
+          candidate_sha="invalid"
+          repetitions="invalid"
+          input_validation="pass"
+          if [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            candidate_sha="$CANDIDATE_SHA"
+          else
+            echo "candidate_sha must be a 40-character hexadecimal commit SHA"
+            input_validation="fail"
+          fi
+
+          case "$PROFILE" in
+            baseline|github-transport) ;;
+            *)
+              echo "profile must be baseline or github-transport"
+              input_validation="fail"
+              profile="invalid"
+              ;;
+          esac
+
+          case "$REPETITIONS" in
+            1|3|5) repetitions="$REPETITIONS" ;;
+            *)
+              echo "repetitions must be one of: 1, 3, 5"
+              input_validation="fail"
+              ;;
+          esac
+
+          uid="$(id -u 2>/dev/null)"
+          uid_status=$?
+          uid="$(printf '%s' "$uid" | tr -cd '0-9')"
+          [[ -n "$uid" ]] || uid="-1"
+          runner_arch="$(uname -m 2>/dev/null | tr -cd 'A-Za-z0-9._-')"
+          [[ -n "$runner_arch" ]] || runner_arch="unavailable"
+          kernel="$(uname -sr 2>/dev/null | tr -cd 'A-Za-z0-9._+()/ -' | cut -c1-128)"
+          [[ -n "$kernel" ]] || kernel="unavailable"
+          runner_name="$(printf '%s' "${RUNNER_NAME:-unavailable}" | tr -cd 'A-Za-z0-9._+()/ -' | cut -c1-128)"
+          [[ -n "$runner_name" ]] || runner_name="unavailable"
+          runner_os="$(printf '%s' "${RUNNER_OS:-unavailable}" | tr -cd 'A-Za-z0-9._-')"
+          [[ -n "$runner_os" ]] || runner_os="unavailable"
+          whoami_name="$(whoami 2>/dev/null | tr -cd 'A-Za-z0-9._-')"
+          [[ -n "$whoami_name" ]] || whoami_name="unavailable"
+          workspace_class="$(printf '%s' "${GITHUB_WORKSPACE:-unavailable}" | tr -cd 'A-Za-z0-9._+()/ -' | cut -c1-160)"
+          [[ -n "$workspace_class" ]] || workspace_class="unavailable"
+          temp_class="$(printf '%s' "${RUNNER_TEMP:-/tmp}" | tr -cd 'A-Za-z0-9._+()/ -' | cut -c1-160)"
+          [[ -n "$temp_class" ]] || temp_class="unavailable"
+
+          low_privilege="fail"
+          workspace_isolation="fail"
+          sudo_boundary="fail"
+          vault_isolation="fail"
+          temporary_workspace="fail"
+          arch_boundary="fail"
+
+          if [[ "$uid_status" -eq 0 && "$uid" != "0" ]]; then
+            low_privilege="pass"
+          fi
+          if [[ "$runner_arch" == "aarch64" || "$runner_arch" == "arm64" ]]; then
+            arch_boundary="pass"
+          fi
+
+          github_workspace="${GITHUB_WORKSPACE:-}"
+          case "$github_workspace" in
+            /var/lib/web-media-gateway|/var/lib/web-media-gateway/*)
+              echo "runner workspace overlaps Gateway production state"
+              ;;
+            *)
+              workspace_isolation="pass"
+              ;;
+          esac
+
+          if command -v sudo >/dev/null 2>&1; then
+            if sudo -n true >/dev/null 2>&1; then
+              echo "runner user has passwordless sudo"
+            else
+              sudo_boundary="pass"
+            fi
+          else
+            sudo_boundary="pass"
+          fi
+
+          vault=/var/lib/web-media-gateway/vault
+          if [[ -e "$vault" ]]; then
+            if [[ ! -r "$vault" && ! -x "$vault" ]]; then
+              vault_isolation="pass"
+            else
+              echo "runner user can access the production Vault path"
+            fi
+          else
+            vault_isolation="pass"
+          fi
+
+          temp_dir=""
+          if [[ "$mkdir_status" -eq 0 ]]; then
+            temp_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/infra-001.XXXXXX" 2>/dev/null)"
+            if [[ -n "$temp_dir" ]]; then
+              printf '%s\n' smoke >"$temp_dir/probe"
+              if [[ "$(cat "$temp_dir/probe" 2>/dev/null)" == smoke ]]; then
+                rm -f -- "$temp_dir/probe"
+                rmdir -- "$temp_dir"
+                if [[ ! -e "$temp_dir" ]]; then
+                  temporary_workspace="pass"
+                  echo "temporary workspace create/cleanup: PASS"
+                fi
+              fi
+              if [[ -e "$temp_dir" ]]; then
+                rm -rf -- "$temp_dir"
+              fi
+            fi
+          fi
+
+          disk_summary="unavailable"
+          if command -v df >/dev/null 2>&1; then
+            disk_summary="$(df -h --output=avail,pcent "${RUNNER_TEMP:-/tmp}" 2>/dev/null | tail -n 1 | tr -cd 'A-Za-z0-9._% -' | cut -c1-80)"
+            [[ -n "$disk_summary" ]] || disk_summary="unavailable"
+          fi
+          memory_summary="unavailable"
+          if command -v free >/dev/null 2>&1; then
+            memory_summary="$(free -h 2>/dev/null | awk '/^Mem:/ {print $2 "/" $3 "/" $7; exit}' | tr -cd 'A-Za-z0-9._/ -' | cut -c1-80)"
+            [[ -n "$memory_summary" ]] || memory_summary="unavailable"
+          fi
+
+          git_version="unavailable"
+          if command -v git >/dev/null 2>&1; then
+            git_version="$(git --version 2>/dev/null | tr -cd 'A-Za-z0-9._/ -' | cut -c1-80)"
+          fi
+          curl_version="unavailable"
+          curl_tls="unavailable"
+          if command -v curl >/dev/null 2>&1; then
+            curl_version="$(curl --version 2>/dev/null | sed -n '1p' | tr -cd 'A-Za-z0-9._/ -' | cut -c1-80)"
+            curl_tls="$(curl --version 2>/dev/null | sed -n '2p' | tr -cd 'A-Za-z0-9._+():/, ' | cut -c1-128)"
+          fi
+          python_version="unavailable"
+          if command -v python3 >/dev/null 2>&1; then
+            python_version="$(python3 --version 2>/dev/null | tr -cd 'A-Za-z0-9._/ -' | cut -c1-80)"
+          fi
+
+          proxy_http="absent"
+          proxy_https="absent"
+          proxy_all="absent"
+          [[ -n "${HTTP_PROXY+x}" ]] && proxy_http="present"
+          [[ -n "${HTTPS_PROXY+x}" ]] && proxy_https="present"
+          [[ -n "${ALL_PROXY+x}" ]] && proxy_all="present"
+
+          dns_ipv4="not_run"
+          dns_ipv6="not_run"
+          github_https="not_run"
+          git_advertisement="not_run"
+          git_object_fetch="not_run"
+          transport_classification="not_run"
+          transport_result="not_run"
+
+          git_with_token() {
+            env \
+              GIT_CONFIG_COUNT=1 \
+              GIT_CONFIG_KEY_0=http.extraheader \
+              "GIT_CONFIG_VALUE_0=Authorization: Bearer ${GITHUB_TOKEN}" \
+              GIT_TERMINAL_PROMPT=0 \
+              git "$@"
+          }
+
+          if [[ "$profile" == "github-transport" && "$input_validation" == "pass" ]]; then
+            if command -v getent >/dev/null 2>&1 && getent ahostsv4 github.com >/dev/null 2>&1; then
+              dns_ipv4="pass"
+            else
+              dns_ipv4="fail"
+            fi
+            if command -v getent >/dev/null 2>&1 && getent ahostsv6 github.com >/dev/null 2>&1; then
+              dns_ipv6="pass"
+            else
+              dns_ipv6="unavailable"
+            fi
+
+            if command -v curl >/dev/null 2>&1 && curl --fail --silent --show-error --location \
+                --connect-timeout 5 --max-time 20 --output /dev/null "$TARGET_REPOSITORY" \
+                >/dev/null 2>"$diagnostics_dir/https.stderr"; then
+              github_https="pass"
+            else
+              github_https="fail"
+            fi
+
+            advertisement_passes=0
+            fetch_passes=0
+            repetition_number=1
+            while [[ "$repetition_number" -le "$repetitions" ]]; do
+              advertisement_output="$diagnostics_dir/advertisement-${repetition_number}.out"
+              advertisement_error="$diagnostics_dir/advertisement-${repetition_number}.stderr"
+              if command -v git >/dev/null 2>&1 && git_with_token -c protocol.version=2 \
+                  ls-remote "$TARGET_REPOSITORY" HEAD \
+                  >"$advertisement_output" 2>"$advertisement_error"; then
+                advertisement_passes=$((advertisement_passes + 1))
+              fi
+
+              fetch_dir="$diagnostics_dir/fetch-${repetition_number}"
+              if command -v git >/dev/null 2>&1 && git init --quiet "$fetch_dir" \
+                  >"$diagnostics_dir/init-${repetition_number}.out" 2>"$diagnostics_dir/init-${repetition_number}.stderr"; then
+                if git_with_token -C "$fetch_dir" fetch --no-tags --depth=1 "$TARGET_REPOSITORY" "$candidate_sha" \
+                    >"$diagnostics_dir/fetch-${repetition_number}.out" \
+                    2>"$diagnostics_dir/fetch-${repetition_number}.stderr"; then
+                  if git -C "$fetch_dir" cat-file -e "${candidate_sha}^{commit}" >/dev/null 2>&1; then
+                    fetch_passes=$((fetch_passes + 1))
+                  fi
+                fi
+              fi
+              rm -rf -- "$fetch_dir"
+              repetition_number=$((repetition_number + 1))
+            done
+
+            if [[ "$advertisement_passes" -eq "$repetitions" ]]; then
+              git_advertisement="pass"
+            else
+              git_advertisement="fail"
+            fi
+            if [[ "$fetch_passes" -eq "$repetitions" ]]; then
+              git_object_fetch="pass"
+              transport_classification="object_transfer_pass"
+            else
+              git_object_fetch="fail"
+              transport_classification="object_transfer_failed"
+            fi
+            if [[ "$github_https" != "pass" || "$git_advertisement" != "pass" ]]; then
+              transport_classification="https_or_advertisement_failed"
+            fi
+            if [[ "$github_https" == "pass" && "$git_advertisement" == "pass" && "$git_object_fetch" == "pass" ]]; then
+              transport_result="pass"
+            else
+              # A transport failure is the diagnostic result, not a workflow-script failure.
+              transport_result="conditional"
+            fi
+          fi
+
+          baseline_result="fail"
+          if [[ "$input_validation" == "pass" && "$low_privilege" == "pass" && \
+              "$arch_boundary" == "pass" && "$workspace_isolation" == "pass" && \
+              "$sudo_boundary" == "pass" && "$vault_isolation" == "pass" && \
+              "$temporary_workspace" == "pass" ]]; then
+            baseline_result="pass"
+          fi
+
+          result="$baseline_result"
+          classification="baseline_boundary_failed"
+          if [[ "$baseline_result" == "pass" ]]; then
+            classification="baseline_boundary_pass"
+          fi
+          if [[ "$profile" == "github-transport" ]]; then
+            result="$transport_result"
+            classification="$transport_classification"
+            if [[ "$baseline_result" != "pass" ]]; then
+              result="fail"
+              classification="baseline_boundary_failed"
+            fi
+          fi
+          if [[ "$input_validation" != "pass" ]]; then
+            result="fail"
+            classification="input_validation_failed"
+          fi
+
+          # Values inserted below are fixed enums, validated hex, numbers, or
+          # sanitized bounded observations. Raw stderr and environment dumps are excluded.
+          cat >"$diagnostics_path" <<JSON
+          {
+            "schema_version": 1,
+            "profile": "$profile",
+            "candidate_sha": "$candidate_sha",
+            "target": {
+              "runner_name": "$runner_name",
+              "os": "$runner_os",
+              "arch": "$runner_arch",
+              "kernel": "$kernel",
+              "uid": $uid,
+              "user": "$whoami_name",
+              "workspace_class": "$workspace_class",
+              "runner_temp_class": "$temp_class",
+              "disk_summary": "$disk_summary",
+              "memory_summary": "$memory_summary"
+            },
+            "tooling": {
+              "git": "$git_version",
+              "curl": "$curl_version",
+              "curl_tls": "$curl_tls",
+              "python3": "$python_version"
+            },
+            "proxy": {
+              "HTTP_PROXY": "$proxy_http",
+              "HTTPS_PROXY": "$proxy_https",
+              "ALL_PROXY": "$proxy_all"
+            },
+            "checks": {
+              "input_validation": "$input_validation",
+              "low_privilege": "$low_privilege",
+              "arch_boundary": "$arch_boundary",
+              "workspace_isolation": "$workspace_isolation",
+              "passwordless_sudo": "$sudo_boundary",
+              "production_vault_isolation": "$vault_isolation",
+              "temporary_workspace_cleanup": "$temporary_workspace",
+              "github_dns_ipv4": "$dns_ipv4",
+              "github_dns_ipv6": "$dns_ipv6",
+              "github_https": "$github_https",
+              "git_advertisement": "$git_advertisement",
+              "git_object_fetch": "$git_object_fetch"
+            },
+            "repetitions": "$repetitions",
+            "classification": "$classification",
+            "result": "$result"
+          }
+          JSON
+          json_status=$?
+
+          {
+            echo "## Target runner diagnostics"
+            echo
+            echo "- Profile: \`$profile\`"
+            echo "- Candidate SHA: \`$candidate_sha\`"
+            echo "- Target: \`$runner_name\` / \`$runner_arch\` / uid \`$uid\`"
+            echo "- Baseline boundary: **${baseline_result^^}**"
+            echo "- HTTPS: **${github_https^^}**"
+            echo "- Git advertisement: **${git_advertisement^^}**"
+            echo "- Git object fetch: **${git_object_fetch^^}**"
+            echo "- Classification: \`$classification\`"
+            echo "- Result: **${result^^}**"
+            echo "- Repetitions: \`$repetitions\`"
+            echo
+            echo "No repository checkout was performed; transport credentials were command-scoped and no raw proxy or environment values were recorded."
+          } >>"$GITHUB_STEP_SUMMARY"
+
+          # Keep only the structured artifact for upload; raw probe output is never uploaded.
+          rm -f -- "$diagnostics_dir"/*.out "$diagnostics_dir"/*.stderr 2>/dev/null
+
+          if [[ "$json_status" -ne 0 || "$mkdir_status" -ne 0 ]]; then
+            exit 1
+          fi
+          if [[ "$result" == "fail" ]]; then
+            exit 1
+          fi
+          exit 0
+
+      - name: Upload versioned diagnostics artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: target-runner-diagnostics-${{ github.run_id }}
+          path: ${{ runner.temp }}/target-runner-diagnostics/diagnostics.json
+          if-no-files-found: error
+          retention-days: 7

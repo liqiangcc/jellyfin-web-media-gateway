@@ -1,0 +1,6 @@
+interface:
+  display_name: "Task Worker"
+  short_description: "Claim, execute, and report one Task Attempt"
+  default_prompt: "Execute one published Task Attempt and report the durable result to its GitHub Issue."
+policy:
+  allow_implicit_invocation: false

@@ -1,0 +1,34 @@
+[package]
+name = "generic-ytdlp"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+runtime-prep = [
+    "dep:gateway-egress",
+    "dep:libc",
+]
+
+[dependencies]
+gateway-egress = { path = "../../gateway-egress", optional = true }
+libc = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+site-adapter-api = { path = "../../site-adapter-api" }
+url.workspace = true
+
+[dev-dependencies]
+generic-direct = { path = "../generic-direct" }
+
+[[bin]]
+name = "ytdlp-sandbox"
+path = "src/bin/ytdlp-sandbox.rs"
+required-features = ["runtime-prep"]
+
+[[bin]]
+name = "generic-ytdlp-real-smoke"
+path = "src/bin/generic-ytdlp-real-smoke.rs"
+required-features = ["runtime-prep"]
