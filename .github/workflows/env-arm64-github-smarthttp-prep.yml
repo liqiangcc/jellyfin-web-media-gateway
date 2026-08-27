@@ -349,7 +349,7 @@ jobs:
           if [[ "$smart_repetitions" -eq 3 ]]; then
             echo 'SMARTHTTP_RECOVERY_ELIGIBLE_FOR_#89=yes' | tee -a "$output_dir/summary.txt"
           else
-            echo 'SMARTHTTP_RECOVERY_ELIGIBLE_FOR_#89=no' | tee -a "$OUTPUT_DIR/summary.txt"
+            echo 'SMARTHTTP_RECOVERY_ELIGIBLE_FOR_#89=no' | tee -a "$output_dir/summary.txt"
           fi
 
           verify_bundle() {
