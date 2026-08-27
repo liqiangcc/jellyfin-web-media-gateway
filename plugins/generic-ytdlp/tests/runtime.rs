@@ -26,6 +26,15 @@ impl BrokerBackend for FixtureBroker {
         assert!(request.headers.keys().all(|name| name != "Cookie"));
         let (content_type, body) = if request.url.contains("item=muxed") {
             ("video/mp4", Vec::new())
+        } else if request.url.contains("item=near-limit") {
+            let prefix = br#"{"fixture":"generic-ytdlp-broker","title":"fixture media","padding":""#;
+            let suffix = br#"}"#;
+            let padding_len = gateway_egress::MAX_BODY_BYTES - prefix.len() - suffix.len();
+            let mut body = Vec::with_capacity(gateway_egress::MAX_BODY_BYTES);
+            body.extend_from_slice(&prefix[..prefix.len() - 1]);
+            body.extend(std::iter::repeat_n(b'a', padding_len));
+            body.extend_from_slice(suffix);
+            ("application/json", body)
         } else if request.url.ends_with("/video.m3u8") {
             (
                 "application/vnd.apple.mpegurl",
@@ -228,6 +237,19 @@ fn inherited_ipc_capability_supports_multiple_broker_requests() {
         parse_machine_output(&output.stdout).unwrap().title,
         "fixture media"
     );
+}
+
+#[test]
+fn accepted_response_near_r008_body_limit_crosses_actual_broker_ipc() {
+    let output = runner(Duration::from_secs(5))
+        .run_action(
+            "probe",
+            &Url::parse("https://fixture.example.test/media?item=near-limit").unwrap(),
+        )
+        .expect("near-limit response must cross Rust/Python broker IPC");
+    let media = parse_machine_output(&output.stdout).unwrap();
+    assert_eq!(media.title, "fixture media");
+    assert_eq!(media.streams.len(), 1);
 }
 
 #[test]
