@@ -169,7 +169,7 @@ jobs:
           retention-days: 14
       - name: Create exact Candidate source bundle for target checkout
         shell: bash --noprofile --norc -euo pipefail {0}
-        run: git bundle create j4-candidate.bundle "$CANDIDATE_SHA"
+        run: git bundle create j4-candidate.bundle HEAD
       - name: Upload exact Candidate source bundle
         uses: actions/upload-artifact@v4
         with:
