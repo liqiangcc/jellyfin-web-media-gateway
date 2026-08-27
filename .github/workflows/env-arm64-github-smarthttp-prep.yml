@@ -167,7 +167,7 @@ jobs:
     timeout-minutes: 25
     env:
       REMOTE_URL: https://github.com/liqiangcc/jellyfin-web-media-gateway.git
-      AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      AUTH_TOKEN: ${{ github.token }}
     steps:
       - name: Target pre-checkout identity and boundary
         shell: bash --noprofile --norc -euo pipefail {0}
@@ -217,21 +217,21 @@ jobs:
       - name: Download source bundle attempt 1 of 3
         uses: actions/download-artifact@v4
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           name: ${{ env.SOURCE_BUNDLE_NAME }}
           path: ${{ runner.temp }}/smarthttp-download-1
 
       - name: Download source bundle attempt 2 of 3
         uses: actions/download-artifact@v4
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           name: ${{ env.SOURCE_BUNDLE_NAME }}
           path: ${{ runner.temp }}/smarthttp-download-2
 
       - name: Download source bundle attempt 3 of 3
         uses: actions/download-artifact@v4
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           name: ${{ env.SOURCE_BUNDLE_NAME }}
           path: ${{ runner.temp }}/smarthttp-download-3
 
