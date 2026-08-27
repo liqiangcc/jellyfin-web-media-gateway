@@ -54,14 +54,6 @@ Trust anchor: scripts/generic-ytdlp-offline-runtime.lock.json
 yt-dlp: 2026.08.19 @ 3a08beaf031ab68f966401ead017ac81fe8486cf
 ```
 
-Accepted CI transfer convenience:
-
-```text
-#79 workflow run: 32956386626
-artifact name: generic-ytdlp-offline-runtime-3a3de8ee2f9ac8b0e1e312735a9305db7569baef
-artifact id: 9602124791
-```
-
 Artifact/source-bundle transport is not site Evidence and is not a trust root. Verify exact Candidate SHA/tree and #79 repository lock + wheel SHA/provenance before execution.
 
 ## Why Attempt 6
@@ -95,7 +87,7 @@ origin response Secret headers
 → safe status/body/non-Secret headers may continue only when all other R008 checks pass
 ```
 
-Do not reveal or infer the real origin response Secret header name/value in #67 Evidence.
+Do not reveal or infer real origin response Secret header names/values in #67 Evidence.
 
 ## Goal
 
@@ -133,7 +125,7 @@ broker_error_code != BROKER_RESPONSE_SECRET_REJECTED
 - provision only accepted #79 runtime via authenticated CI-artifact transport or Coordinator/operator-provided exact local copy;
 - remove/unset transfer credentials before extraction;
 - verify with `python3 scripts/generic-ytdlp-offline-runtime.py verify <bundle>` before trusting it;
-- never replace the locked wheel with another same-version wheel;
+- never replace locked wheel with another same-version wheel;
 - formal Bilibili reachability must be direct/no-proxy and bounded;
 - artifact/source transfer network is not site Evidence;
 - extractor HTTP(S) remains R008Broker + BrokerProcessRunner authority;
