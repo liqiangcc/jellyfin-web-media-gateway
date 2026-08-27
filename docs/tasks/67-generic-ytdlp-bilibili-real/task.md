@@ -23,7 +23,6 @@ Accepted security/runtime authority: #60 + R008 + ADR 0007
 Downstream: #68 BILIBILI-WEB-E2E
 Freshness policy: dependency-aware / exact Candidate
 Publication state: status:draft until Coordinator Publication Gate passes
-Formal draft freeze: issue must be status:draft before this revision is eligible for publication
 ```
 
 > #67 owns only real-site compatibility Evidence for the frozen public Bilibili sample. It does not implement fixes, weaken security, add DASH/remux, enable production generic-ytdlp, or start #68.
