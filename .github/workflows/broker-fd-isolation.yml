@@ -166,6 +166,16 @@ jobs:
           path: j4-arm64-tests
           if-no-files-found: error
           retention-days: 14
+      - name: Create exact Candidate source bundle for target checkout
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: git bundle create j4-candidate.bundle "$CANDIDATE_SHA"
+      - name: Upload exact Candidate source bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: broker-fd-isolation-j4-source-${{ env.CANDIDATE_SHA }}
+          path: j4-candidate.bundle
+          if-no-files-found: error
+          retention-days: 14
 
   j3-forced-legacy:
     name: J3 forced ENOSYS descriptor isolation proof
@@ -213,10 +223,23 @@ jobs:
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: |
           [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
-      - uses: actions/checkout@v4
+      - name: Transfer exact Candidate source bundle
+        uses: actions/download-artifact@v4
         with:
-          ref: ${{ inputs.candidate_sha }}
-          persist-credentials: false
+          name: broker-fd-isolation-j4-source-${{ inputs.candidate_sha }}
+          path: ${{ runner.temp }}/broker-fd-isolation-j4-source
+      - name: Checkout exact Candidate from transferred bundle
+        shell: bash --noprofile --norc -euo pipefail {0}
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          bundle_path="$RUNNER_TEMP/broker-fd-isolation-j4-source/j4-candidate.bundle"
+          test -f "$bundle_path"
+          git bundle verify "$bundle_path"
+          git fetch --no-tags "$bundle_path" "$CANDIDATE_SHA"
+          git checkout --detach "$CANDIDATE_SHA"
+          git clean -ffdx
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
       - name: Transfer exact Candidate ARM64 J4 test executables
         uses: actions/download-artifact@v4
         with:
