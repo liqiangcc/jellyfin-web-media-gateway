@@ -23,6 +23,7 @@ Accepted security/runtime authority: #60 + R008 + ADR 0007
 Downstream: #68 BILIBILI-WEB-E2E
 Freshness policy: dependency-aware / exact Candidate
 Publication state: status:draft until Coordinator Publication Gate passes
+Formal R7 draft freeze: recorded after #67 lifecycle transition to status:draft
 ```
 
 #67 remains verification-only. Attempt 6 reached real R008 2xx and #95 containment but reproduced `BROKER_PROTOCOL` 2/2. #97 proved the decimal-JSON binary-body framing overflow and was Final Accepted / merged as `d9c038547ed2df695571f8dd4f732bdcdd4d5c19`.
