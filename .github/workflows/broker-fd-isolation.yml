@@ -228,6 +228,9 @@ jobs:
           test_dir="$RUNNER_TEMP/broker-fd-isolation-j4-arm64-tests"
           [[ -d "$test_dir/j4-arm64-tests" ]] && test_dir="$test_dir/j4-arm64-tests"
           test -d "$test_dir"
+          test -f "$test_dir/generic-ytdlp-fd-isolation"
+          test -f "$test_dir/generic-ytdlp-runtime"
+          chmod 0755 "$test_dir/generic-ytdlp-fd-isolation" "$test_dir/generic-ytdlp-runtime"
           python3 - "$test_dir" "$CANDIDATE_SHA" <<'PY'
           import hashlib
           import json
