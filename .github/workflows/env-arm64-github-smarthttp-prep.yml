@@ -454,9 +454,14 @@ jobs:
                   raise SystemExit("extracted file mode mismatch")
           for current, dirs, files in os.walk(source, followlinks=False):
               current_path = pathlib.Path(current)
-              for name in files + dirs:
+              for name in files:
                   rel = (current_path / name).relative_to(source).as_posix()
                   if rel not in expected_paths:
+                      raise SystemExit("unexpected extracted path")
+              for name in dirs:
+                  path = current_path / name
+                  rel = path.relative_to(source).as_posix()
+                  if path.is_symlink() and rel not in expected_paths:
                       raise SystemExit("unexpected extracted path")
           if any(path.name in {".git", ".git-credentials", ".netrc"} for path in extract.rglob("*")):
               raise SystemExit("credential or git state found after extraction")
