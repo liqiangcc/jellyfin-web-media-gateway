@@ -695,12 +695,10 @@ fn decode_body_hex(encoded: &str) -> io::Result<Vec<u8>> {
     let bytes = encoded.as_bytes();
     let mut body = Vec::with_capacity(bytes.len() / 2);
     for pair in bytes.chunks_exact(2) {
-        let high = hex_value(pair[0]).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "invalid body encoding")
-        })?;
-        let low = hex_value(pair[1]).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "invalid body encoding")
-        })?;
+        let high = hex_value(pair[0])
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid body encoding"))?;
+        let low = hex_value(pair[1])
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid body encoding"))?;
         body.push((high << 4) | low);
     }
     Ok(body)
@@ -795,7 +793,10 @@ mod protocol_tests {
         let mut frame = Vec::new();
         write_frame(&mut frame, &response).unwrap();
         assert!(frame.len() <= MAX_FRAME_BYTES + 4);
-        assert_eq!(decode_body_hex(&response.body_hex).unwrap().len(), MAX_BODY_BYTES);
+        assert_eq!(
+            decode_body_hex(&response.body_hex).unwrap().len(),
+            MAX_BODY_BYTES
+        );
     }
 
     #[test]
@@ -818,14 +819,16 @@ mod protocol_tests {
         };
         assert!(request.into_request().is_err());
         assert!(decode_body_hex("zz").is_err());
-        assert!(WireBrokerResponse::try_from(BrokerResponse {
-            status: 200,
-            reason: "OK".into(),
-            headers: BTreeMap::new(),
-            body: vec![0; MAX_BODY_BYTES + 1],
-            error: None,
-        })
-        .is_err());
+        assert!(
+            WireBrokerResponse::try_from(BrokerResponse {
+                status: 200,
+                reason: "OK".into(),
+                headers: BTreeMap::new(),
+                body: vec![0; MAX_BODY_BYTES + 1],
+                error: None,
+            })
+            .is_err()
+        );
     }
 
     #[test]

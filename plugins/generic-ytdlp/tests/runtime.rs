@@ -27,7 +27,8 @@ impl BrokerBackend for FixtureBroker {
         let (content_type, body) = if request.url.contains("item=muxed") {
             ("video/mp4", Vec::new())
         } else if request.url.contains("item=near-limit") {
-            let prefix = br#"{"fixture":"generic-ytdlp-broker","title":"fixture media","padding":""#;
+            let prefix =
+                br#"{"fixture":"generic-ytdlp-broker","title":"fixture media","padding":""#;
             let suffix = br#"}"#;
             let padding_len = gateway_egress::MAX_BODY_BYTES - prefix.len() - suffix.len();
             let mut body = Vec::with_capacity(gateway_egress::MAX_BODY_BYTES);
