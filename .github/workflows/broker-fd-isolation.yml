@@ -257,8 +257,21 @@ jobs:
               assert path.stat().st_size == metadata["size"]
               assert hashlib.sha256(path.read_bytes()).hexdigest() == metadata["sha256"]
           PY
-          file "$test_dir/generic-ytdlp-fd-isolation" "$test_dir/generic-ytdlp-runtime" | tee j4-arm64-test-binaries.txt
-          grep -q 'ARM aarch64' j4-arm64-test-binaries.txt
+          python3 - "$test_dir" > j4-arm64-test-binaries.txt <<'PY'
+          import struct
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          for name in ("generic-ytdlp-fd-isolation", "generic-ytdlp-runtime"):
+              header = (root / name).read_bytes()[:20]
+              assert header[:4] == b"\x7fELF"
+              assert header[4] == 2
+              endian = "<" if header[5] == 1 else ">"
+              assert struct.unpack_from(endian + "H", header, 18)[0] == 183
+              print(f"{name}: ELF64 ARM aarch64")
+          PY
+          grep -q 'ELF64 ARM aarch64' j4-arm64-test-binaries.txt
       - name: Record target boundary and exact checkout
         shell: bash --noprofile --norc -euo pipefail {0}
         env:
