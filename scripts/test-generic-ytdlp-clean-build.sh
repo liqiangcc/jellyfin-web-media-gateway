@@ -55,3 +55,18 @@ test ! -L "$target_dir/debug/generic-ytdlp-real-smoke"
 test -f "$target_dir/debug/ytdlp-sandbox"
 test -x "$target_dir/debug/ytdlp-sandbox"
 test ! -L "$target_dir/debug/ytdlp-sandbox"
+
+# Run the clean-built pair through the broker-capable worker path without a
+# public/site request. R008 must reject loopback before a network side effect;
+# reaching that bounded broker result proves the exact sibling was started.
+test -d "${YTDLP_SOURCE:?YTDLP_SOURCE must select the prepared frozen runtime}"
+set +e
+broker_output=$(YTDLP_PREP_PYTHONPATH="$YTDLP_SOURCE" \
+  "$target_dir/debug/generic-ytdlp-real-smoke" \
+  'http://127.0.0.1/metadata' 2>&1)
+broker_status=$?
+set -e
+test "$broker_status" -ne 0
+grep -q '^broker_error_code: BROKER_EGRESS_REJECTED$' <<<"$broker_output"
+grep -Eq '^broker_request_count: [1-9][0-9]*$' <<<"$broker_output"
+! grep -q '^process_error: SANDBOX_UNAVAILABLE$' <<<"$broker_output"
