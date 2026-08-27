@@ -245,7 +245,7 @@ jobs:
           mkdir -m 700 -p "$work"
           trap 'rm -rf -- "$work"' EXIT
           : "${AUTH_TOKEN:?workflow token is unavailable}"
-          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$AUTH_TOKEN" | base64 | tr -d '\\n')"
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$AUTH_TOKEN" | base64 | tr -d '\n')"
           printf 'candidate_sha=%s\n' "$CANDIDATE_SHA" > "$output_dir/summary.txt"
           printf 'remote=%s\n' "$REMOTE_URL" >> "$output_dir/summary.txt"
 
