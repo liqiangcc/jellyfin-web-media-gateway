@@ -1,0 +1,419 @@
+name: broker-fd-isolation
+
+on:
+  push:
+    branches:
+      - "worker/**"
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: "Exact candidate commit to verify"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: broker-fd-isolation-${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+
+jobs:
+  j1-hosted-x86_64:
+    name: J1 hosted x86_64 modern-path regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt,clippy
+      - name: Assert exact x86_64 Candidate checkout
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(uname -m)" = x86_64
+          rustc_info="$(rustc -vV)"
+          [[ "$rustc_info" == *'host: x86_64-unknown-linux-gnu'* ]]
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Prepare exact frozen runtime for integration tests
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          export XDG_CACHE_HOME="$RUNNER_TEMP/generic-ytdlp-cache"
+          cache_info="$(python scripts/generic-ytdlp-runtime-cache.py prepare)"
+          mapfile -t cache_lines <<<"$cache_info"
+          test "${cache_lines[0]}" = prepared
+          printf 'YTDLP_SOURCE=%s\n' "${cache_lines[1]}" >> "$GITHUB_ENV"
+      - name: Run required full and focused regressions
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace --all-targets -- --test-threads=1
+          cargo test -p gateway-egress --all-targets
+          cargo test -p generic-ytdlp --features runtime-prep --test runtime -- --nocapture
+          cargo test -p generic-ytdlp --features runtime-prep --bin ytdlp-sandbox -- --nocapture
+
+  j2-hosted-arm64:
+    name: J2 hosted ARM64 modern-path regression
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 35
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Assert exact native AArch64 Candidate checkout
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(uname -m)" = aarch64
+          rustc_info="$(rustc -vV)"
+          [[ "$rustc_info" == *'host: aarch64-unknown-linux-gnu'* ]]
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Prepare exact frozen runtime for native tests
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          export XDG_CACHE_HOME="$RUNNER_TEMP/generic-ytdlp-cache"
+          cache_info="$(python scripts/generic-ytdlp-runtime-cache.py prepare)"
+          mapfile -t cache_lines <<<"$cache_info"
+          test "${cache_lines[0]}" = prepared
+          printf 'YTDLP_SOURCE=%s\n' "${cache_lines[1]}" >> "$GITHUB_ENV"
+      - name: Run native ARM64 runtime and security matrix
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          cargo test -p gateway-egress --all-targets -- --nocapture
+          cargo test -p generic-ytdlp --features runtime-prep --test runtime -- --nocapture
+          cargo test -p generic-ytdlp --features runtime-prep --bin ytdlp-sandbox -- --nocapture
+          cargo test -p generic-ytdlp --features runtime-prep --lib fd_isolation_tests -- --nocapture
+      - name: Build exact Candidate ARM64 J4 test executables
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          mkdir -p j4-arm64-tests
+          cargo test -p generic-ytdlp --features runtime-prep --lib --no-run --message-format=json > j4-lib-build.json
+          cargo test -p generic-ytdlp --features runtime-prep --test runtime --no-run --message-format=json > j4-runtime-build.json
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+          import subprocess
+
+          def executable(build_log: str, target_name: str) -> Path:
+              for line in Path(build_log).read_text(encoding="utf-8").splitlines():
+                  try:
+                      record = json.loads(line)
+                  except json.JSONDecodeError:
+                      continue
+                  target = record.get("target") or {}
+                  value = record.get("executable")
+                  if value and target.get("name") == target_name:
+                      return Path(value)
+              raise SystemExit(f"no {target_name} test executable in {build_log}")
+
+          sources = {
+              "generic-ytdlp-fd-isolation": executable("j4-lib-build.json", "generic_ytdlp"),
+              "generic-ytdlp-runtime": executable("j4-runtime-build.json", "runtime"),
+              "ytdlp-sandbox": executable("j4-runtime-build.json", "ytdlp-sandbox"),
+          }
+          files = {}
+          for name, source in sources.items():
+              destination = Path("j4-arm64-tests") / name
+              shutil.copy2(source, destination)
+              subprocess.run(["strip", "--strip-debug", str(destination)], check=True)
+              destination.chmod(0o755)
+              digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+              files[name] = {"sha256": digest, "size": destination.stat().st_size}
+          manifest = {
+              "schema_version": 1,
+              "candidate_sha": os.environ["CANDIDATE_SHA"],
+              "target": "aarch64-unknown-linux-gnu",
+              "files": files,
+          }
+          Path("j4-arm64-tests/manifest.json").write_text(
+              json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          PY
+      - name: Upload exact Candidate ARM64 J4 test executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: broker-fd-isolation-j4-arm64-tests-${{ env.CANDIDATE_SHA }}
+          path: j4-arm64-tests
+          if-no-files-found: error
+          retention-days: 14
+      - name: Create exact Candidate source bundle for target checkout
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: git bundle create j4-candidate.bundle HEAD
+      - name: Upload exact Candidate source bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: broker-fd-isolation-j4-source-${{ env.CANDIDATE_SHA }}
+          path: j4-candidate.bundle
+          if-no-files-found: error
+          retention-days: 14
+
+  j3-forced-legacy:
+    name: J3 forced ENOSYS descriptor isolation proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Assert exact Candidate checkout
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Run actual descriptor-state and fail-closed tests
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          cargo test -p generic-ytdlp --features runtime-prep --lib fd_isolation_tests -- --nocapture
+          ! rg -n 'YTDLP_(FORCE|BYPASS)|FORCE_.*(FALLBACK|CLOSE_RANGE)|SKIP_.*FD|DISABLE_.*(SANDBOX|SECCOMP)' plugins/generic-ytdlp gateway-egress
+          ! rg -n 'bilibili\.com|Bilibili' .github/workflows/broker-fd-isolation.yml
+          j4_job="$(sed -n '/^  j4-legacy-target:/,$p' .github/workflows/broker-fd-isolation.yml)"
+          ! grep -F 'generic-ytdlp-runtime-cache.py' <<<"$j4_job"
+          grep -F 'generic-ytdlp-offline-runtime.py verify' <<<"$j4_job"
+          grep -F 'generic-ytdlp-offline-runtime.py install' <<<"$j4_job"
+          ! grep -E 'cargo (fetch|test|build|check)|crates\.io' <<<"$j4_job"
+          grep -F 'actions/download-artifact@v4' <<<"$j4_job"
+          grep -F 'broker-fd-isolation-j4-arm64-tests-' <<<"$j4_job"
+          grep -F 'sha256' <<<"$j4_job"
+
+  j4-legacy-target:
+    name: J4 Linux 4.19 ARM64 legacy-kernel target proof
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: j2-hosted-arm64
+    runs-on: [self-hosted, linux, ARM64, ubuntu-arm64, target-device]
+    timeout-minutes: 35
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+      - name: Transfer exact Candidate source bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: broker-fd-isolation-j4-source-${{ inputs.candidate_sha }}
+          path: ${{ runner.temp }}/broker-fd-isolation-j4-source
+      - name: Checkout exact Candidate from transferred bundle
+        shell: bash --noprofile --norc -euo pipefail {0}
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          bundle_path="$RUNNER_TEMP/broker-fd-isolation-j4-source/j4-candidate.bundle"
+          test -f "$bundle_path"
+          git bundle verify "$bundle_path"
+          git fetch --no-tags "$bundle_path" "$CANDIDATE_SHA"
+          git checkout --detach "$CANDIDATE_SHA"
+          git clean -ffdx
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - name: Transfer exact Candidate ARM64 J4 test executables
+        uses: actions/download-artifact@v4
+        with:
+          name: broker-fd-isolation-j4-arm64-tests-${{ inputs.candidate_sha }}
+          path: ${{ runner.temp }}/broker-fd-isolation-j4-arm64-tests
+      - name: Verify exact Candidate ARM64 test executables
+        shell: bash --noprofile --norc -euo pipefail {0}
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          test_root="$RUNNER_TEMP/broker-fd-isolation-j4-arm64-tests"
+          test_dir="$(python3 - "$test_root" <<'PY'
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          matches = list(root.rglob("generic-ytdlp-fd-isolation"))
+          assert len(matches) == 1
+          print(matches[0].parent)
+          PY
+          )"
+          test -d "$test_dir"
+          test -f "$test_dir/generic-ytdlp-fd-isolation"
+          test -f "$test_dir/generic-ytdlp-runtime"
+          test -f "$test_dir/ytdlp-sandbox"
+          chmod 0755 "$test_dir/generic-ytdlp-fd-isolation" "$test_dir/generic-ytdlp-runtime" "$test_dir/ytdlp-sandbox"
+          python3 - "$test_dir" "$CANDIDATE_SHA" <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import sys
+
+          root = Path(sys.argv[1])
+          candidate = sys.argv[2]
+          manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+          assert manifest == {
+              "candidate_sha": candidate,
+              "files": manifest["files"],
+              "schema_version": 1,
+              "target": "aarch64-unknown-linux-gnu",
+          }
+          assert set(manifest["files"]) == {
+              "generic-ytdlp-fd-isolation",
+              "generic-ytdlp-runtime",
+              "ytdlp-sandbox",
+          }
+          for name, metadata in manifest["files"].items():
+              path = root / name
+              assert path.is_file() and os.access(path, os.X_OK)
+              assert path.stat().st_size == metadata["size"]
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == metadata["sha256"]
+          PY
+          python3 - "$test_dir" > j4-arm64-test-binaries.txt <<'PY'
+          import struct
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          for name in ("generic-ytdlp-fd-isolation", "generic-ytdlp-runtime", "ytdlp-sandbox"):
+              header = (root / name).read_bytes()[:20]
+              assert header[:4] == b"\x7fELF"
+              assert header[4] == 2
+              endian = "<" if header[5] == 1 else ">"
+              assert struct.unpack_from(endian + "H", header, 18)[0] == 183
+              print(f"{name}: ELF64 ARM aarch64")
+          PY
+          grep -q 'ELF64 ARM aarch64' j4-arm64-test-binaries.txt
+      - name: Record target boundary and exact checkout
+        shell: bash --noprofile --norc -euo pipefail {0}
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(uname -m)" = aarch64
+          test "$(id -u)" -ne 0
+          if command -v sudo >/dev/null 2>&1; then
+            ! sudo -n true >/dev/null 2>&1
+          fi
+          case "$GITHUB_WORKSPACE" in
+            /var/lib/web-media-gateway|/var/lib/web-media-gateway/*) exit 1 ;;
+          esac
+          {
+            echo "candidate_sha=$CANDIDATE_SHA"
+            uname -a
+            id
+            rustc -vV
+            python3 --version
+          } | tee j4-target-identity.txt
+      - name: Probe close_range without changing policy
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          python3 - <<'PY' | tee j4-close-range-probe.txt
+          import ctypes
+          import errno
+          libc = ctypes.CDLL(None, use_errno=True)
+          result = libc.syscall(436, 1 << 30, 1 << 30, 0)
+          observed = ctypes.get_errno() if result == -1 else 0
+          print(f"close_range_syscall={'ENOSYS' if observed == errno.ENOSYS else observed}")
+          if observed != errno.ENOSYS:
+              raise SystemExit(1)
+          PY
+      - name: Transfer exact accepted #79 offline runtime bundle
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 32956386626
+          name: generic-ytdlp-offline-runtime-3a3de8ee2f9ac8b0e1e312735a9305db7569baef
+          path: ${{ runner.temp }}/broker-fd-isolation-offline-bundle
+      - name: Verify and consume exact #79 offline runtime bundle
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          bundle_path="$RUNNER_TEMP/broker-fd-isolation-offline-bundle"
+          [[ -d "$bundle_path/generic-ytdlp-offline-runtime" ]] && bundle_path="$bundle_path/generic-ytdlp-offline-runtime"
+          test -d "$bundle_path"
+          python3 scripts/generic-ytdlp-offline-runtime.py verify "$bundle_path"
+          ! rg -n 'git\+https|pip install.*git|pip wheel.*git' "$bundle_path"
+          unset GH_TOKEN GITHUB_TOKEN ACTIONS_RUNTIME_TOKEN ACTIONS_RUNTIME_URL
+          cache_info="$(python3 scripts/generic-ytdlp-offline-runtime.py install "$bundle_path")"
+          mapfile -t cache_lines <<<"$cache_info"
+          [[ "${cache_lines[0]}" = hit || "${cache_lines[0]}" = prepared ]]
+          printf 'YTDLP_SOURCE=%s\n' "${cache_lines[1]}" >> "$GITHUB_ENV"
+      - name: Run deterministic BrokerProcessRunner target proof
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test_root="$RUNNER_TEMP/broker-fd-isolation-j4-arm64-tests"
+          test_dir="$(python3 - "$test_root" <<'PY'
+          import sys
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          matches = list(root.rglob("generic-ytdlp-fd-isolation"))
+          assert len(matches) == 1
+          print(matches[0].parent)
+          PY
+          )"
+          "$test_dir/generic-ytdlp-fd-isolation" fd_isolation_tests --nocapture | tee j4-fd-isolation.log
+          env \
+            "CARGO_BIN_EXE_ytdlp-sandbox=$test_dir/ytdlp-sandbox" \
+            "GENERIC_YTDLP_TEST_WORKER_PATH=$GITHUB_WORKSPACE/plugins/generic-ytdlp/worker/worker.py" \
+            "$test_dir/generic-ytdlp-runtime" --nocapture | tee j4-broker-runtime.log
+      - name: Publish target evidence summary
+        if: always()
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          {
+            echo '## J4 target evidence'
+            for evidence in \
+              j4-target-identity.txt \
+              j4-close-range-probe.txt \
+              j4-arm64-test-binaries.txt \
+              j4-fd-isolation.log \
+              j4-broker-runtime.log; do
+              if [[ -f "$evidence" ]]; then
+                echo "### $evidence"
+                echo '```text'
+                cat "$evidence"
+                echo '```'
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify target cleanup and safe checkout
+        if: always()
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test -z "$(git diff --name-only)"
+          test -z "$(git diff --cached --name-only)"
+          if pgrep -af 'generic-ytdlp-real-smoke|ytdlp-sandbox|plugins/generic-ytdlp/worker/worker.py'; then
+            exit 1
+          fi
+          if [[ -e /var/lib/web-media-gateway/vault ]]; then
+            ! test -r /var/lib/web-media-gateway/vault
+          fi
+          rm -rf -- "$RUNNER_TEMP/broker-fd-isolation-offline-bundle" "$RUNNER_TEMP/broker-fd-isolation-j4-arm64-tests"
+          rm -f -- j4-target-identity.txt j4-close-range-probe.txt j4-arm64-test-binaries.txt j4-fd-isolation.log j4-broker-runtime.log
+          test -z "$(git status --porcelain)"

@@ -75,10 +75,13 @@ fn runner_with_backend(
     let sandbox = std::env::var_os("CARGO_BIN_EXE_ytdlp-sandbox")
         .map(PathBuf::from)
         .expect("cargo must provide the required sandbox binary");
+    let worker = std::env::var_os("GENERIC_YTDLP_TEST_WORKER_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("worker/worker.py"));
     BrokerProcessRunner::new(
         backend,
         PathBuf::from(std::env::var_os("PYTHON").unwrap_or_else(|| "python3".into())),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("worker/worker.py"),
+        worker,
         sandbox,
         limits,
     )
