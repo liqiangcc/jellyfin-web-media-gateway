@@ -6,9 +6,9 @@
 GitHub Issue: #67
 Task ID: GENERIC-YTDLP-BILIBILI-REAL
 Task kind: verification-only / real public network
-Contract Revision: R16
-Next Attempt: 16
-Exact Execution Candidate: 942a0a1843f8f207332ac646f12ffe6ab5017306
+Contract Revision: R17
+Next Attempt: 17
+Exact Execution Candidate: 80fb081b129f8f664124b84ddcc9698039e2cfd1
 Preferred worker: ubuntu-arm64
 Eligible environment: env:ubuntu-arm64
 Frozen sample: BV14V411W7r5
@@ -20,7 +20,7 @@ Publication state: non-executable until Coordinator Publication Gate passes
 
 ## Accepted authority
 
-R16 consumes the accepted chain without redefining it:
+R17 consumes the accepted chain without redefining it:
 
 ```text
 #79 offline runtime
@@ -37,18 +37,21 @@ R16 consumes the accepted chain without redefining it:
 → #109 closed full fallback stage→reason attribution
 → #111 bounded fallback response normalization
 → #113 frozen-sample reachability refresh
+→ #114 webpage-only bounded streaming normalization/marker scan
 ```
 
-Accepted #90 merge: `b7774f216e723d6b5eab90f712c2b746ad132f76`.
-Accepted #109 merge: `af65b2e2fec4cd3b3303db19415890f4052aa026`.
-Accepted #111 Candidate: `f402fd7f6b49a7afc2de744f4aa6371bb485385e`, PR #112, accepted merge/runtime authority: `942a0a1843f8f207332ac646f12ffe6ab5017306`.
-Accepted #113 verification package: `1c83159d1a5d4d93ec3f682d259c7e2d01d48556`; reachability result `4xx → 2xx → 2xx`, `BILIBILI_HOST_ELIGIBLE_FOR_#67_REFRESH=yes`.
+Key accepted identities:
+- #90 merge: `b7774f216e723d6b5eab90f712c2b746ad132f76`.
+- #109 merge: `af65b2e2fec4cd3b3303db19415890f4052aa026`.
+- #111 merge/runtime authority: `942a0a1843f8f207332ac646f12ffe6ab5017306`.
+- #113 verification package: `1c83159d1a5d4d93ec3f682d259c7e2d01d48556`; bounded reachability `4xx → 2xx → 2xx`, `BILIBILI_HOST_ELIGIBLE_FOR_#67_REFRESH=yes`.
+- #114 Candidate: `375864fccde136cc799d81574652e197c4176317`, PR #115, accepted merge/runtime authority: `80fb081b129f8f664124b84ddcc9698039e2cfd1`.
 
-#109 proves offline full fallback traversal to current muxed `http-file` ResolvedMedia and closed stage→reason attribution. #111 adds only bounded response normalization: `identity | gzip | deflate → UTF-8`, normalized output <= 96 KiB, with malformed/unknown/ambiguous/nested/trailing/truncated inputs fail-closed. Neither #109 nor #111 claims real-site success.
+#114 preserves raw broker/R008 body authority at 96 KiB and JSON fallback authority at 96 KiB. Only FALLBACK_WEBPAGE may use the accepted 512 KiB normalized marker-scan ceiling. The scan retains only existing `<html`, `__initial_state__`, and `bangumi` decisions, using admitted identity/gzip/deflate and strict incremental UTF-8; malformed/truncated/unknown/ambiguous/trailing/concatenated coding remains fail-closed. #114 did not claim real-site success.
 
 ## Parent evidence
 
-Attempt 13 on exact Candidate `af65b2e2fec4cd3b3303db19415890f4052aa026` executed the accepted low-privilege ARM64/R008/broker path and returned:
+R13 on exact Candidate `af65b2e2fec4cd3b3303db19415890f4052aa026` produced the valid compatibility result:
 
 ```text
 process_error: UNSUPPORTED_FORMAT
@@ -61,15 +64,24 @@ stream_count: 0
 Overall: FAIL
 ```
 
-This was a valid compatibility FAIL and led to #111.
+#111 repaired only that bounded response-normalization seam. R14 then blocked on Candidate transfer; R15 established exact Candidate but stopped at live J2 because the frozen page returned 4xx. #113 restored bounded publication eligibility without resolver traffic or request-identity variation.
 
-Attempt 14 froze exact Candidate `942a0a1843f8f207332ac646f12ffe6ab5017306` but blocked at J0 because direct Target Git did not transfer the Candidate; J1–J4 were not run. #90 already provides the accepted exact-source recovery path.
+R16 independently passed J0/J1/J2/J4 on exact Candidate `942a0a1843f8f207332ac646f12ffe6ab5017306` and completed J3 through the accepted sandbox/fd/R008/Secret/broker path with:
 
-Attempt 15 restored exact Candidate provenance and passed J0/J1, but J2 returned public HTTPS `2xx` and the unchanged frozen Bilibili sample `4xx`; J3 was correctly NOT RUN. This was site-reachability/environment BLOCKED, not a compatibility result.
+```text
+process_error: UNSUPPORTED_FORMAT
+unsupported_stage: FALLBACK_WEBPAGE
+fallback_reason: RESPONSE_BODY_TOO_LARGE
+broker_status_class: 2xx
+broker_request_count: 4
+protocol: n/a
+stream_count: 0
+Overall: FAIL
+```
 
-#113 then rechecked the same unchanged URL on the same accepted phone with the same ordinary direct/no-proxy request shape and returned `4xx → 2xx → 2xx`, satisfying its two-consecutive-2xx PASS rule. #113 did not run yt-dlp/resolver/R008/broker/sandbox and did not vary request identity or use bypass.
+R16 is the latest real compatibility result. It is a compatibility FAIL, not provenance/site/sandbox/broker/Secret BLOCKED. Source-first review showed the raw 96 KiB broker/R008 authority must remain unchanged while a compressed webpage may normalize beyond 96 KiB before the fallback needs only the three marker decisions above. #114 is the accepted repair for that exact repository-owned seam.
 
-R16 therefore preserves runtime Candidate `942a0a1843f8f207332ac646f12ffe6ab5017306`, preserves #90 transport recovery, consumes #113 only as publication-level reachability Evidence, and must independently re-run J2 before J3.
+R17 therefore freezes runtime Candidate `80fb081b129f8f664124b84ddcc9698039e2cfd1`. Only fresh R17 real-target Evidence can prove whether #114 clears the observed R16 seam.
 
 ## Frozen sample/runtime
 
@@ -97,22 +109,22 @@ with `HOME=/home/gateway-runner`, `USER=LOGNAME=gateway-runner`, and `PATH=/home
 
 ## Goal
 
-Execute one bounded real-target Attempt 16:
+Execute one bounded real-target Attempt 17:
 
 ```text
-exact Candidate source
-→ direct exact Git OR accepted #90 trusted source-bundle
-→ exact Candidate/tree/archive/file integrity on Target
+exact Candidate 80fb081b...
+→ direct exact Git OR accepted #90 trusted source-bundle for the same Candidate
 → #79 frozen offline runtime
 → accepted low-privilege ARM64 target
-→ live direct/no-proxy frozen Bilibili J2
+→ independent live direct/no-proxy J2
 → exact-Candidate clean build
 → #83/#85 sandbox/fd isolation
 → R008/#95 Secret containment
-→ #97 bounded broker framing
+→ #97 broker framing
 → normal frozen yt_dlp.extract_info(download=False)
-→ only if #105 admission matches: bounded Bilibili continuation
+→ only if #105 admission matches: bounded continuation
 → #111 response normalization
+→ #114 webpage-only bounded normalized marker scan
 → #107 unsupported_stage + #109 fallback_reason when unsupported
 → current ResolvedMedia OR one bounded actionable result
 ```
@@ -120,7 +132,7 @@ exact Candidate source
 Decisive question:
 
 ```text
-Does accepted #111 normalization clear the real R13 RESPONSE_ENCODING seam and allow BV14V411W7r5 to produce a current muxed http-file | hls ResolvedMedia?
+Does accepted #114 clear the real R16 FALLBACK_WEBPAGE + RESPONSE_BODY_TOO_LARGE seam and allow BV14V411W7r5 to produce a current muxed http-file | hls ResolvedMedia?
 OR, if not, which exact closed unsupported_stage + fallback_reason now owns the rejection?
 ```
 
@@ -139,7 +151,7 @@ MEDIA_SHAPE
 UNCLASSIFIED
 ```
 
-The #109 stage→reason mapping remains frozen. In particular:
+The accepted #109 stage→reason mapping remains frozen:
 
 ```text
 PRE_FALLBACK → UNCLASSIFIED | MEDIA_NO_MUXED_STREAM
@@ -152,21 +164,19 @@ MEDIA_SHAPE → MEDIA_URL_SHAPE | MEDIA_URL_SENSITIVE_QUERY | MEDIA_EXTENSION | 
 UNCLASSIFIED → UNCLASSIFIED
 ```
 
-These values are repository-owned control-flow constants only. They must not expose or imply raw site payload, exception text, headers, URLs/query material, credentials or media metadata beyond the fixed enum.
+These enums are repository-owned control-flow evidence only; they must not expose or imply raw payload, exception text, headers, URLs/query material, credentials or media metadata beyond the fixed enum.
 
 ## Hard boundaries
 
 - verification-only; no repository/product/security implementation changes;
-- exact runtime Candidate only: `942a0a1843f8f207332ac646f12ffe6ab5017306`;
-- no moving-main/package-head or alternate-source substitution;
-- Candidate transport may use only direct exact-Candidate Git or accepted #90 trusted source-bundle for the same Candidate;
-- #90 source-bundle path must verify Candidate/repository/schema/tree/archive SHA256/per-file manifest/safe extraction and carry no `.git` or credential state into runtime;
+- exact runtime Candidate only: `80fb081b129f8f664124b84ddcc9698039e2cfd1`;
+- no moving-main/package-head, alternate Candidate or alternate-source substitution;
+- Candidate transport only direct exact-Candidate Git or accepted #90 trusted source-bundle for the same exact Candidate;
+- #90 bundle route must verify Candidate/repository/schema/tree/archive SHA256/per-file manifest/safe extraction; no `.git` or transfer credential state may enter J1–J4 runtime;
 - no root/sudo/system install or Target package-index/source dependency resolution;
-- direct/no-proxy site Evidence only;
-- no Cookie/login/profile/fingerprint/CAPTCHA/proxy rotation/access-control bypass;
-- no alternate worker egress / R008 bypass;
-- preserve #83/#85/#90/#95/#97/#99/#101/#103/#105/#107/#109/#111 and `DisabledRunner`;
-- preserve #111 96 KiB normalized fallback bound;
+- formal site Evidence direct/no-proxy only; no Cookie/login/profile/fingerprint/CAPTCHA/proxy rotation/access-control bypass;
+- preserve #79/#90/#83/#85/#95/#97/#99/#101/#103/#105/#107/#109/#111/#114, R008/ADR 0007 and `DisabledRunner`;
+- raw broker/R008 body remains 96 KiB; JSON fallback remains 96 KiB; only #114 FALLBACK_WEBPAGE normalized marker scan may use fixed 512 KiB;
 - no raw stderr/traceback/exception text, page/body, request/response headers, source/redirect/media URLs, signed query material, credentials, Secret, Cookie/Auth/token/profile/account state or media payload in durable Evidence;
 - no DASH/separate-A/V/remux/FFmpeg/transcoding/navigation/Browser/Web-E2E/performance scope;
 - `PLAYURL_DASH_PRESENT` is compatibility Evidence only, not implementation authority;
@@ -176,15 +186,15 @@ These values are repository-owned control-flow constants only. They must not exp
 
 ### J0 — exact target and Candidate
 
-Prove accepted ARM64 `gateway-runner` low-privilege identity and exact Candidate `942a0a1843f8f207332ac646f12ffe6ab5017306`. Use direct exact Git if it succeeds; otherwise only accepted #90 trusted source-bundle. If #90 is used, verify Candidate/repository/schema/tree/archive/per-file integrity and safe extraction. No moving main, alternate source, root/sudo or Target dependency resolution.
+Prove the accepted ARM64 `gateway-runner` low-privilege identity and exact Candidate `80fb081b129f8f664124b84ddcc9698039e2cfd1`. Prefer direct exact Git; if that fails, only accepted #90 trusted source-bundle for the same Candidate is authorized. If #90 is used, verify the full accepted identity/integrity/safe-extraction contract. No moving main, alternate source, root/sudo or Target dependency resolution.
 
 ### J1 — frozen runtime provenance
 
-Verify trust anchor, exact wheel SHA/provenance, yt-dlp identity and `runtime_cache: offline-hit | offline-prepared`.
+Verify the trust anchor, exact wheel SHA/source identity and `runtime_cache: offline-hit | offline-prepared`.
 
 ### J2 — live direct site reachability
 
-Independently re-confirm direct/no-proxy public HTTPS and the unchanged frozen Bilibili page status with proxy variables cleared. #113 is publication eligibility only and does not substitute for live J2. Do not retain page contents. If the frozen sample is not normally reachable in Attempt 16, classify BLOCKED and STOP before J3; do not vary UA/fingerprint/headers, use Cookie/login/proxy, or attempt bypass.
+Independently re-confirm direct/no-proxy public HTTPS and the unchanged frozen Bilibili page with proxy variables cleared. #113 is publication eligibility only and does not substitute for J2. Retain status class only, not page content. If the frozen sample is not normally reachable in Attempt 17, classify BLOCKED and STOP before J3; do not vary identity/headers or use Cookie/login/proxy/bypass.
 
 ### J3 — real resolver smoke
 
@@ -205,7 +215,7 @@ broker_request_count > 0
 broker_error_code != BROKER_RESPONSE_SECRET_REJECTED
 ```
 
-If `process_error: UNSUPPORTED_FORMAT`, require exactly one valid #107 `unsupported_stage` and one #109 reason valid for that stage. Missing/unknown/forged/wrong-stage evidence is BLOCKED, not permission to inspect raw diagnostics.
+If `process_error: UNSUPPORTED_FORMAT`, require exactly one valid #107 `unsupported_stage` and one #109 `fallback_reason` valid for that stage. Missing/unknown/forged/wrong-stage evidence is BLOCKED, not permission to inspect raw diagnostics.
 
 ### J4 — cleanup / safe-output
 
@@ -213,11 +223,11 @@ Verify zero staging/worker/sandbox/descendant/media-payload residue, verified ca
 
 ## Result semantics
 
-PASS requires exact Candidate, J0–J4 PASS, direct site reachability, broker path exercised, valid current muxed `http-file | hls` ResolvedMedia, `stream_count >= 1`, and cleanup/safe-output PASS.
+PASS requires exact Candidate, J0–J4 PASS, broker path exercised, valid current muxed `http-file | hls` ResolvedMedia, `stream_count >= 1`, and safety/cleanup PASS.
 
 CONDITIONAL PASS requires a valid current ResolvedMedia plus only a bounded non-security limitation; unsupported is never CONDITIONAL PASS.
 
-FAIL means the complete accepted path executes correctly but the frozen source cannot be represented by the current first-playback contract, canonically:
+FAIL means the complete accepted path executes correctly but the frozen source is rejected by the current first-playback contract, canonically:
 
 ```text
 process_error: UNSUPPORTED_FORMAT
@@ -232,7 +242,6 @@ BLOCKED covers provenance/Target/site reachability/sandbox/spawn/broker/Secret/r
 ## Claims / report
 
 Report J0–J4 and R1–R12 explicitly:
-
 1. exact Candidate and accepted authority chain;
 2. low-privilege target + frozen runtime provenance;
 3. direct/no-proxy site reachability;
@@ -246,11 +255,11 @@ Report J0–J4 and R1–R12 explicitly:
 11. cleanup/target safety;
 12. bounded result sufficient for Coordinator decision.
 
-Durable report may include only bounded identities/status classes/result enums and authority SHAs, including #113 reachability refresh authority. Never publish credentials, response contents, headers, raw stderr, signed/resolved URLs or media payload.
+Durable report may include only bounded identities/status classes/result enums and authority SHAs. Never publish credentials, response contents, headers, raw stderr, signed/resolved URLs or media payload.
 
 ## Freshness
 
-Semantic runtime authority is exact Candidate `942a0a1843f8f207332ac646f12ffe6ab5017306`. Later task-package docs do not replace it. If accepted semantic changes touch generic-ytdlp/runtime/R008/broker/Secret/sandbox/fd domains after publication and before claim, STOP for Coordinator freshness review.
+Semantic runtime authority is exact Candidate `80fb081b129f8f664124b84ddcc9698039e2cfd1`. Later task-package docs do not replace it. If accepted semantic changes touch generic-ytdlp/runtime/R008/broker/Secret/sandbox/fd domains after publication and before claim, STOP for Coordinator freshness review.
 
 ## Stop boundary
 
