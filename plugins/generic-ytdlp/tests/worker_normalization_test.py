@@ -129,6 +129,23 @@ class DirectFallbackNormalizationTest(unittest.TestCase):
             )
         self.assertEqual(raised.exception.reason, worker.RESPONSE_BODY_TOO_LARGE)
 
+    def test_json_normalized_bound_remains_the_existing_96_kib_limit(self):
+        payload = b'{"fixture":"' + b"x" * worker.MAX_FALLBACK_TEXT_BYTES + b'"}'
+        encoded = gzip.compress(payload, mtime=0)
+        with self.assertRaises(worker.UnsupportedFormat) as raised:
+            worker._fallback_response_body(
+                self._response(
+                    encoded,
+                    {"Content-Type": "application/json", "Content-Encoding": "gzip"},
+                ),
+                json_body=True,
+                stage=worker.FALLBACK_NAV,
+            )
+        self.assertEqual(
+            (raised.exception.stage, raised.exception.reason),
+            (worker.FALLBACK_NAV, worker.RESPONSE_BODY_TOO_LARGE),
+        )
+
     def test_oversized_normalized_compressed_webpages_are_admitted_within_scan_bound(self):
         payload = b"<html>" + b"x" * (worker.MAX_BODY + 4096) + b"</html>"
         self.assertGreater(len(payload), worker.MAX_BODY)
