@@ -89,6 +89,36 @@ fn unsupported_summary_is_bounded_and_machine_readable() {
 }
 
 #[test]
+fn worker_failure_summaries_use_only_fixed_codes() {
+    for (error, code) in [
+        (
+            generic_ytdlp::ParseError::RequestPolicyRejected,
+            "REQUEST_POLICY_REJECTED",
+        ),
+        (generic_ytdlp::ParseError::BrokerFailure, "BROKER_FAILURE"),
+        (
+            generic_ytdlp::ParseError::ExtractorFailure,
+            "EXTRACTOR_FAILURE",
+        ),
+        (
+            generic_ytdlp::ParseError::UnsupportedFormat,
+            "UNSUPPORTED_FORMAT",
+        ),
+        (
+            generic_ytdlp::ParseError::UnexpectedWorkerFailure,
+            "UNEXPECTED_WORKER_FAILURE",
+        ),
+    ] {
+        let summary = render_error_summary(
+            &generic_ytdlp::YtdlpError::Parse(error),
+            &BrokerDiagnosticsSnapshot::default(),
+        );
+        assert!(summary.contains(&format!("process_error: {code}")));
+        assert!(summary.len() < 256);
+    }
+}
+
+#[test]
 fn safe_broker_exposes_only_allowlisted_error_classification() {
     let broker = SafeBroker::new(DiagnosticBackend);
     let response = broker.handle(

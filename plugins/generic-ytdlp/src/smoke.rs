@@ -36,6 +36,10 @@ pub fn render_error_summary(error: &YtdlpError, diagnostics: &BrokerDiagnosticsS
         YtdlpError::Parse(parse_error) => {
             let (result, code) = match parse_error {
                 crate::ParseError::UnsupportedFormat => ("UNSUPPORTED", "UNSUPPORTED_FORMAT"),
+                crate::ParseError::RequestPolicyRejected => ("FAIL", "REQUEST_POLICY_REJECTED"),
+                crate::ParseError::BrokerFailure => ("FAIL", "BROKER_FAILURE"),
+                crate::ParseError::ExtractorFailure => ("FAIL", "EXTRACTOR_FAILURE"),
+                crate::ParseError::UnexpectedWorkerFailure => ("FAIL", "UNEXPECTED_WORKER_FAILURE"),
                 crate::ParseError::UnsupportedProtocol => ("UNSUPPORTED", "UNSUPPORTED_PROTOCOL"),
                 crate::ParseError::DrmUnsupported => ("UNSUPPORTED", "DRM_UNSUPPORTED"),
                 crate::ParseError::UnsupportedProtection => {

@@ -2,8 +2,9 @@
 
 use gateway_egress::{BrokerCancellation as EgressCancellation, R008Broker};
 use generic_ytdlp::{
-    BrokerBackend, BrokerCancellation, BrokerProcessRunner, BrokerRequest, BrokerResponse,
-    GenericYtdlpAdapter, RuntimeLimits, parse_machine_output,
+    BrokerBackend, BrokerCancellation, BrokerDiagnosticsSnapshot, BrokerProcessRunner,
+    BrokerRequest, BrokerResponse, GenericYtdlpAdapter, RuntimeLimits, YtdlpError,
+    parse_machine_output, render_error_summary,
 };
 use site_adapter_api::SiteAdapter;
 use std::collections::BTreeMap;
@@ -224,6 +225,104 @@ fn extract_action_rejects_separate_or_unsupported_formats() {
             Err(generic_ytdlp::ParseError::UnsupportedFormat)
         );
     }
+}
+
+struct BrokerDeniedFixture;
+
+impl BrokerBackend for BrokerDeniedFixture {
+    fn handle(&self, _request: BrokerRequest, _cancellation: BrokerCancellation) -> BrokerResponse {
+        BrokerResponse::denied("BROKER_EGRESS_REJECTED")
+    }
+}
+
+#[test]
+fn worker_failure_envelopes_are_closed_bounded_and_secret_safe() {
+    let cases = [
+        (
+            "classification-request-policy",
+            generic_ytdlp::ParseError::RequestPolicyRejected,
+            "REQUEST_POLICY_REJECTED",
+        ),
+        (
+            "classification-extractor",
+            generic_ytdlp::ParseError::ExtractorFailure,
+            "EXTRACTOR_FAILURE",
+        ),
+        (
+            "classification-unexpected",
+            generic_ytdlp::ParseError::UnexpectedWorkerFailure,
+            "UNEXPECTED_WORKER_FAILURE",
+        ),
+    ];
+    for (action, expected, safe_code) in cases {
+        let output = runner(Duration::from_secs(5))
+            .run_action(
+                action,
+                &Url::parse("https://fixture.example.test/media").unwrap(),
+            )
+            .unwrap();
+        assert!(output.stdout.len() < 128);
+        assert_eq!(parse_machine_output(&output.stdout), Err(expected));
+        assert_eq!(
+            std::str::from_utf8(&output.stdout).unwrap(),
+            format!(r#"{{"error":"{safe_code}"}}"#)
+        );
+        let summary = render_error_summary(
+            &YtdlpError::Parse(expected),
+            &BrokerDiagnosticsSnapshot::default(),
+        );
+        assert!(summary.contains(&format!("process_error: {safe_code}")));
+        for sentinel in [
+            "policy-sentinel",
+            "query-sentinel",
+            "credential-sentinel",
+            "unexpected-sentinel",
+            "Authorization",
+            "Bearer",
+            "fixture.invalid",
+        ] {
+            assert!(
+                !output
+                    .stdout
+                    .windows(sentinel.len())
+                    .any(|part| part == sentinel.as_bytes())
+            );
+            assert!(!summary.contains(sentinel));
+        }
+    }
+
+    let output = runner_with_backend(Arc::new(BrokerDeniedFixture), Duration::from_secs(5), None)
+        .run_action(
+            "probe",
+            &Url::parse("https://fixture.example.test/media").unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        parse_machine_output(&output.stdout),
+        Err(generic_ytdlp::ParseError::BrokerFailure)
+    );
+    assert_eq!(output.stdout, br#"{"error":"BROKER_FAILURE"}"#);
+
+    let malformed = runner(Duration::from_secs(5))
+        .run_action(
+            "classification-malformed",
+            &Url::parse("https://fixture.example.test/media").unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        parse_machine_output(&malformed.stdout),
+        Err(generic_ytdlp::ParseError::Malformed)
+    );
+    let unknown = runner(Duration::from_secs(5))
+        .run_action(
+            "classification-unknown",
+            &Url::parse("https://fixture.example.test/media").unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        parse_machine_output(&unknown.stdout),
+        Err(generic_ytdlp::ParseError::UnsupportedSchema)
+    );
 }
 
 #[test]

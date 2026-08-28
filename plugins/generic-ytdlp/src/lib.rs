@@ -327,6 +327,10 @@ pub enum ParseError {
     UnsupportedProtection,
     SecretHeader,
     UnsupportedFormat,
+    RequestPolicyRejected,
+    BrokerFailure,
+    ExtractorFailure,
+    UnexpectedWorkerFailure,
 }
 
 #[derive(Debug, Deserialize)]
@@ -365,8 +369,18 @@ pub fn parse_machine_output(bytes: &[u8]) -> Result<ResolvedMedia, ParseError> {
             ParseError::Malformed
         }
     })?;
-    if value.get("error").and_then(serde_json::Value::as_str) == Some("UNSUPPORTED_FORMAT") {
-        return Err(ParseError::UnsupportedFormat);
+    if let Some(code) = value.get("error").and_then(serde_json::Value::as_str) {
+        if value.as_object().is_none_or(|object| object.len() != 1) {
+            return Err(ParseError::UnsupportedSchema);
+        }
+        return Err(match code {
+            "REQUEST_POLICY_REJECTED" => ParseError::RequestPolicyRejected,
+            "BROKER_FAILURE" => ParseError::BrokerFailure,
+            "EXTRACTOR_FAILURE" => ParseError::ExtractorFailure,
+            "UNSUPPORTED_FORMAT" => ParseError::UnsupportedFormat,
+            "UNEXPECTED_WORKER_FAILURE" => ParseError::UnexpectedWorkerFailure,
+            _ => ParseError::UnsupportedSchema,
+        });
     }
     let output: MachineOutput = serde_json::from_value(value).map_err(|error| {
         if error.to_string().contains("unknown field") {
@@ -708,6 +722,31 @@ mod tests {
         assert_eq!(parse_machine_output(br#"{"title":"x","protection":"clear","streams":[{"id":"x","protocol":"rtmp","url":"https://cdn.example.test/x"}]}"#), Err(ParseError::UnsupportedProtocol));
         assert_eq!(parse_machine_output(br#"{"title":"x","protection":"clear","streams":[{"id":"x","protocol":"hls","url":"file:///tmp/x"}]}"#), Err(ParseError::InvalidUrl));
         assert_eq!(parse_machine_output(br#"{"title":"x","protection":"clear","streams":[{"id":"x","protocol":"hls","url":"https://cdn.example.test/x.m3u8","upstream_access_ref":"forged-by-process"}]}"#), Err(ParseError::InvalidField));
+        assert_eq!(
+            parse_machine_output(br#"{"error":"NOT_AN_ADMITTED_FAILURE"}"#),
+            Err(ParseError::UnsupportedSchema)
+        );
+        assert_eq!(
+            parse_machine_output(br#"{"error":"BROKER_FAILURE","message":"origin text"}"#),
+            Err(ParseError::UnsupportedSchema)
+        );
+    }
+
+    #[test]
+    fn parser_maps_only_the_closed_worker_failure_taxonomy() {
+        for (code, expected) in [
+            ("REQUEST_POLICY_REJECTED", ParseError::RequestPolicyRejected),
+            ("BROKER_FAILURE", ParseError::BrokerFailure),
+            ("EXTRACTOR_FAILURE", ParseError::ExtractorFailure),
+            ("UNSUPPORTED_FORMAT", ParseError::UnsupportedFormat),
+            (
+                "UNEXPECTED_WORKER_FAILURE",
+                ParseError::UnexpectedWorkerFailure,
+            ),
+        ] {
+            let envelope = format!(r#"{{"error":"{code}"}}"#);
+            assert_eq!(parse_machine_output(envelope.as_bytes()), Err(expected));
+        }
     }
 
     #[test]
