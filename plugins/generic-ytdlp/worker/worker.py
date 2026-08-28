@@ -30,6 +30,7 @@ MAX_BODY = 96 * 1024
 MAX_HEADERS = 32
 MAX_HEADER_NAME = 128
 MAX_HEADER_VALUE = 4096
+DIRECT_MEDIA_EXTENSIONS = frozenset({"mp4", "m4v", "m3u8"})
 # Keep this in lockstep with the Rust protocol bound. It is derived from the
 # existing R008 body/header bounds and fixed JSON-escaping/protocol overhead.
 MAX_FRAME = (
@@ -318,15 +319,18 @@ def _formats(info: dict[str, Any]) -> list[dict[str, Any]]:
         not isinstance(raw_url, str)
         or not isinstance(ext, str)
         or not ext
-        or ext in {"unknown", "unknown_video"}
     ):
+        raise UnsupportedFormat
+    path = urllib.parse.urlparse(raw_url).path.lower()
+    extension = path.rsplit(".", 1)[-1] if "." in path else ""
+    if extension not in DIRECT_MEDIA_EXTENSIONS or ext.lower() != extension:
         raise UnsupportedFormat
     return [
         {
             "format_id": "direct",
             "url": raw_url,
             "ext": ext,
-            "protocol": None,
+            "protocol": "m3u8_native" if extension == "m3u8" else None,
             "vcodec": None,
             "acodec": None,
             "http_headers": info.get("http_headers"),

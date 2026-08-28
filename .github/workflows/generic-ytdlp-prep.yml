@@ -87,6 +87,7 @@ jobs:
           test -n "${warm_lines[1]}"
           PYTHONPATH="$YTDLP_SOURCE" python -c 'import os, pathlib, yt_dlp; assert yt_dlp.version.__version__ == "2026.08.19"; assert pathlib.Path(yt_dlp.__file__).resolve().is_relative_to(pathlib.Path(os.environ["YTDLP_SOURCE"]).resolve())'
           python -m unittest discover -s scripts/tests -p 'test_*.py' -v
+          PYTHONPATH="$YTDLP_SOURCE" python plugins/generic-ytdlp/tests/worker_normalization_test.py
       - name: Run conformance, parser and direct-priority tests
         run: |
           bash scripts/test-generic-ytdlp-clean-build.sh
@@ -138,6 +139,7 @@ jobs:
           printf 'XDG_CACHE_HOME=%s\n' "$XDG_CACHE_HOME" >> "$GITHUB_ENV"
           printf 'YTDLP_SOURCE=%s\n' "${cache_lines[1]}" >> "$GITHUB_ENV"
           python -m unittest discover -s scripts/tests -p 'test_*.py' -v
+          PYTHONPATH="$YTDLP_SOURCE" python plugins/generic-ytdlp/tests/worker_normalization_test.py
       - name: Run bounded process and parser negatives
         run: |
           bash scripts/test-generic-ytdlp-clean-build.sh
