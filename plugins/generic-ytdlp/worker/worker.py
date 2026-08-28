@@ -93,7 +93,7 @@ class BrokerFailure(RequestError):
     """The bounded broker capability rejected or failed the operation."""
 
 
-class InitialStateFallbackNotApplicable(Exception):
+class InitialStateFallbackNotApplicable(UnsupportedFormat):
     """The opt-in continuation does not own this response shape."""
 
 
@@ -353,7 +353,11 @@ def _reject_secret_fields(value: Any) -> None:
 
 
 def _fallback_response_body(response: Response, *, json_body: bool) -> Any:
-    if not 200 <= int(response.status) < 300:
+    try:
+        status = int(response.status)
+    except (TypeError, ValueError):
+        raise UnsupportedFormat from None
+    if not 200 <= status < 300:
         raise UnsupportedFormat
     body = response.read(MAX_FALLBACK_TEXT_BYTES + 1)
     if len(body) > MAX_FALLBACK_TEXT_BYTES:
@@ -383,7 +387,11 @@ def _fallback_json(ydl: BrokerOnlyYDL, url: str) -> dict[str, Any]:
 
 
 def _api_data(payload: dict[str, Any]) -> dict[str, Any]:
-    if payload.get("code") != 0 or not isinstance(payload.get("data"), dict):
+    if (
+        payload.get("code") != 0
+        or not isinstance(payload.get("data"), dict)
+        or any(name not in {"code", "message", "ttl", "data"} for name in payload)
+    ):
         raise UnsupportedFormat
     return payload["data"]
 
@@ -408,13 +416,44 @@ def _required_cid(value: Any) -> str:
     return cid
 
 
+def _required_public_url(value: Any) -> str:
+    if not isinstance(value, str) or len(value.encode()) > MAX_URL_BYTES:
+        raise UnsupportedFormat
+    try:
+        parsed = urllib.parse.urlparse(value)
+        query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    except ValueError:
+        raise UnsupportedFormat from None
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+        or parsed.query
+        or query
+    ):
+        raise UnsupportedFormat
+    return value
+
+
 def _fallback_media_url(value: Any) -> str:
     if not isinstance(value, str) or len(value.encode()) > MAX_URL_BYTES:
         raise UnsupportedFormat
-    parsed = urllib.parse.urlparse(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.fragment:
+    try:
+        parsed = urllib.parse.urlparse(value)
+        query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    except ValueError:
+        raise UnsupportedFormat from None
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+    ):
         raise UnsupportedFormat
-    if any(name.lower() in SENSITIVE_QUERY_NAMES for name, _ in urllib.parse.parse_qsl(parsed.query)):
+    if any(name.lower() in SENSITIVE_QUERY_NAMES for name, _ in query):
         raise UnsupportedFormat
     extension = parsed.path.rsplit(".", 1)[-1].lower() if "." in parsed.path else ""
     if extension not in {"mp4", "m4v"}:
@@ -423,9 +462,21 @@ def _fallback_media_url(value: Any) -> str:
 
 
 def _bilibili_video_id(url: str) -> str:
-    parsed = urllib.parse.urlparse(url)
+    try:
+        parsed = urllib.parse.urlparse(url)
+        query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    except ValueError:
+        raise InitialStateFallbackNotApplicable from None
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname not in {"www.bilibili.com", "bilibili.com"}
+        or parsed.username
+        or parsed.password
+        or any(name.lower() in SENSITIVE_QUERY_NAMES for name, _ in query)
+    ):
+        raise InitialStateFallbackNotApplicable
     match = _BILIBILI_VIDEO_RE.fullmatch(parsed.path)
-    if not match or parsed.username or parsed.password:
+    if not match:
         raise InitialStateFallbackNotApplicable
     return match.group(1)
 
@@ -442,6 +493,8 @@ def _extract_initial_state_fallback(url: str) -> dict[str, Any]:
         webpage_response = ydl.urlopen(Request(url))
         webpage = _fallback_response_body(webpage_response, json_body=False)
         lowered = webpage.lower()
+        if "<html" not in lowered:
+            raise UnsupportedFormat
         if "__initial_state__" in lowered:
             raise InitialStateFallbackNotApplicable
         redirected_url = getattr(webpage_response, "url", "")
@@ -449,8 +502,13 @@ def _extract_initial_state_fallback(url: str) -> dict[str, Any]:
             raise UnsupportedFormat
 
         nav = _api_data(_fallback_json(ydl, f"{BILIBILI_API_ORIGIN}/x/web-interface/nav"))
-        if not isinstance(nav.get("isLogin"), bool) or not isinstance(nav.get("wbi_img"), dict):
+        wbi_img = nav.get("wbi_img")
+        if not isinstance(nav.get("isLogin"), bool) or not isinstance(wbi_img, dict):
             raise UnsupportedFormat
+        if set(wbi_img) != {"img_url", "sub_url"}:
+            raise UnsupportedFormat
+        _required_public_url(wbi_img.get("img_url"))
+        _required_public_url(wbi_img.get("sub_url"))
         view = _api_data(
             _fallback_json(ydl, f"{BILIBILI_API_ORIGIN}/x/web-interface/view?bvid={video_id}")
         )
@@ -493,6 +551,11 @@ def _extract_initial_state_fallback(url: str) -> dict[str, Any]:
             raise UnsupportedFormat
         segment = durl[0]
         if not isinstance(segment, dict):
+            raise UnsupportedFormat
+        if any(
+            name not in {"url", "backup_url", "size", "length", "order"}
+            for name in segment
+        ):
             raise UnsupportedFormat
         media_url = _fallback_media_url(segment.get("url"))
     return {

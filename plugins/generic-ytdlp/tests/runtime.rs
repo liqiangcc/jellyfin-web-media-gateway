@@ -13,7 +13,7 @@ use std::fs::OpenOptions;
 use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 use url::Url;
@@ -67,6 +67,101 @@ impl BrokerBackend for FixtureBroker {
             status: 200,
             reason: "OK".into(),
             headers: BTreeMap::from([(String::from("content-type"), String::from(content_type))]),
+            body,
+            error: None,
+        }
+    }
+}
+
+struct InitialStateFallbackFixtureBroker {
+    case: &'static str,
+    requests: AtomicUsize,
+}
+
+impl InitialStateFallbackFixtureBroker {
+    fn new(case: &'static str) -> Self {
+        Self {
+            case,
+            requests: AtomicUsize::new(0),
+        }
+    }
+
+    fn response(&self, url: &str) -> (String, Vec<u8>) {
+        let page = || {
+            if self.case == "redirect" {
+                br#"<html><a href=\"https://www.bilibili.com/bangumi/ep1\">redirect</a></html>"#
+                    .to_vec()
+            } else if self.case == "malformed-webpage" {
+                b"{".to_vec()
+            } else if self.case == "initial-state" {
+                br#"<html><script>window.__INITIAL_STATE__ = {};</script></html>"#.to_vec()
+            } else {
+                br#"<html><script>window.__APP__ = {};</script></html>"#.to_vec()
+            }
+        };
+        let json = |body: &str| (String::from("application/json"), body.as_bytes().to_vec());
+        if url.contains("/video/BV1ABC123456") {
+            return (String::from("text/html"), page());
+        }
+        if url.ends_with("/x/web-interface/nav") {
+            if self.case == "secret" {
+                return json(
+                    r#"{"code":0,"data":{"isLogin":false,"wbi_img":{"img_url":"https://img.example.test/img","sub_url":"https://img.example.test/sub"},"token":"fixture-secret"}}"#,
+                );
+            }
+            return json(
+                r#"{"code":0,"data":{"isLogin":false,"wbi_img":{"img_url":"https://img.example.test/img","sub_url":"https://img.example.test/sub"}}}"#,
+            );
+        }
+        if url.contains("/x/web-interface/view/detail?") {
+            return match self.case {
+                "missing-detail" => json(
+                    r#"{"code":0,"data":{"View":{"bvid":"BV1ABC123456","pages":[{"cid":123}]}}}"#,
+                ),
+                _ => json(
+                    r#"{"code":0,"data":{"View":{"bvid":"BV1ABC123456","title":"Synthetic detail","pages":[{"cid":123}]}}}"#,
+                ),
+            };
+        }
+        if url.contains("/x/web-interface/view?") {
+            return json(
+                r#"{"code":0,"data":{"bvid":"BV1ABC123456","title":"Synthetic detail","pages":[{"cid":123}]}}"#,
+            );
+        }
+        if url.contains("/x/player/playurl?") {
+            return match self.case {
+                "non-media" => json(
+                    r#"{"code":0,"data":{"durl":[{"url":"https://media.example.test/fallback/page.html"}]}}"#,
+                ),
+                "separate-av" => json(
+                    r#"{"code":0,"data":{"dash":{"video":[{"baseUrl":"https://media.example.test/video.mp4"}],"audio":[{"baseUrl":"https://media.example.test/audio.m4a"}]}}}"#,
+                ),
+                "malformed-playurl" => json(
+                    r#"{"code":0,"data":{"durl":{"url":"https://media.example.test/fallback/video.mp4"}}}"#,
+                ),
+                "unexpected" => json(
+                    r#"{"code":0,"data":{"durl":[{"url":"https://media.example.test/fallback/video.mp4","unexpected":true}]}}"#,
+                ),
+                _ => json(
+                    r#"{"code":0,"data":{"durl":[{"url":"https://media.example.test/fallback/video.mp4","size":1234}]}}"#,
+                ),
+            };
+        }
+        (String::from("application/json"), br#"{}"#.to_vec())
+    }
+}
+
+impl BrokerBackend for InitialStateFallbackFixtureBroker {
+    fn handle(&self, request: BrokerRequest, _cancellation: BrokerCancellation) -> BrokerResponse {
+        assert_eq!(request.operation, "http");
+        assert_eq!(request.method, "GET");
+        assert!(request.headers.keys().all(|name| name != "Cookie"));
+        self.requests.fetch_add(1, Ordering::AcqRel);
+        let (content_type, body) = self.response(&request.url);
+        BrokerResponse {
+            status: 200,
+            reason: "OK".into(),
+            headers: BTreeMap::from([(String::from("content-type"), content_type)]),
             body,
             error: None,
         }
@@ -193,6 +288,65 @@ fn extract_action_normalizes_generic_top_level_direct_media() {
         media.streams[0].protocol,
         site_adapter_api::StreamProtocol::HttpFile
     );
+}
+
+#[test]
+fn initial_state_fallback_continues_through_web_wbi_view_detail_and_playurl() {
+    let broker = Arc::new(InitialStateFallbackFixtureBroker::new("success"));
+    let output = runner_with_backend(
+        Arc::clone(&broker) as Arc<dyn BrokerBackend>,
+        Duration::from_secs(5),
+        None,
+    )
+    .run_action(
+        "extract-initial-state-fallback",
+        &Url::parse("https://www.bilibili.com/video/BV1ABC123456").unwrap(),
+    )
+    .unwrap();
+    let media = parse_machine_output(&output.stdout).unwrap();
+    assert_eq!(media.title, "Synthetic detail");
+    assert_eq!(media.streams.len(), 1);
+    assert_eq!(
+        media.streams[0].protocol,
+        site_adapter_api::StreamProtocol::HttpFile
+    );
+    assert_eq!(
+        media.streams[0].url.as_str(),
+        "https://media.example.test/fallback/video.mp4"
+    );
+    assert_eq!(broker.requests.load(Ordering::Acquire), 5);
+}
+
+#[test]
+fn initial_state_fallback_fail_closes_malformed_redirect_secret_and_media_shapes() {
+    for case in [
+        "malformed-webpage",
+        "initial-state",
+        "redirect",
+        "missing-detail",
+        "secret",
+        "non-media",
+        "separate-av",
+        "malformed-playurl",
+        "unexpected",
+    ] {
+        let broker = Arc::new(InitialStateFallbackFixtureBroker::new(case));
+        let output = runner_with_backend(
+            Arc::clone(&broker) as Arc<dyn BrokerBackend>,
+            Duration::from_secs(5),
+            None,
+        )
+        .run_action(
+            "extract-initial-state-fallback",
+            &Url::parse("https://www.bilibili.com/video/BV1ABC123456").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            parse_machine_output(&output.stdout),
+            Err(generic_ytdlp::ParseError::UnsupportedFormat),
+            "fixture case {case} must remain unsupported"
+        );
+    }
 }
 
 #[test]
