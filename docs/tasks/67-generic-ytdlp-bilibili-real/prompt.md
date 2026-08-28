@@ -17,40 +17,41 @@ If it is draft, blocked, review, done, closed, or already owned: STOP.
 ## Frozen execution
 
 ```text
-Contract Revision: R13
-Attempt: 13
-Exact Candidate: af65b2e2fec4cd3b3303db19415890f4052aa026
+Contract Revision: R14
+Attempt: 14
+Exact Candidate: 942a0a1843f8f207332ac646f12ffe6ab5017306
 Target: accepted Ubuntu ARM64 phone / gateway-runner
 Sample: BV14V411W7r5
 Harness: scripts/generic-ytdlp-real-smoke.sh
 ```
 
-Task-package docs may be newer than the runtime Candidate. Do **not** execute moving main. The target checkout/build/harness used for J0–J4 must resolve exactly to `af65b2e2fec4cd3b3303db19415890f4052aa026`.
+Task-package docs may be newer than the runtime Candidate. Do **not** execute moving main. The target checkout/build/harness used for J0–J4 must resolve exactly to `942a0a1843f8f207332ac646f12ffe6ab5017306`.
 
-Read `AGENTS.md`, live #67 and its latest R13 comments, `docs/tasks/67-generic-ytdlp-bilibili-real/task.md`, lifecycle/freshness protocols, #109 Final Acceptance, #107/#105 Final Acceptance, and accepted #103/#101/#99/#97/#95/#85/#83/#79/#73/#63/#60/R008 authorities before claim.
+Read `AGENTS.md`, live #67 and its latest R14 comments, `docs/tasks/67-generic-ytdlp-bilibili-real/task.md`, lifecycle/freshness protocols, #111 Final Acceptance, #109 Final Acceptance, #107/#105 Final Acceptance, and accepted #103/#101/#99/#97/#95/#85/#83/#79/#73/#63/#60/R008 authorities before claim.
 
-## Why R13 exists
+## Why R14 exists
 
-Attempt 12 reached the real frozen sample through the accepted low-privilege ARM64, sandbox, broker and R008 path, but returned:
+Attempt 13 reached the real frozen sample through the accepted low-privilege ARM64, sandbox, broker and R008 path, but returned:
 
 ```text
 process_error: UNSUPPORTED_FORMAT
 unsupported_stage: FALLBACK_WEBPAGE
+fallback_reason: RESPONSE_ENCODING
 broker_request_count: 4
 ```
 
-#109 is now Final Accepted and merged as exact R13 Candidate `af65b2e2fec4cd3b3303db19415890f4052aa026`. It preserves #101/#105/#107 and adds a closed stage-scoped `fallback_reason` plus a full deterministic offline traversal through:
+#111 is now Final Accepted and merged as exact R14 Candidate `942a0a1843f8f207332ac646f12ffe6ab5017306`. It adds only a closed bounded response-normalization layer before existing UTF-8/JSON/HTML fallback admission:
 
 ```text
-webpage
-→ nav / WBI
-→ view
-→ detail
-→ playurl
-→ current muxed http-file ResolvedMedia
+identity | gzip | deflate
+→ UTF-8 only
+→ normalized output <= 96 KiB
+→ existing JSON/HTML admission
 ```
 
-#109 did not run the real site. R13 is the bounded real-target decision point.
+Malformed, unknown, ambiguous, nested, trailing or truncated coding remains fail-closed. #111 did not run the real site and does not prove what coding/charset the R13 response actually used.
+
+R14 is therefore the next bounded real-target decision point.
 
 ## Required path
 
@@ -63,6 +64,7 @@ webpage
 → R008 + #95 response containment
 → #97 broker framing
 → #101 bounded worker outcome
+→ #111 bounded response normalization
 → normal frozen yt_dlp.extract_info(download=False)
 → only if exact #105 admission matches: bounded continuation
 → #107 unsupported_stage + #109 fallback_reason when unsupported
@@ -74,8 +76,8 @@ There is no caller-selectable fallback action.
 ## Decisive question
 
 ```text
-Can BV14V411W7r5 produce a valid current muxed http-file | hls ResolvedMedia?
-OR, if not, which exact closed unsupported_stage + fallback_reason pair owns the rejection?
+Does the accepted #111 normalization clear the real R13 RESPONSE_ENCODING seam and allow BV14V411W7r5 to produce a valid current muxed http-file | hls ResolvedMedia?
+OR, if not, which exact closed unsupported_stage + fallback_reason pair now owns the rejection?
 ```
 
 A valid current ResolvedMedia is still required for #67 PASS.
@@ -138,8 +140,8 @@ broker_error_code != BROKER_RESPONSE_SECRET_REJECTED
 - exact Candidate only, not moving main/package head;
 - no root/sudo/system install or Target dependency resolution;
 - no Cookie/login/profile/fingerprint/CAPTCHA/proxy/bypass;
-- no R008/#95/#97/#99/#83/#85/#101/#105/#107/#109 weakening;
-- preserve the accepted 96 KiB fallback bound;
+- no R008/#95/#97/#99/#83/#85/#101/#105/#107/#109/#111 weakening;
+- preserve the accepted #111 96 KiB normalized fallback bound;
 - no direct worker network or alternate socket;
 - no arbitrary diagnostic strings;
 - no raw stderr/traceback/exception text, source/redirect/media URL, request/response headers, page/body contents, signed query material, credentials, Secret, Cookie/Auth/token/profile/account state, or media payload in Evidence;
@@ -225,4 +227,4 @@ Blocked:
 
 Worker must not merge, set `status:done`, close #67, implement a discovered blocker, create another compatibility Task, or start #68.
 
-This prompt becomes execution authority only after the Coordinator R13 Publication Gate records PUBLISH and live #67 is `status:ready + env:ubuntu-arm64 + no active owner`.
+This prompt becomes execution authority only after the Coordinator R14 Publication Gate records PUBLISH and live #67 is `status:ready + env:ubuntu-arm64 + no active owner`.

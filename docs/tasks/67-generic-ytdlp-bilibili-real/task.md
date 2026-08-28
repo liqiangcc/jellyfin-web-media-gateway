@@ -6,9 +6,9 @@
 GitHub Issue: #67
 Task ID: GENERIC-YTDLP-BILIBILI-REAL
 Task kind: verification-only / real public network
-Contract Revision: R13
-Next Attempt: 13
-Exact Execution Candidate: af65b2e2fec4cd3b3303db19415890f4052aa026
+Contract Revision: R14
+Next Attempt: 14
+Exact Execution Candidate: 942a0a1843f8f207332ac646f12ffe6ab5017306
 Preferred worker: ubuntu-arm64
 Eligible environment: env:ubuntu-arm64
 Frozen sample: BV14V411W7r5
@@ -20,7 +20,7 @@ Publication state: non-executable until Coordinator Publication Gate passes and 
 
 ## Accepted authority
 
-R13 consumes the already accepted chain without redefining it:
+R14 consumes the already accepted chain without redefining it:
 
 ```text
 #79 offline runtime
@@ -34,11 +34,16 @@ R13 consumes the already accepted chain without redefining it:
 → #105 narrow Bilibili missing-initial-state continuation
 → #107 closed unsupported_stage attribution
 → #109 closed full fallback stage→reason attribution
+→ #111 bounded fallback response normalization
 ```
 
 Accepted #109 Candidate: `35f34fe5967d5e1d4a17671ab8b59c22bf2dacff`.
-Accepted PR: #110.
-Accepted merge/main authority and R13 Exact Execution Candidate: `af65b2e2fec4cd3b3303db19415890f4052aa026`.
+Accepted #109 PR: #110.
+Accepted #109 merge authority: `af65b2e2fec4cd3b3303db19415890f4052aa026`.
+
+Accepted #111 Candidate: `f402fd7f6b49a7afc2de744f4aa6371bb485385e`.
+Accepted #111 PR: #112.
+Accepted #111 merge/main authority and R14 Exact Execution Candidate: `942a0a1843f8f207332ac646f12ffe6ab5017306`.
 
 #109 proved offline that the repository-owned continuation can traverse:
 
@@ -53,9 +58,11 @@ webpage
 
 and that unsupported outcomes can carry one fixed, stage-valid `fallback_reason`. #109 did **not** prove that the real Bilibili sample succeeds.
 
+#111 then proved offline that fallback response bytes can be normalized through a closed `identity | gzip | deflate` content-coding contract into UTF-8 text while enforcing the accepted 96 KiB normalized bound and preserving all existing failure distinctions. #111 likewise did **not** run the real site or prove which coding/charset the real response used.
+
 ## Parent evidence
 
-#67 Attempt 12 executed exact Candidate `234c616f128deaee55156675d480d03ac5e8670d` on the accepted low-privilege Ubuntu ARM64 target. J0/J1/J2/J4 passed and J3 reached the accepted broker path with four 2xx requests, but returned:
+#67 Attempt 13 executed exact Candidate `af65b2e2fec4cd3b3303db19415890f4052aa026` on the accepted low-privilege Ubuntu ARM64 target. J0/J1/J2/J4 passed and J3 traversed the accepted broker path with four 2xx requests, but returned:
 
 ```text
 result: UNSUPPORTED
@@ -65,12 +72,13 @@ broker_error_code: n/a
 broker_request_count: 4
 process_error: UNSUPPORTED_FORMAT
 unsupported_stage: FALLBACK_WEBPAGE
+fallback_reason: RESPONSE_ENCODING
 protocol: n/a
 stream_count: 0
 Overall: FAIL
 ```
 
-That was a valid compatibility FAIL, not an infrastructure blocker. R13 re-runs the same frozen public sample after #109 so that any remaining unsupported result is localized by both stage and reason.
+That was a valid compatibility FAIL, not an infrastructure blocker. #111 was then Final Accepted as the bounded repository-owned response normalization repair for this exact `RESPONSE_ENCODING` seam. R14 reruns the same frozen public sample on the accepted #111 merge authority without claiming that the prior real response used any specific content-coding or charset.
 
 ## Frozen sample and runtime
 
@@ -107,7 +115,7 @@ Do not substitute root, sudo, capsh, inherited environment, a different identity
 
 ## Goal
 
-Execute one bounded real-target verification on exact Candidate `af65b2e2fec4cd3b3303db19415890f4052aa026`:
+Execute one bounded real-target verification on exact Candidate `942a0a1843f8f207332ac646f12ffe6ab5017306`:
 
 ```text
 frozen offline runtime
@@ -119,6 +127,7 @@ frozen offline runtime
 → bounded broker framing
 → normal frozen yt_dlp.extract_info(download=False)
 → only if #105 admission matches: bounded Bilibili continuation
+→ #111 bounded response normalization
 → #107 unsupported_stage + #109 fallback_reason if unsupported
 → GenericYtdlpAdapter
 → current ResolvedMedia OR one bounded actionable unsupported pair
@@ -127,8 +136,8 @@ frozen offline runtime
 The decisive question is:
 
 ```text
-Can BV14V411W7r5 produce a valid current muxed http-file | hls ResolvedMedia?
-OR, if not, which exact closed unsupported_stage + fallback_reason pair owns the rejection?
+Does the accepted #111 normalization clear the real R13 RESPONSE_ENCODING seam and allow BV14V411W7r5 to produce a valid current muxed http-file | hls ResolvedMedia?
+OR, if not, which exact closed unsupported_stage + fallback_reason pair now owns the rejection?
 ```
 
 ## Frozen stage taxonomy
@@ -148,7 +157,7 @@ UNCLASSIFIED
 
 ## Frozen reason contract
 
-A `fallback_reason` is valid only with `process_error: UNSUPPORTED_FORMAT` and only when admitted for the accompanying stage. R13 accepts the #109 closed mapping:
+A `fallback_reason` is valid only with `process_error: UNSUPPORTED_FORMAT` and only when admitted for the accompanying stage. R14 preserves the #109 closed mapping:
 
 ```text
 PRE_FALLBACK
@@ -194,13 +203,13 @@ These are repository-owned control-flow constants only. Do not infer or expose s
 ## Hard boundaries
 
 - verification-only; no repository/product/security implementation changes;
-- exact Candidate only: `af65b2e2fec4cd3b3303db19415890f4052aa026`;
+- exact Candidate only: `942a0a1843f8f207332ac646f12ffe6ab5017306`;
 - no root/sudo/system install or Target package-index/source resolution;
 - direct/no-proxy real-site Evidence only;
 - no Cookie/login/profile/fingerprint/CAPTCHA/proxy rotation/access-control bypass;
 - no direct worker socket, alternate egress, or R008 bypass;
 - preserve #95 Secret policy, #97 broker protocol, #99 clean-build binding, #83/#85 sandbox/fd authority;
-- preserve #101 top-level taxonomy, #105 normal-extract-first narrow admission, #107 stage taxonomy, #109 reason taxonomy and 96 KiB fallback bound;
+- preserve #101 top-level taxonomy, #105 normal-extract-first narrow admission, #107 stage taxonomy, #109 reason taxonomy, #111 bounded response normalization and the 96 KiB normalized fallback bound;
 - no arbitrary diagnostics or reason strings;
 - no raw stderr/traceback/exception text, page/body content, request/response headers, source/redirect/media URLs, signed query material, credentials, Cookie/Auth/token/profile/account state, or media payload in durable Evidence;
 - no DASH support, separate-A/V composition, remux, FFmpeg, transcoding, navigation, Browser/Native Panel, Web E2E, performance work;
@@ -216,7 +225,7 @@ Prove:
 
 - target is the accepted Ubuntu ARM64 phone / `gateway-runner` class;
 - low-privilege identity/launch boundary is unchanged;
-- checkout/build/harness resolve to exact Candidate `af65b2e2fec4cd3b3303db19415890f4052aa026`;
+- checkout/build/harness resolve to exact Candidate `942a0a1843f8f207332ac646f12ffe6ab5017306`;
 - no moving-main substitution;
 - no Target dependency resolution or root/sudo fallback.
 
@@ -338,7 +347,7 @@ Do not repair blockers in this verification Task.
 ## Claims
 
 ```text
-R1 exact #79/#83/#85/#95/#97/#99/#101/#103/#105/#107/#109 authority
+R1 exact #79/#83/#85/#95/#97/#99/#101/#103/#105/#107/#109/#111 authority
 R2 Target dependency independence / low privilege
 R3 direct/no-bypass public accessibility
 R4 ARM64 sandbox + fd/broker integrity
@@ -374,7 +383,7 @@ Attempt / worker / environment / UTC
 host arch/kernel/uid privilege class
 Exact Candidate SHA
 BV14V411W7r5
-accepted #85/#95/#97/#99/#101/#103/#105/#107/#109 merge authorities
+accepted #85/#95/#97/#99/#101/#103/#105/#107/#109/#111 merge authorities
 bundle transfer class + trust-anchor/wheel/provenance result
 runtime_cache
 direct public/Bilibili status class
@@ -397,19 +406,19 @@ Never publish credentials, Secret headers/values, source/redirect/media URLs, si
 
 ## Freshness / Integration Contract
 
-Semantic authority for this Attempt is exact merged main Candidate `af65b2e2fec4cd3b3303db19415890f4052aa026`.
+Semantic authority for this Attempt is exact merged main Candidate `942a0a1843f8f207332ac646f12ffe6ab5017306`.
 
 Semantic freshness domains:
 
 - `plugins/generic-ytdlp/**`;
 - `scripts/generic-ytdlp-*`;
 - SiteAdapter/ResolvedMedia normalization consumed by generic-ytdlp;
-- #101/#105/#107/#109 error/stage/reason semantics;
+- #101/#105/#107/#109 error/stage/reason semantics and #111 response-normalization semantics;
 - R008/broker/Secret containment;
 - sandbox/fd isolation;
 - accepted ARM64 target launch boundary.
 
-Task-package docs committed after `af65b2e2...` do not replace the runtime Candidate. Before claim, the Worker must prove the target runtime checkout is exactly `af65b2e2...`.
+Task-package docs committed after `942a0a18...` do not replace the runtime Candidate. Before claim, the Worker must prove the target runtime checkout is exactly `942a0a18...`.
 
 If any accepted semantic change touches the freshness domains after this publication and before claim, STOP for Coordinator freshness review; do not silently substitute a later main.
 
