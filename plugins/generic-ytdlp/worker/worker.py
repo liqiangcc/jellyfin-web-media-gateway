@@ -8,6 +8,7 @@ installs the inherited seccomp/no-new-privs boundary before this module runs.
 from __future__ import annotations
 
 import binascii
+import codecs
 import errno
 import io
 import json
@@ -39,6 +40,13 @@ BILIBILI_API_ORIGIN = "https://api.bilibili.com"
 # Keep fallback documents within the existing R008 response ceiling while
 # retaining the full runtime bound used by the broker and adapter.
 MAX_FALLBACK_TEXT_BYTES = MAX_BODY
+# Webpages are the only fallback response whose normalized text is consumed as
+# a marker stream rather than parsed as a complete JSON document.  512 KiB is
+# deliberately above the raw 96 KiB broker ceiling to accommodate bounded
+# gzip/deflate expansion, while staying below the task's 1 MiB maximum.  The
+# scanner retains only marker state and a short cross-chunk suffix.
+MAX_WEBPAGE_SCAN_BYTES = 512 * 1024
+RESPONSE_STREAM_CHUNK_BYTES = 16 * 1024
 SECRET_FIELD_NAMES = frozenset(
     {
         "authorization",
@@ -238,7 +246,7 @@ class _ResponseEncodingError(Exception):
 
 
 class _ResponseBodyTooLarge(Exception):
-    """The normalized response exceeded the existing fallback body bound."""
+    """The normalized response exceeded its fixed fallback body bound."""
 
 
 # This is deliberately a small, explicit compatibility surface. The broker
@@ -247,6 +255,17 @@ class _ResponseBodyTooLarge(Exception):
 # only, and all text is normalized to UTF-8 before fallback admission.
 ADMITTED_CONTENT_CODINGS = frozenset({"identity", "gzip", "deflate"})
 ADMITTED_CHARSETS = frozenset({"utf-8"})
+
+
+class _WebpageScan:
+    """Marker-only result for the bounded webpage admission scan."""
+
+    __slots__ = ("has_html", "has_initial_state", "has_bangumi")
+
+    def __init__(self, *, has_html: bool, has_initial_state: bool, has_bangumi: bool):
+        self.has_html = has_html
+        self.has_initial_state = has_initial_state
+        self.has_bangumi = has_bangumi
 
 
 def _response_header(response: Response, name: str) -> str | None:
@@ -344,6 +363,94 @@ def _normalize_response_body(response: Response, body: bytes) -> str:
     if len(text.encode("utf-8")) > MAX_FALLBACK_TEXT_BYTES:
         raise _ResponseBodyTooLarge
     return text
+
+
+def _scan_webpage_body(
+    response: Response,
+    body: bytes,
+    *,
+    chunk_size: int = RESPONSE_STREAM_CHUNK_BYTES,
+) -> _WebpageScan:
+    """Incrementally normalize a webpage and retain only admission markers.
+
+    ``body`` is already bounded by the raw broker limit.  Compressed output is
+    delivered in bounded pieces to a strict incremental UTF-8 decoder; the
+    marker suffix is the only cross-chunk state retained.  This keeps webpage
+    expansion bounded without making a second full-page allocation.
+    """
+    if not isinstance(body, bytes) or not 1 <= chunk_size <= RESPONSE_STREAM_CHUNK_BYTES:
+        raise _ResponseEncodingError
+    coding = _response_content_coding(response)
+    charset = _response_charset(response)
+    try:
+        decoder = codecs.getincrementaldecoder(charset)(errors="strict")
+    except (LookupError, TypeError):
+        raise _ResponseEncodingError from None
+
+    markers = ("<html", "__initial_state__", "bangumi")
+    marker_tail = ""
+    found = [False, False, False]
+    normalized_bytes = 0
+
+    def consume(normalized: bytes, *, final: bool = False) -> None:
+        nonlocal marker_tail, normalized_bytes
+        if not isinstance(normalized, bytes):
+            raise _ResponseEncodingError
+        normalized_bytes += len(normalized)
+        if normalized_bytes > MAX_WEBPAGE_SCAN_BYTES:
+            raise _ResponseBodyTooLarge
+        try:
+            text = decoder.decode(normalized, final=final)
+        except UnicodeDecodeError:
+            raise _ResponseEncodingError from None
+        for character in text:
+            if "A" <= character <= "Z":
+                character = chr(ord(character) + (ord("a") - ord("A")))
+            marker_tail = (marker_tail + character)[-max(map(len, markers)) :]
+            for index, marker in enumerate(markers):
+                if marker in marker_tail:
+                    found[index] = True
+
+    if coding == "identity":
+        for offset in range(0, len(body), chunk_size):
+            consume(body[offset : offset + chunk_size])
+    else:
+        wbits = 16 + zlib.MAX_WBITS if coding == "gzip" else zlib.MAX_WBITS
+        inflater = zlib.decompressobj(wbits)
+        for offset in range(0, len(body), chunk_size):
+            pending = body[offset : offset + chunk_size]
+            while pending:
+                if inflater.eof:
+                    raise _ResponseEncodingError
+                remaining = MAX_WEBPAGE_SCAN_BYTES - normalized_bytes
+                max_output = min(RESPONSE_STREAM_CHUNK_BYTES, remaining + 1)
+                try:
+                    normalized = inflater.decompress(pending, max_output)
+                except (ValueError, zlib.error):
+                    raise _ResponseEncodingError from None
+                consume(normalized)
+                if inflater.unused_data:
+                    # This also rejects concatenated members and any trailing
+                    # bytes after an otherwise valid gzip/deflate stream.
+                    raise _ResponseEncodingError
+                next_pending = inflater.unconsumed_tail
+                if next_pending == pending and not normalized:
+                    raise _ResponseEncodingError
+                pending = next_pending
+        remaining = MAX_WEBPAGE_SCAN_BYTES - normalized_bytes
+        try:
+            consume(inflater.flush(min(RESPONSE_STREAM_CHUNK_BYTES, remaining + 1)))
+        except (ValueError, zlib.error):
+            raise _ResponseEncodingError from None
+        if not inflater.eof or inflater.unused_data or inflater.unconsumed_tail:
+            raise _ResponseEncodingError
+
+    consume(b"", final=True)
+    return _WebpageScan(
+        has_html=found[0],
+        has_initial_state=found[1],
+        has_bangumi=found[2],
+    )
 
 
 class UnsupportedFormat(Exception):
@@ -644,11 +751,21 @@ def _fallback_response_body(response: Response, *, json_body: bool, stage: str) 
     if not 200 <= status < 300:
         raise UnsupportedFormat(stage, RESPONSE_STATUS)
     try:
-        body = response.read(MAX_FALLBACK_TEXT_BYTES + 1)
+        # JSON keeps the established 96 KiB normalized/raw read bound.  The
+        # webpage scanner admits the same raw MAX_BODY authority, then applies
+        # its separate bounded post-coding scan ceiling.
+        body = response.read((MAX_FALLBACK_TEXT_BYTES if json_body else MAX_BODY) + 1)
     except Exception:
         raise UnsupportedFormat(stage, RESPONSE_READ) from None
-    if len(body) > MAX_FALLBACK_TEXT_BYTES:
+    if len(body) > (MAX_FALLBACK_TEXT_BYTES if json_body else MAX_BODY):
         raise UnsupportedFormat(stage, RESPONSE_BODY_TOO_LARGE)
+    if not json_body and stage == FALLBACK_WEBPAGE:
+        try:
+            return _scan_webpage_body(response, body)
+        except _ResponseBodyTooLarge:
+            raise UnsupportedFormat(stage, RESPONSE_BODY_TOO_LARGE) from None
+        except _ResponseEncodingError:
+            raise UnsupportedFormat(stage, RESPONSE_ENCODING) from None
     try:
         text = _normalize_response_body(response, body)
     except _ResponseBodyTooLarge:
@@ -813,13 +930,14 @@ def _extract_initial_state_fallback(url: str) -> dict[str, Any]:
         webpage = _fallback_response_body(
             webpage_response, json_body=False, stage=FALLBACK_WEBPAGE
         )
-        lowered = webpage.lower()
-        if "<html" not in lowered:
+        if not isinstance(webpage, _WebpageScan):
             raise UnsupportedFormat(FALLBACK_WEBPAGE, WEBPAGE_NOT_HTML)
-        if "__initial_state__" in lowered:
+        if not webpage.has_html:
+            raise UnsupportedFormat(FALLBACK_WEBPAGE, WEBPAGE_NOT_HTML)
+        if webpage.has_initial_state:
             raise InitialStateFallbackNotApplicable
         redirected_url = getattr(webpage_response, "url", "")
-        if "bangumi" in redirected_url.lower() or "bangumi" in lowered:
+        if "bangumi" in redirected_url.lower() or webpage.has_bangumi:
             raise UnsupportedFormat(FALLBACK_WEBPAGE, WEBPAGE_BANGUMI)
 
         nav = _api_data(
