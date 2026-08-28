@@ -17,6 +17,7 @@ import subprocess
 import sys
 import urllib.parse
 import re
+import zlib
 from typing import Any
 
 from yt_dlp import YoutubeDL
@@ -230,6 +231,119 @@ _REASONS_BY_STAGE = {
     ),
     UNCLASSIFIED: frozenset({UNCLASSIFIED}),
 }
+
+
+class _ResponseEncodingError(Exception):
+    """The bounded response normalization contract rejected the input."""
+
+
+class _ResponseBodyTooLarge(Exception):
+    """The normalized response exceeded the existing fallback body bound."""
+
+
+# This is deliberately a small, explicit compatibility surface. The broker
+# still admits at most MAX_BODY raw response bytes; the decoder below adds no
+# new network or storage authority. A response may carry one content-coding
+# only, and all text is normalized to UTF-8 before fallback admission.
+ADMITTED_CONTENT_CODINGS = frozenset({"identity", "gzip", "deflate"})
+ADMITTED_CHARSETS = frozenset({"utf-8"})
+
+
+def _response_header(response: Response, name: str) -> str | None:
+    """Return one well-formed response header, rejecting ambiguity."""
+    values: list[str] = []
+    headers = getattr(response, "headers", {})
+    try:
+        items = headers.items()
+    except AttributeError:
+        raise _ResponseEncodingError from None
+    for header_name, value in items:
+        if not isinstance(header_name, str) or not isinstance(value, str):
+            raise _ResponseEncodingError
+        if header_name.lower() == name:
+            values.append(value)
+    if len(values) > 1:
+        raise _ResponseEncodingError
+    return values[0] if values else None
+
+
+def _response_content_coding(response: Response) -> str:
+    value = _response_header(response, "content-encoding")
+    if value is None:
+        return "identity"
+    tokens = tuple(token.strip().lower() for token in value.split(","))
+    if len(tokens) != 1 or tokens[0] not in ADMITTED_CONTENT_CODINGS:
+        raise _ResponseEncodingError
+    return tokens[0]
+
+
+def _response_charset(response: Response) -> str:
+    value = _response_header(response, "content-type")
+    if value is None:
+        return "utf-8"
+    parts = value.split(";")
+    if not parts[0].strip():
+        raise _ResponseEncodingError
+    charset: str | None = None
+    for parameter in parts[1:]:
+        name_and_value = parameter.split("=", 1)
+        if len(name_and_value) != 2:
+            raise _ResponseEncodingError
+        parameter_name, parameter_value = (part.strip().lower() for part in name_and_value)
+        if parameter_name != "charset":
+            continue
+        if charset is not None:
+            raise _ResponseEncodingError
+        if len(parameter_value) >= 2 and parameter_value[0] == parameter_value[-1] == '"':
+            parameter_value = parameter_value[1:-1].strip()
+        charset = parameter_value
+    if charset is None:
+        charset = "utf-8"
+    if charset not in ADMITTED_CHARSETS:
+        raise _ResponseEncodingError
+    return charset
+
+
+def _bounded_inflate(body: bytes, *, wbits: int) -> bytes:
+    decoder = zlib.decompressobj(wbits)
+    try:
+        normalized = decoder.decompress(body, MAX_FALLBACK_TEXT_BYTES + 1)
+        if len(normalized) > MAX_FALLBACK_TEXT_BYTES:
+            raise _ResponseBodyTooLarge
+        flushed = decoder.flush(MAX_FALLBACK_TEXT_BYTES + 1 - len(normalized))
+    except _ResponseBodyTooLarge:
+        raise
+    except (ValueError, zlib.error):
+        raise _ResponseEncodingError from None
+    normalized += flushed
+    if len(normalized) > MAX_FALLBACK_TEXT_BYTES:
+        raise _ResponseBodyTooLarge
+    # Only one complete coding is admitted. This rejects truncation, trailing
+    # bytes and concatenated members instead of silently changing semantics.
+    if not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
+        raise _ResponseEncodingError
+    return normalized
+
+
+def _normalize_response_body(response: Response, body: bytes) -> str:
+    """Normalize one bounded broker response into the admitted UTF-8 text."""
+    if not isinstance(body, bytes):
+        raise _ResponseEncodingError
+    coding = _response_content_coding(response)
+    if coding == "gzip":
+        body = _bounded_inflate(body, wbits=16 + zlib.MAX_WBITS)
+    elif coding == "deflate":
+        body = _bounded_inflate(body, wbits=zlib.MAX_WBITS)
+    # The charset is checked even for identity so metadata cannot silently
+    # disagree with the bytes admitted to JSON/HTML parsing.
+    charset = _response_charset(response)
+    try:
+        text = body.decode(charset)
+    except UnicodeDecodeError:
+        raise _ResponseEncodingError from None
+    if len(text.encode("utf-8")) > MAX_FALLBACK_TEXT_BYTES:
+        raise _ResponseBodyTooLarge
+    return text
 
 
 class UnsupportedFormat(Exception):
@@ -536,8 +650,10 @@ def _fallback_response_body(response: Response, *, json_body: bool, stage: str) 
     if len(body) > MAX_FALLBACK_TEXT_BYTES:
         raise UnsupportedFormat(stage, RESPONSE_BODY_TOO_LARGE)
     try:
-        text = body.decode("utf-8")
-    except UnicodeDecodeError:
+        text = _normalize_response_body(response, body)
+    except _ResponseBodyTooLarge:
+        raise UnsupportedFormat(stage, RESPONSE_BODY_TOO_LARGE) from None
+    except _ResponseEncodingError:
         raise UnsupportedFormat(stage, RESPONSE_ENCODING) from None
     if json_body:
         try:
