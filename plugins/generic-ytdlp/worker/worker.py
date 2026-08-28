@@ -483,12 +483,35 @@ def _bilibili_video_id(url: str) -> str:
     return match.group(1)
 
 
+def _is_missing_initial_state_failure(error: DownloadError) -> bool:
+    """Admit only the frozen BiliBiliIE missing-state failure.
+
+    The pinned extractor preserves the originating ExtractorError on the
+    DownloadError. Inspecting its structured fields keeps this decision
+    independent of rendered diagnostics, while the exact message and
+    extractor name prevent this compatibility path from becoming a general
+    extractor retry.
+    """
+    if not isinstance(error, DownloadError):
+        return False
+    exc_info = getattr(error, "exc_info", None)
+    if not isinstance(exc_info, tuple) or len(exc_info) < 2:
+        return False
+    cause = exc_info[1]
+    return (
+        isinstance(cause, ExtractorError)
+        and cause.orig_msg == "Unable to extract initial state"
+        and cause.ie == "BiliBili"
+        and not cause.expected
+    )
+
+
 def _extract_initial_state_fallback(url: str) -> dict[str, Any]:
     """Run the narrow no-initial-state/detail-data continuation.
 
-    This is intentionally an explicit runtime-prep action. It only accepts a
-    Bilibili video-shaped URL, performs all requests through BrokerRH, and
-    emits one un-signed muxed durl. It is not a general extractor fallback.
+    This is an internal runtime-prep continuation. It only accepts a Bilibili
+    video-shaped URL, performs all requests through BrokerRH, and emits one
+    un-signed muxed durl. It is not a general extractor fallback.
     """
     video_id = _bilibili_video_id(url)
     with _ydl() as ydl:
@@ -614,8 +637,17 @@ def _formats(info: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _extract(url: str) -> dict[str, Any]:
-    with _ydl() as ydl:
-        info = ydl.extract_info(url, download=False)
+    try:
+        with _ydl() as ydl:
+            info = ydl.extract_info(url, download=False)
+    except DownloadError as error:
+        if not _is_missing_initial_state_failure(error):
+            raise
+        try:
+            _bilibili_video_id(url)
+        except InitialStateFallbackNotApplicable:
+            raise
+        return _extract_initial_state_fallback(url)
 
     if not isinstance(info, dict) or info.get("_type") in {"playlist", "multi_video"}:
         raise UnsupportedFormat
@@ -821,8 +853,6 @@ def main() -> int:
             result = _probe(url)
         elif action == "extract":
             result = _extract(url)
-        elif action == "extract-initial-state-fallback":
-            result = _extract_initial_state_fallback(url)
         elif action == "classification-request-policy":
             with _ydl() as ydl:
                 ydl.urlopen(Request(url, headers={"Authorization": "Bearer policy-sentinel"}))

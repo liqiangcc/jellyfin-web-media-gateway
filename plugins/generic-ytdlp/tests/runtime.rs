@@ -106,11 +106,11 @@ impl InitialStateFallbackFixtureBroker {
         if url.ends_with("/x/web-interface/nav") {
             if self.case == "secret" {
                 return json(
-                    r#"{"code":0,"data":{"isLogin":false,"wbi_img":{"img_url":"https://img.example.test/img","sub_url":"https://img.example.test/sub"},"token":"fixture-secret"}}"#,
+                    r#"{"code":0,"data":{"isLogin":false,"wbi_img":{"img_url":"https://img.example.test/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png","sub_url":"https://img.example.test/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png"},"token":"fixture-secret"}}"#,
                 );
             }
             return json(
-                r#"{"code":0,"data":{"isLogin":false,"wbi_img":{"img_url":"https://img.example.test/img","sub_url":"https://img.example.test/sub"}}}"#,
+                r#"{"code":0,"data":{"isLogin":false,"wbi_img":{"img_url":"https://img.example.test/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png","sub_url":"https://img.example.test/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png"}}}"#,
             );
         }
         if url.contains("/x/web-interface/view/detail?") {
@@ -293,17 +293,17 @@ fn extract_action_normalizes_generic_top_level_direct_media() {
 #[test]
 fn initial_state_fallback_continues_through_web_wbi_view_detail_and_playurl() {
     let broker = Arc::new(InitialStateFallbackFixtureBroker::new("success"));
-    let output = runner_with_backend(
+    let adapter = GenericYtdlpAdapter::with_runtime_runner(Arc::new(runner_with_backend(
         Arc::clone(&broker) as Arc<dyn BrokerBackend>,
         Duration::from_secs(5),
         None,
-    )
-    .run_action(
-        "extract-initial-state-fallback",
-        &Url::parse("https://www.bilibili.com/video/BV1ABC123456").unwrap(),
-    )
-    .unwrap();
-    let media = parse_machine_output(&output.stdout).unwrap();
+    )));
+    let locator = adapter
+        .recognize("https://www.bilibili.com/video/BV1ABC123456")
+        .unwrap()
+        .locator
+        .unwrap();
+    let media = adapter.resolve_detailed(&locator).unwrap();
     assert_eq!(media.title, "Synthetic detail");
     assert_eq!(media.streams.len(), 1);
     assert_eq!(
@@ -314,7 +314,10 @@ fn initial_state_fallback_continues_through_web_wbi_view_detail_and_playurl() {
         media.streams[0].url.as_str(),
         "https://media.example.test/fallback/video.mp4"
     );
-    assert_eq!(broker.requests.load(Ordering::Acquire), 5);
+    // The normal extract path performs webpage + WBI navigation + WBI detail first,
+    // then the bounded continuation performs webpage + nav + view + detail +
+    // playurl. This proves the fallback is reached through ProcessRunner::run.
+    assert_eq!(broker.requests.load(Ordering::Acquire), 8);
 }
 
 #[test]
@@ -331,19 +334,21 @@ fn initial_state_fallback_fail_closes_malformed_redirect_secret_and_media_shapes
         "unexpected",
     ] {
         let broker = Arc::new(InitialStateFallbackFixtureBroker::new(case));
-        let output = runner_with_backend(
+        let adapter = GenericYtdlpAdapter::with_runtime_runner(Arc::new(runner_with_backend(
             Arc::clone(&broker) as Arc<dyn BrokerBackend>,
             Duration::from_secs(5),
             None,
-        )
-        .run_action(
-            "extract-initial-state-fallback",
-            &Url::parse("https://www.bilibili.com/video/BV1ABC123456").unwrap(),
-        )
-        .unwrap();
+        )));
+        let locator = adapter
+            .recognize("https://www.bilibili.com/video/BV1ABC123456")
+            .unwrap()
+            .locator
+            .unwrap();
         assert_eq!(
-            parse_machine_output(&output.stdout),
-            Err(generic_ytdlp::ParseError::UnsupportedFormat),
+            adapter.resolve_detailed(&locator),
+            Err(generic_ytdlp::YtdlpError::Parse(
+                generic_ytdlp::ParseError::UnsupportedFormat
+            )),
             "fixture case {case} must remain unsupported"
         );
     }
