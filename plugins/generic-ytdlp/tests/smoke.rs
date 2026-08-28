@@ -84,8 +84,31 @@ fn unsupported_summary_is_bounded_and_machine_readable() {
 
     assert!(summary.contains("result: UNSUPPORTED"));
     assert!(summary.contains("process_error: UNSUPPORTED_FORMAT"));
+    assert!(!summary.contains("unsupported_stage:"));
     assert!(!summary.contains("source.example"));
     assert!(!summary.contains("item=unsupported"));
+}
+
+#[test]
+fn unsupported_stage_summary_is_fixed_and_bounded() {
+    let error =
+        generic_ytdlp::YtdlpError::Parse(generic_ytdlp::ParseError::UnsupportedFormatStage(
+            generic_ytdlp::UnsupportedStage::FallbackDetail,
+        ));
+    let summary = render_error_summary(&error, &BrokerDiagnosticsSnapshot::default());
+
+    assert!(summary.contains("result: UNSUPPORTED"));
+    assert!(summary.contains("process_error: UNSUPPORTED_FORMAT"));
+    assert!(summary.contains("unsupported_stage: FALLBACK_DETAIL"));
+    assert!(summary.len() < 256);
+    for sentinel in [
+        "exception-sentinel",
+        "https://fixture.invalid/?token=secret",
+        "Authorization",
+        "media-payload",
+    ] {
+        assert!(!summary.contains(sentinel));
+    }
 }
 
 #[test]
