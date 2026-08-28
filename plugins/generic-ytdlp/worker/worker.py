@@ -16,6 +16,7 @@ import socket
 import subprocess
 import sys
 import urllib.parse
+import re
 from typing import Any
 
 from yt_dlp import YoutubeDL
@@ -31,6 +32,38 @@ MAX_HEADERS = 32
 MAX_HEADER_NAME = 128
 MAX_HEADER_VALUE = 4096
 DIRECT_MEDIA_EXTENSIONS = frozenset({"mp4", "m4v", "m3u8"})
+BILIBILI_API_ORIGIN = "https://api.bilibili.com"
+MAX_FALLBACK_TEXT_BYTES = MAX_BODY
+SECRET_FIELD_NAMES = frozenset(
+    {
+        "authorization",
+        "cookie",
+        "set-cookie",
+        "proxy-authorization",
+        "access-token",
+        "refresh-token",
+        "id-token",
+        "api-key",
+        "signed-url",
+        "signature",
+        "token",
+        "sessdata",
+    }
+)
+SENSITIVE_QUERY_NAMES = frozenset(
+    {
+        "access_token",
+        "auth",
+        "expires",
+        "hdnts",
+        "key",
+        "sign",
+        "signature",
+        "signed",
+        "token",
+    }
+)
+_BILIBILI_VIDEO_RE = re.compile(r"^/video/(BV[0-9A-Za-z]{6,})/?$")
 # Keep this in lockstep with the Rust protocol bound. It is derived from the
 # existing R008 body/header bounds and fixed JSON-escaping/protocol overhead.
 MAX_FRAME = (
@@ -58,6 +91,10 @@ class RequestPolicyFailure(RequestError):
 
 class BrokerFailure(RequestError):
     """The bounded broker capability rejected or failed the operation."""
+
+
+class InitialStateFallbackNotApplicable(Exception):
+    """The opt-in continuation does not own this response shape."""
 
 
 def _remember_failure(code: str) -> None:
@@ -298,6 +335,179 @@ def _is_muxed(fmt: dict[str, Any]) -> bool:
     # a present value means that codec is known, while only the literal
     # ``none`` is an explicit audio-only/video-only marker.
     return fmt.get("vcodec") != "none" and fmt.get("acodec") != "none"
+
+
+def _reject_secret_fields(value: Any) -> None:
+    """Reject secret-bearing fixture/API data before it can be normalized."""
+    if isinstance(value, dict):
+        for name, child in value.items():
+            if not isinstance(name, str):
+                raise UnsupportedFormat
+            normalized = name.lower().replace("_", "-")
+            if normalized in SECRET_FIELD_NAMES:
+                raise UnsupportedFormat
+            _reject_secret_fields(child)
+    elif isinstance(value, list):
+        for child in value:
+            _reject_secret_fields(child)
+
+
+def _fallback_response_body(response: Response, *, json_body: bool) -> Any:
+    if not 200 <= int(response.status) < 300:
+        raise UnsupportedFormat
+    body = response.read(MAX_FALLBACK_TEXT_BYTES + 1)
+    if len(body) > MAX_FALLBACK_TEXT_BYTES:
+        raise UnsupportedFormat
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        raise UnsupportedFormat from None
+    if json_body:
+        try:
+            value = json.loads(text)
+        except (TypeError, ValueError):
+            raise UnsupportedFormat from None
+        if not isinstance(value, dict):
+            raise UnsupportedFormat
+        _reject_secret_fields(value)
+        return value
+    return text
+
+
+def _fallback_json(ydl: BrokerOnlyYDL, url: str) -> dict[str, Any]:
+    response = ydl.urlopen(Request(url))
+    value = _fallback_response_body(response, json_body=True)
+    if not isinstance(value, dict):
+        raise UnsupportedFormat
+    return value
+
+
+def _api_data(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("code") != 0 or not isinstance(payload.get("data"), dict):
+        raise UnsupportedFormat
+    return payload["data"]
+
+
+def _required_text(value: Any, *, max_bytes: int = MAX_TITLE_BYTES) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value.encode()) > max_bytes:
+        raise UnsupportedFormat
+    return value
+
+
+def _required_cid(value: Any) -> str:
+    if isinstance(value, bool):
+        raise UnsupportedFormat
+    if isinstance(value, int):
+        cid = str(value)
+    elif isinstance(value, str) and value.isdecimal():
+        cid = value
+    else:
+        raise UnsupportedFormat
+    if not 1 <= len(cid) <= 32:
+        raise UnsupportedFormat
+    return cid
+
+
+def _fallback_media_url(value: Any) -> str:
+    if not isinstance(value, str) or len(value.encode()) > MAX_URL_BYTES:
+        raise UnsupportedFormat
+    parsed = urllib.parse.urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.fragment:
+        raise UnsupportedFormat
+    if any(name.lower() in SENSITIVE_QUERY_NAMES for name, _ in urllib.parse.parse_qsl(parsed.query)):
+        raise UnsupportedFormat
+    extension = parsed.path.rsplit(".", 1)[-1].lower() if "." in parsed.path else ""
+    if extension not in {"mp4", "m4v"}:
+        raise UnsupportedFormat
+    return value
+
+
+def _bilibili_video_id(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    match = _BILIBILI_VIDEO_RE.fullmatch(parsed.path)
+    if not match or parsed.username or parsed.password:
+        raise InitialStateFallbackNotApplicable
+    return match.group(1)
+
+
+def _extract_initial_state_fallback(url: str) -> dict[str, Any]:
+    """Run the narrow no-initial-state/detail-data continuation.
+
+    This is intentionally an explicit runtime-prep action. It only accepts a
+    Bilibili video-shaped URL, performs all requests through BrokerRH, and
+    emits one un-signed muxed durl. It is not a general extractor fallback.
+    """
+    video_id = _bilibili_video_id(url)
+    with _ydl() as ydl:
+        webpage_response = ydl.urlopen(Request(url))
+        webpage = _fallback_response_body(webpage_response, json_body=False)
+        lowered = webpage.lower()
+        if "__initial_state__" in lowered:
+            raise InitialStateFallbackNotApplicable
+        redirected_url = getattr(webpage_response, "url", "")
+        if "bangumi" in redirected_url.lower() or "bangumi" in lowered:
+            raise UnsupportedFormat
+
+        nav = _api_data(_fallback_json(ydl, f"{BILIBILI_API_ORIGIN}/x/web-interface/nav"))
+        if not isinstance(nav.get("isLogin"), bool) or not isinstance(nav.get("wbi_img"), dict):
+            raise UnsupportedFormat
+        view = _api_data(
+            _fallback_json(ydl, f"{BILIBILI_API_ORIGIN}/x/web-interface/view?bvid={video_id}")
+        )
+        if view.get("bvid") != video_id:
+            raise UnsupportedFormat
+        view_title = _required_text(view.get("title"))
+        view_pages = view.get("pages")
+        if not isinstance(view_pages, list) or not view_pages or not isinstance(view_pages[0], dict):
+            raise UnsupportedFormat
+        view_cid = _required_cid(view_pages[0].get("cid"))
+
+        detail = _api_data(
+            _fallback_json(
+                ydl,
+                f"{BILIBILI_API_ORIGIN}/x/web-interface/view/detail?bvid={video_id}",
+            )
+        )
+        detail_view = detail.get("View")
+        if not isinstance(detail_view, dict) or detail_view.get("bvid") != video_id:
+            raise UnsupportedFormat
+        detail_title = _required_text(detail_view.get("title"))
+        detail_pages = detail_view.get("pages")
+        if (
+            not isinstance(detail_pages, list)
+            or not detail_pages
+            or not isinstance(detail_pages[0], dict)
+            or _required_cid(detail_pages[0].get("cid")) != view_cid
+            or detail_title != view_title
+        ):
+            raise UnsupportedFormat
+
+        playurl = _api_data(
+            _fallback_json(
+                ydl,
+                f"{BILIBILI_API_ORIGIN}/x/player/playurl?bvid={video_id}&cid={view_cid}&fnval=0",
+            )
+        )
+        durl = playurl.get("durl")
+        if not isinstance(durl, list) or len(durl) != 1 or "dash" in playurl:
+            raise UnsupportedFormat
+        segment = durl[0]
+        if not isinstance(segment, dict):
+            raise UnsupportedFormat
+        media_url = _fallback_media_url(segment.get("url"))
+    return {
+        "title": detail_title,
+        "protection": "clear",
+        "streams": [
+            {
+                "id": "fallback",
+                "protocol": "http-file",
+                "url": media_url,
+                "public_headers": {},
+                "upstream_access_ref": None,
+            }
+        ],
+    }
 
 
 def _formats(info: dict[str, Any]) -> list[dict[str, Any]]:
@@ -546,6 +756,8 @@ def main() -> int:
             result = _probe(url)
         elif action == "extract":
             result = _extract(url)
+        elif action == "extract-initial-state-fallback":
+            result = _extract_initial_state_fallback(url)
         elif action == "classification-request-policy":
             with _ydl() as ydl:
                 ydl.urlopen(Request(url, headers={"Authorization": "Bearer policy-sentinel"}))
