@@ -25,11 +25,11 @@ Sample: BV14V411W7r5
 Harness: scripts/generic-ytdlp-real-smoke.sh
 ```
 
-Formal R11 bootstrap authority is established only after old R10 execution authority has been revoked and the Coordinator Publication Gate publishes the Issue as a fresh ready Attempt. Pre-Publication-Gate materialization is non-executable history.
+This R11 bootstrap is non-executable until Coordinator Publication Gate publishes the Issue as a fresh ready Attempt.
 
 Read `AGENTS.md`, Issue #67/comments, `task.md`, lifecycle/freshness protocols, #105 Final Acceptance, #103/#101/#99/#97 Final Acceptance, and accepted #95/#85/#83/#79/#63/#73/#66/#60 authorities before claim.
 
-Attempt 10 preserved the exact runtime and Target identity, reached three 2xx broker requests, but still returned `process_error: EXTRACTOR_FAILURE` with no ResolvedMedia. #105 Attempt 3 is Final Accepted and PR #106 is merged; run only against exact merged Candidate `1a38e403a3252239822aeb2a784a20fdfd18c0a6`.
+Attempt 10 preserved exact runtime and Target identity, reached three 2xx broker requests, but still returned `process_error: EXTRACTOR_FAILURE` with no ResolvedMedia. #105 Attempt 3 is Final Accepted and PR #106 is merged; run only against exact merged Candidate `1a38e403a3252239822aeb2a784a20fdfd18c0a6`.
 
 #105 authority now preserves the production-shaped path:
 
@@ -92,9 +92,9 @@ broker_request_count > 0
 broker_error_code != BROKER_RESPONSE_SECRET_REJECTED
 ```
 
-The decisive new question is whether the accepted #105 normal-extract continuation turns the former stable `EXTRACTOR_FAILURE` into a valid current muxed `http-file | hls` ResolvedMedia on frozen sample `BV14V411W7r5`.
+The decisive new question is whether accepted #105 normal-extract continuation turns former stable `EXTRACTOR_FAILURE` into a valid current muxed `http-file | hls` ResolvedMedia on frozen sample `BV14V411W7r5`.
 
-If no ResolvedMedia is produced, require one fixed #101 classification and report only that code. For a repeated `EXTRACTOR_FAILURE` or `UNSUPPORTED_FORMAT`, post a bounded report and a precise next split recommendation; never inspect or publish raw stderr/exception text, and never claim Bilibili fixed.
+If no ResolvedMedia is produced, require one fixed #101 classification and report only that code. For repeated `EXTRACTOR_FAILURE` or `UNSUPPORTED_FORMAT`, post a bounded report and a precise next split recommendation; never inspect or publish raw stderr/exception text, and never claim Bilibili fixed.
 
 If a bounded blocker repeats, report it and STOP; do not fix it in #67. If media classification is reached, report only bounded protocol/stream/title fields and Overall `PASS | CONDITIONAL PASS | FAIL | BLOCKED`.
 
