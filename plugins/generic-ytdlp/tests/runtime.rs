@@ -25,7 +25,9 @@ impl BrokerBackend for FixtureBroker {
         assert_eq!(request.operation, "http");
         assert_eq!(request.method, "GET");
         assert!(request.headers.keys().all(|name| name != "Cookie"));
-        let (content_type, body) = if request.url.contains("item=muxed") {
+        let (content_type, body) = if request.url.contains("item=direct-fallback") {
+            ("application/octet-stream", Vec::new())
+        } else if request.url.contains("item=muxed") {
             ("video/mp4", Vec::new())
         } else if request.url.contains("item=near-limit") {
             let prefix =
@@ -170,6 +172,26 @@ fn extract_action_uses_frozen_ytdlp_and_normalizes_muxed_direct_media() {
     assert_eq!(
         media.streams[0].url.as_str(),
         "https://fixture.example.test/watch?item=muxed"
+    );
+}
+
+#[test]
+fn extract_action_normalizes_generic_top_level_direct_media() {
+    let output = runner(Duration::from_secs(5))
+        .run_action(
+            "extract",
+            &Url::parse(
+                "https://fixture.example.test/watch/direct-fallback.mp4?item=direct-fallback",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let media = parse_machine_output(&output.stdout).unwrap();
+    assert_eq!(media.title, "direct-fallback");
+    assert_eq!(media.streams.len(), 1);
+    assert_eq!(
+        media.streams[0].protocol,
+        site_adapter_api::StreamProtocol::HttpFile
     );
 }
 
