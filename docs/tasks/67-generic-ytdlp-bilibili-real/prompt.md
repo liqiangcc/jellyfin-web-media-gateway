@@ -12,26 +12,84 @@ env:ubuntu-arm64
 no active owner
 ```
 
-If Issue state is `status:draft`, `status:blocked`, `status:review`, or already owned, STOP.
+If it is draft, blocked, review, done, closed, or already owned: STOP.
 
 ## Frozen execution
 
 ```text
-Contract Revision: R12
-Attempt: 12
-Exact Candidate: 234c616f128deaee55156675d480d03ac5e8670d
+Contract Revision: R13
+Attempt: 13
+Exact Candidate: af65b2e2fec4cd3b3303db19415890f4052aa026
 Target: accepted Ubuntu ARM64 phone / gateway-runner
 Sample: BV14V411W7r5
 Harness: scripts/generic-ytdlp-real-smoke.sh
 ```
 
-This R12 bootstrap is non-executable until Coordinator Publication Gate publishes the Issue as a fresh ready Attempt.
+Task-package docs may be newer than the runtime Candidate. Do **not** execute moving main. The target checkout/build/harness used for J0–J4 must resolve exactly to `af65b2e2fec4cd3b3303db19415890f4052aa026`.
 
-Read `AGENTS.md`, Issue #67/comments, `task.md`, lifecycle/freshness protocols, #107 Final Acceptance, #105 Final Acceptance, #103/#101/#99/#97 Final Acceptance, and accepted #95/#85/#83/#79/#63/#73/#66/#60 authorities before claim.
+Read `AGENTS.md`, live #67 and its latest R13 comments, `docs/tasks/67-generic-ytdlp-bilibili-real/task.md`, lifecycle/freshness protocols, #109 Final Acceptance, #107/#105 Final Acceptance, and accepted #103/#101/#99/#97/#95/#85/#83/#79/#73/#63/#60/R008 authorities before claim.
 
-Attempt 11 executed exact Candidate `1a38e403a3252239822aeb2a784a20fdfd18c0a6` on the accepted low-privilege ARM64 target. The runtime/security/broker path remained healthy and reached four 2xx broker requests, but the bounded result was `process_error: UNSUPPORTED_FORMAT` with no current ResolvedMedia. That result did not prove DASH, separate A/V, or any other concrete media-format cause.
+## Why R13 exists
 
-#107 is now Final Accepted and PR #108 is merged as exact Candidate `234c616f128deaee55156675d480d03ac5e8670d`. It preserves top-level `UNSUPPORTED_FORMAT` and adds only one closed repository-owned secondary stage:
+Attempt 12 reached the real frozen sample through the accepted low-privilege ARM64, sandbox, broker and R008 path, but returned:
+
+```text
+process_error: UNSUPPORTED_FORMAT
+unsupported_stage: FALLBACK_WEBPAGE
+broker_request_count: 4
+```
+
+#109 is now Final Accepted and merged as exact R13 Candidate `af65b2e2fec4cd3b3303db19415890f4052aa026`. It preserves #101/#105/#107 and adds a closed stage-scoped `fallback_reason` plus a full deterministic offline traversal through:
+
+```text
+webpage
+→ nav / WBI
+→ view
+→ detail
+→ playurl
+→ current muxed http-file ResolvedMedia
+```
+
+#109 did not run the real site. R13 is the bounded real-target decision point.
+
+## Required path
+
+```text
+#79 frozen offline runtime
+→ accepted low-privilege ARM64 target
+→ direct/no-proxy frozen Bilibili sample
+→ #99 exact-Candidate clean-build binding
+→ #83 sandbox + #85 fd fallback
+→ R008 + #95 response containment
+→ #97 broker framing
+→ #101 bounded worker outcome
+→ normal frozen yt_dlp.extract_info(download=False)
+→ only if exact #105 admission matches: bounded continuation
+→ #107 unsupported_stage + #109 fallback_reason when unsupported
+→ current ResolvedMedia OR bounded actionable result
+```
+
+There is no caller-selectable fallback action.
+
+## Decisive question
+
+```text
+Can BV14V411W7r5 produce a valid current muxed http-file | hls ResolvedMedia?
+OR, if not, which exact closed unsupported_stage + fallback_reason pair owns the rejection?
+```
+
+A valid current ResolvedMedia is still required for #67 PASS.
+
+## Unsupported evidence
+
+If `process_error == UNSUPPORTED_FORMAT`, report exactly:
+
+```text
+unsupported_stage: <one fixed #107 value>
+fallback_reason: <one #109 reason valid for that stage>
+```
+
+The stage set is:
 
 ```text
 PRE_FALLBACK
@@ -44,53 +102,15 @@ MEDIA_SHAPE
 UNCLASSIFIED
 ```
 
-No arbitrary diagnostic string is authorized. Do not infer a concrete media-format cause merely from one of these stages.
+Use the exact stage→reason mapping frozen in `task.md`. Never invent, normalize, abbreviate or infer a reason from exception text, response content, URL/query data, headers, media metadata or site diagnostics.
 
-#105 authority still preserves the production-shaped path:
+If the exact Candidate returns `UNSUPPORTED_FORMAT` without a valid stage+reason pair, report BLOCKED and STOP. Do not patch #67.
 
-```text
-GenericYtdlpAdapter::resolve_detailed()
-→ ProcessRunner::run()
-→ normal extract first
-→ only on frozen BiliBiliIE missing-initial-state admission
-→ bounded webpage/nav/view/detail/playurl continuation
-→ #107 bounded unsupported-stage attribution when current contract rejects
-→ current ResolvedMedia OR bounded unsupported result
-```
+`PLAYURL_DASH_PRESENT` is only a bounded compatibility result. It is not permission to add DASH, remux, FFmpeg or separate-A/V support.
 
-There is no caller-selectable fallback action. Do not broaden or bypass #105 admission inside #67.
+## Real-site command
 
-Required path:
-
-```text
-#79 offline runtime
-→ direct/no-proxy frozen Bilibili sample
-→ #99 exact-Candidate clean-build sibling binding
-→ accepted ARM64 sandbox
-→ #85 fd fallback
-→ R008 + #95 response containment
-→ #97 bounded broker framing
-→ #101 bounded worker/extractor outcome envelope
-→ normal frozen yt_dlp.extract_info(download=False)
-→ #105 bounded continuation when exact admission matches
-→ #107 closed unsupported-stage attribution if unsupported
-→ current ResolvedMedia OR bounded actionable result
-```
-
-Hard boundaries:
-- verification-only; no implementation changes;
-- exact Candidate only, not moving main/package head;
-- no root/sudo/system install or Target package-index resolution;
-- no Cookie/login/profile/fingerprint/CAPTCHA/proxy/bypass;
-- no R008/#101/#99/#95/#97/#83/#85/#105/#107 weakening;
-- no direct worker network/alternate socket;
-- no Secret/full signed URL/raw stderr/exception text/page/media payload in Evidence;
-- no DASH/remux/FFmpeg/navigation/Browser/Web E2E/performance;
-- no interpretation of `MEDIA_SHAPE` as DASH/separate-A/V without separate bounded evidence;
-- production default remains DisabledRunner;
-- do not execute #68 or create a downstream compatibility Task.
-
-Run J0-J4 exactly from `task.md`. The only real-site harness is:
+Run J0–J4 exactly from `task.md`. The only accepted real resolver command is:
 
 ```text
 YTDLP_OFFLINE_BUNDLE="$BUNDLE_PATH" \
@@ -98,7 +118,9 @@ YTDLP_OFFLINE_BUNDLE="$BUNDLE_PATH" \
   'https://www.bilibili.com/video/BV14V411W7r5/'
 ```
 
-Decisive Attempt-12 signals:
+The smoke output is already bounded to safe fields and can emit fixed `unsupported_stage` / `fallback_reason` values. Do not inspect raw worker stderr or page/media payload to obtain more detail.
+
+## Required progression signals
 
 ```text
 runtime_cache: offline-hit | offline-prepared
@@ -110,24 +132,80 @@ broker_request_count > 0
 broker_error_code != BROKER_RESPONSE_SECRET_REJECTED
 ```
 
-The decisive question is now two-part:
+## Hard boundaries
+
+- verification-only; no implementation changes;
+- exact Candidate only, not moving main/package head;
+- no root/sudo/system install or Target dependency resolution;
+- no Cookie/login/profile/fingerprint/CAPTCHA/proxy/bypass;
+- no R008/#95/#97/#99/#83/#85/#101/#105/#107/#109 weakening;
+- preserve the accepted 96 KiB fallback bound;
+- no direct worker network or alternate socket;
+- no arbitrary diagnostic strings;
+- no raw stderr/traceback/exception text, source/redirect/media URL, request/response headers, page/body contents, signed query material, credentials, Secret, Cookie/Auth/token/profile/account state, or media payload in Evidence;
+- no DASH/separate-A/V/remux/FFmpeg/transcoding/navigation/Browser/Web E2E/performance;
+- production default remains DisabledRunner;
+- do not execute #68 and do not create a downstream compatibility Task.
+
+## Target identity
+
+Use the accepted shell exactly:
 
 ```text
-Can the frozen sample produce a valid current muxed http-file | hls ResolvedMedia?
-OR, if not, which exact closed #107 unsupported_stage owns the bounded rejection?
+setpriv --reuid=999 --regid=995 --groups=995,3003 \
+  --inh-caps=-all --ambient-caps=-all --bounding-set=-all -- env -i
 ```
 
-If `process_error == UNSUPPORTED_FORMAT`, report exactly one admitted stage from the list above. Do not inspect or publish raw stderr/exception text, page data, URLs, headers, tokens, or media payloads to explain it. If the exact Candidate returns unsupported without an admitted stage, report that as a bounded evidence/instrumentation blocker and STOP; do not patch #67.
+with:
 
-If a different bounded #101 blocker occurs, report only the fixed process code and STOP; do not repair it in #67.
+```text
+HOME=/home/gateway-runner
+USER=gateway-runner
+LOGNAME=gateway-runner
+PATH=/home/gateway-runner/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+```
 
-If media classification succeeds, report only bounded protocol/stream/title fields and Overall `PASS | CONDITIONAL PASS | FAIL | BLOCKED`.
+Do not replace it with root/capsh/inherited environment.
 
-Report Claims R1-R10 from `task.md` and downstream #68 readiness.
+## Report
 
-This prompt is execution authority only after Coordinator Publication Gate records PUBLISH and live #67 is `status:ready + env:ubuntu-arm64 + no active owner`. Use the exact accepted low-privilege ARM64 `setpriv --reuid=999 --regid=995 --groups=995,3003 --inh-caps=-all --ambient-caps=-all --bounding-set=-all -- env -i` shell with `HOME=/home/gateway-runner USER=gateway-runner LOGNAME=gateway-runner PATH=/home/gateway-runner/.cargo/bin:/usr/local/bin:/usr/bin:/bin`; do not replace it with root/capsh/inherited environment.
+Report J0–J4 and Claims R1–R12 from `task.md`.
 
-Normal completion:
+Bounded report fields may include:
+
+```text
+Exact Candidate
+host arch/kernel/uid privilege class
+runtime_cache
+direct site status class
+sandbox/fd/R008/broker result
+broker_status_class
+broker_error_code
+broker_request_count
+protocol
+stream_count
+title_length
+process_error
+unsupported_stage
+fallback_reason
+cleanup/safe-output scan
+R1-R12
+Overall
+#68 readiness
+```
+
+Never include prohibited raw material.
+
+Result semantics are exactly those in `task.md`:
+
+- `PASS`: valid current muxed `http-file | hls` ResolvedMedia, all safety/cleanup gates pass;
+- `CONDITIONAL PASS`: only valid ResolvedMedia with bounded non-security limitation;
+- `FAIL`: complete accepted path but current contract rejects, including valid `UNSUPPORTED_FORMAT + stage + reason`;
+- `BLOCKED`: environment/provenance/security/runtime/site/evidence blocker or invalid/missing stage+reason.
+
+## Stop boundary
+
+Normal:
 
 ```text
 [EXECUTION REPORT]
@@ -145,4 +223,6 @@ Blocked:
 → STOP
 ```
 
-Worker must not merge, set `status:done`, close #67, implement a discovered blocker, create a downstream compatibility Task, or start #68.
+Worker must not merge, set `status:done`, close #67, implement a discovered blocker, create another compatibility Task, or start #68.
+
+This prompt becomes execution authority only after the Coordinator R13 Publication Gate records PUBLISH and live #67 is `status:ready + env:ubuntu-arm64 + no active owner`.
