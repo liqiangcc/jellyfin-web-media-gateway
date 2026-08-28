@@ -710,7 +710,7 @@ fn explicit_runtime_constructor_resolves_through_current_adapter_contract() {
 #[test]
 fn extract_action_rejects_separate_or_unsupported_formats() {
     for (path, reason) in [
-        ("separate", UnsupportedReason::Unclassified),
+        ("separate", UnsupportedReason::MediaNoMuxedStream),
         ("unsupported", UnsupportedReason::Unclassified),
     ] {
         let output = runner(Duration::from_secs(5))
