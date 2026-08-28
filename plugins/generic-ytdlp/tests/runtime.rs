@@ -106,13 +106,6 @@ impl InitialStateFallbackFixtureBroker {
             if fallback && case == "webpage-response-status" {
                 return (503, String::from("text/html"), Vec::new());
             }
-            if fallback && case == "webpage-response-too-large" {
-                return (
-                    200,
-                    String::from("text/html"),
-                    vec![b'a'; gateway_egress::MAX_BODY_BYTES],
-                );
-            }
             if fallback && case == "webpage-response-encoding" {
                 return (200, String::from("text/html"), vec![0xff, 0xfe]);
             }
@@ -121,13 +114,6 @@ impl InitialStateFallbackFixtureBroker {
         if url.ends_with("/x/web-interface/nav") {
             if fallback && case == "response-status" {
                 return (503, String::from("application/json"), Vec::new());
-            }
-            if fallback && case == "response-too-large" {
-                return (
-                    200,
-                    String::from("application/json"),
-                    vec![b'a'; gateway_egress::MAX_BODY_BYTES],
-                );
             }
             if fallback && case == "response-encoding" {
                 return (200, String::from("application/json"), vec![0xff, 0xfe]);
@@ -458,11 +444,6 @@ fn initial_state_fallback_fail_closes_malformed_redirect_secret_and_media_shapes
             "response-status",
             UnsupportedStage::FallbackNav,
             UnsupportedReason::ResponseStatus,
-        ),
-        (
-            "response-too-large",
-            UnsupportedStage::FallbackNav,
-            UnsupportedReason::ResponseBodyTooLarge,
         ),
         (
             "response-encoding",

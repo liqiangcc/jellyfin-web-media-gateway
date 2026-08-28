@@ -37,6 +37,7 @@ class DirectFallbackNormalizationTest(unittest.TestCase):
             worker.RESPONSE_ENCODING,
             worker.RESPONSE_JSON,
             worker.RESPONSE_SECRET_FIELD,
+            worker.RESPONSE_READ,
             worker.WEBPAGE_NOT_HTML,
             worker.WEBPAGE_BANGUMI,
             worker.NAV_API_ENVELOPE,
@@ -78,6 +79,44 @@ class DirectFallbackNormalizationTest(unittest.TestCase):
             worker.UnsupportedFormat(worker.FALLBACK_NAV, worker.VIEW_TITLE).stage,
             worker.UNCLASSIFIED,
         )
+
+    def test_fallback_response_body_classifies_bound_and_read_failures(self):
+        class OversizedResponse:
+            status = 200
+
+            def read(self, limit):
+                return b"x" * limit
+
+        class ReadFailureResponse:
+            status = 200
+
+            def read(self, limit):
+                raise RuntimeError("fixture failure must not cross the boundary")
+
+        for stage in (worker.FALLBACK_WEBPAGE, worker.FALLBACK_NAV):
+            with self.subTest(stage=stage, failure="oversized"):
+                with self.assertRaises(worker.UnsupportedFormat) as raised:
+                    worker._fallback_response_body(
+                        OversizedResponse(),
+                        json_body=stage != worker.FALLBACK_WEBPAGE,
+                        stage=stage,
+                    )
+                self.assertEqual(
+                    (raised.exception.stage, raised.exception.reason),
+                    (stage, worker.RESPONSE_BODY_TOO_LARGE),
+                )
+
+            with self.subTest(stage=stage, failure="read"):
+                with self.assertRaises(worker.UnsupportedFormat) as raised:
+                    worker._fallback_response_body(
+                        ReadFailureResponse(),
+                        json_body=stage != worker.FALLBACK_WEBPAGE,
+                        stage=stage,
+                    )
+                self.assertEqual(
+                    (raised.exception.stage, raised.exception.reason),
+                    (stage, worker.RESPONSE_READ),
+                )
 
     def test_frozen_generic_ie_offline_fixture_has_top_level_direct_shape(self):
         with worker._ydl() as ydl:

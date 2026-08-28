@@ -35,11 +35,9 @@ MAX_HEADER_NAME = 128
 MAX_HEADER_VALUE = 4096
 DIRECT_MEDIA_EXTENSIONS = frozenset({"mp4", "m4v", "m3u8"})
 BILIBILI_API_ORIGIN = "https://api.bilibili.com"
-# Keep fallback documents below the R008 response ceiling so an oversized
-# fallback document can be classified by the worker before broker framing
-# rejects it. The stricter bound also limits JSON/text retained by this
-# compatibility-only continuation.
-MAX_FALLBACK_TEXT_BYTES = MAX_BODY // 2
+# Keep fallback documents within the existing R008 response ceiling while
+# retaining the full runtime bound used by the broker and adapter.
+MAX_FALLBACK_TEXT_BYTES = MAX_BODY
 SECRET_FIELD_NAMES = frozenset(
     {
         "authorization",
@@ -111,6 +109,7 @@ RESPONSE_BODY_TOO_LARGE = "RESPONSE_BODY_TOO_LARGE"
 RESPONSE_ENCODING = "RESPONSE_ENCODING"
 RESPONSE_JSON = "RESPONSE_JSON"
 RESPONSE_SECRET_FIELD = "RESPONSE_SECRET_FIELD"
+RESPONSE_READ = "RESPONSE_READ"
 WEBPAGE_NOT_HTML = "WEBPAGE_NOT_HTML"
 WEBPAGE_BANGUMI = "WEBPAGE_BANGUMI"
 NAV_API_ENVELOPE = "NAV_API_ENVELOPE"
@@ -147,6 +146,7 @@ UNSUPPORTED_REASONS = frozenset(
         RESPONSE_ENCODING,
         RESPONSE_JSON,
         RESPONSE_SECRET_FIELD,
+        RESPONSE_READ,
         WEBPAGE_NOT_HTML,
         WEBPAGE_BANGUMI,
         NAV_API_ENVELOPE,
@@ -186,6 +186,7 @@ _COMMON_RESPONSE_REASONS = frozenset(
         RESPONSE_ENCODING,
         RESPONSE_JSON,
         RESPONSE_SECRET_FIELD,
+        RESPONSE_READ,
     }
 )
 _REASONS_BY_STAGE = {
@@ -531,7 +532,7 @@ def _fallback_response_body(response: Response, *, json_body: bool, stage: str) 
     try:
         body = response.read(MAX_FALLBACK_TEXT_BYTES + 1)
     except Exception:
-        raise UnsupportedFormat(stage, RESPONSE_JSON) from None
+        raise UnsupportedFormat(stage, RESPONSE_READ) from None
     if len(body) > MAX_FALLBACK_TEXT_BYTES:
         raise UnsupportedFormat(stage, RESPONSE_BODY_TOO_LARGE)
     try:

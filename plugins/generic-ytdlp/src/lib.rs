@@ -362,6 +362,7 @@ pub enum UnsupportedReason {
     ResponseEncoding,
     ResponseJson,
     ResponseSecretField,
+    ResponseRead,
     WebpageNotHtml,
     WebpageBangumi,
     NavApiEnvelope,
@@ -402,6 +403,7 @@ impl UnsupportedReason {
             "RESPONSE_ENCODING" => Self::ResponseEncoding,
             "RESPONSE_JSON" => Self::ResponseJson,
             "RESPONSE_SECRET_FIELD" => Self::ResponseSecretField,
+            "RESPONSE_READ" => Self::ResponseRead,
             "WEBPAGE_NOT_HTML" => Self::WebpageNotHtml,
             "WEBPAGE_BANGUMI" => Self::WebpageBangumi,
             "NAV_API_ENVELOPE" => Self::NavApiEnvelope,
@@ -443,6 +445,7 @@ impl UnsupportedReason {
             Self::ResponseEncoding => "RESPONSE_ENCODING",
             Self::ResponseJson => "RESPONSE_JSON",
             Self::ResponseSecretField => "RESPONSE_SECRET_FIELD",
+            Self::ResponseRead => "RESPONSE_READ",
             Self::WebpageNotHtml => "WEBPAGE_NOT_HTML",
             Self::WebpageBangumi => "WEBPAGE_BANGUMI",
             Self::NavApiEnvelope => "NAV_API_ENVELOPE",
@@ -487,6 +490,7 @@ impl UnsupportedReason {
                     | ResponseEncoding
                     | ResponseJson
                     | ResponseSecretField
+                    | ResponseRead
                     | WebpageNotHtml
                     | WebpageBangumi
             ),
@@ -497,6 +501,7 @@ impl UnsupportedReason {
                     | ResponseEncoding
                     | ResponseJson
                     | ResponseSecretField
+                    | ResponseRead
                     | NavApiEnvelope
                     | NavShape
                     | NavWbiShape
@@ -509,6 +514,7 @@ impl UnsupportedReason {
                     | ResponseEncoding
                     | ResponseJson
                     | ResponseSecretField
+                    | ResponseRead
                     | ViewApiEnvelope
                     | ViewIdMismatch
                     | ViewTitle
@@ -522,6 +528,7 @@ impl UnsupportedReason {
                     | ResponseEncoding
                     | ResponseJson
                     | ResponseSecretField
+                    | ResponseRead
                     | DetailApiEnvelope
                     | DetailShape
                     | DetailIdMismatch
@@ -537,6 +544,7 @@ impl UnsupportedReason {
                     | ResponseEncoding
                     | ResponseJson
                     | ResponseSecretField
+                    | ResponseRead
                     | PlayurlApiEnvelope
                     | PlayurlDurlShape
                     | PlayurlDashPresent
@@ -1082,6 +1090,10 @@ mod tests {
             (
                 UnsupportedStage::FallbackWebpage,
                 UnsupportedReason::ResponseSecretField,
+            ),
+            (
+                UnsupportedStage::FallbackWebpage,
+                UnsupportedReason::ResponseRead,
             ),
             (
                 UnsupportedStage::FallbackWebpage,
