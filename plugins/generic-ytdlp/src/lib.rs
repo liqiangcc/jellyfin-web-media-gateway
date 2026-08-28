@@ -1053,6 +1053,164 @@ mod tests {
     }
 
     #[test]
+    fn parser_accepts_only_stage_reason_pairs_from_the_closed_taxonomy() {
+        let cases = [
+            (
+                UnsupportedStage::PreFallback,
+                UnsupportedReason::Unclassified,
+            ),
+            (
+                UnsupportedStage::PreFallback,
+                UnsupportedReason::MediaNoMuxedStream,
+            ),
+            (
+                UnsupportedStage::FallbackWebpage,
+                UnsupportedReason::ResponseStatus,
+            ),
+            (
+                UnsupportedStage::FallbackWebpage,
+                UnsupportedReason::ResponseBodyTooLarge,
+            ),
+            (
+                UnsupportedStage::FallbackWebpage,
+                UnsupportedReason::ResponseEncoding,
+            ),
+            (
+                UnsupportedStage::FallbackWebpage,
+                UnsupportedReason::ResponseJson,
+            ),
+            (
+                UnsupportedStage::FallbackWebpage,
+                UnsupportedReason::ResponseSecretField,
+            ),
+            (
+                UnsupportedStage::FallbackWebpage,
+                UnsupportedReason::WebpageNotHtml,
+            ),
+            (
+                UnsupportedStage::FallbackWebpage,
+                UnsupportedReason::WebpageBangumi,
+            ),
+            (
+                UnsupportedStage::FallbackNav,
+                UnsupportedReason::NavApiEnvelope,
+            ),
+            (UnsupportedStage::FallbackNav, UnsupportedReason::NavShape),
+            (
+                UnsupportedStage::FallbackNav,
+                UnsupportedReason::NavWbiShape,
+            ),
+            (UnsupportedStage::FallbackNav, UnsupportedReason::NavWbiUrl),
+            (
+                UnsupportedStage::FallbackView,
+                UnsupportedReason::ViewApiEnvelope,
+            ),
+            (
+                UnsupportedStage::FallbackView,
+                UnsupportedReason::ViewIdMismatch,
+            ),
+            (UnsupportedStage::FallbackView, UnsupportedReason::ViewTitle),
+            (UnsupportedStage::FallbackView, UnsupportedReason::ViewPages),
+            (UnsupportedStage::FallbackView, UnsupportedReason::ViewCid),
+            (
+                UnsupportedStage::FallbackDetail,
+                UnsupportedReason::DetailApiEnvelope,
+            ),
+            (
+                UnsupportedStage::FallbackDetail,
+                UnsupportedReason::DetailShape,
+            ),
+            (
+                UnsupportedStage::FallbackDetail,
+                UnsupportedReason::DetailIdMismatch,
+            ),
+            (
+                UnsupportedStage::FallbackDetail,
+                UnsupportedReason::DetailTitle,
+            ),
+            (
+                UnsupportedStage::FallbackDetail,
+                UnsupportedReason::DetailPages,
+            ),
+            (
+                UnsupportedStage::FallbackDetail,
+                UnsupportedReason::DetailCidMismatch,
+            ),
+            (
+                UnsupportedStage::FallbackDetail,
+                UnsupportedReason::DetailTitleMismatch,
+            ),
+            (
+                UnsupportedStage::FallbackPlayurl,
+                UnsupportedReason::PlayurlApiEnvelope,
+            ),
+            (
+                UnsupportedStage::FallbackPlayurl,
+                UnsupportedReason::PlayurlDurlShape,
+            ),
+            (
+                UnsupportedStage::FallbackPlayurl,
+                UnsupportedReason::PlayurlDashPresent,
+            ),
+            (
+                UnsupportedStage::FallbackPlayurl,
+                UnsupportedReason::PlayurlSegmentShape,
+            ),
+            (
+                UnsupportedStage::FallbackPlayurl,
+                UnsupportedReason::PlayurlSegmentFields,
+            ),
+            (
+                UnsupportedStage::MediaShape,
+                UnsupportedReason::MediaUrlShape,
+            ),
+            (
+                UnsupportedStage::MediaShape,
+                UnsupportedReason::MediaUrlSensitiveQuery,
+            ),
+            (
+                UnsupportedStage::MediaShape,
+                UnsupportedReason::MediaExtension,
+            ),
+            (
+                UnsupportedStage::MediaShape,
+                UnsupportedReason::MediaHeaders,
+            ),
+            (UnsupportedStage::MediaShape, UnsupportedReason::MediaTitle),
+            (
+                UnsupportedStage::MediaShape,
+                UnsupportedReason::MediaNoMuxedStream,
+            ),
+            (
+                UnsupportedStage::Unclassified,
+                UnsupportedReason::Unclassified,
+            ),
+        ];
+        for (stage, reason) in cases {
+            let envelope = format!(
+                r#"{{"error":"UNSUPPORTED_FORMAT","unsupported_stage":"{}","fallback_reason":"{}"}}"#,
+                stage.as_str(),
+                reason.as_str()
+            );
+            assert_eq!(
+                parse_machine_output(envelope.as_bytes()),
+                Err(ParseError::UnsupportedFormatStageReason(stage, reason))
+            );
+            assert!(reason.valid_for(stage));
+        }
+        for envelope in [
+            br#"{"error":"UNSUPPORTED_FORMAT","unsupported_stage":"FALLBACK_WEBPAGE","fallback_reason":"NAV_SHAPE"}"#.as_slice(),
+            br#"{"error":"UNSUPPORTED_FORMAT","unsupported_stage":"MEDIA_SHAPE","fallback_reason":"UNCLASSIFIED"}"#.as_slice(),
+            br#"{"error":"UNSUPPORTED_FORMAT","unsupported_stage":"FALLBACK_NAV","fallback_reason":"FORGED"}"#.as_slice(),
+            br#"{"error":"UNSUPPORTED_FORMAT","unsupported_stage":"FALLBACK_NAV","fallback_reason":null}"#.as_slice(),
+            br#"{"error":"UNSUPPORTED_FORMAT","unsupported_stage":"FALLBACK_NAV","fallback_reason":"NAV_SHAPE","extra":1}"#.as_slice(),
+            br#"{"error":"EXTRACTOR_FAILURE","unsupported_stage":"FALLBACK_NAV","fallback_reason":"NAV_SHAPE"}"#.as_slice(),
+        ] {
+            assert_eq!(parse_machine_output(envelope), Err(ParseError::UnsupportedSchema));
+        }
+    }
+
+    #[test]
     fn parser_maps_only_current_resolved_media_shape() {
         let media = parse_machine_output(&valid_json()).unwrap();
         assert_eq!(media.source_site, SITE_ID);

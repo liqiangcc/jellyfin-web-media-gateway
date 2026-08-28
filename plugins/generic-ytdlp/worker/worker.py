@@ -567,8 +567,13 @@ def _api_data(payload: dict[str, Any], stage: str, reason: str) -> dict[str, Any
 def _required_text(
     value: Any, *, stage: str, reason: str, max_bytes: int = MAX_TITLE_BYTES
 ) -> str:
-    if not isinstance(value, str) or not value.strip() or len(value.encode()) > max_bytes:
+    if not isinstance(value, str) or not value.strip():
         raise UnsupportedFormat(stage, reason)
+    try:
+        if len(value.encode()) > max_bytes:
+            raise UnsupportedFormat(stage, reason)
+    except UnicodeEncodeError:
+        raise UnsupportedFormat(stage, reason) from None
     return value
 
 
@@ -582,7 +587,7 @@ def _required_cid(value: Any, stage: str, reason: str) -> str:
     else:
         raise UnsupportedFormat(stage, reason)
     if not 1 <= len(cid) <= 32:
-        raise UnsupportedFormat(stage)
+        raise UnsupportedFormat(stage, reason)
     return cid
 
 
