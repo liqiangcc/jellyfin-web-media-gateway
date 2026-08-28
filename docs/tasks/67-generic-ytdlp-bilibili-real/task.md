@@ -6,33 +6,71 @@
 GitHub Issue: #67
 Task ID: GENERIC-YTDLP-BILIBILI-REAL
 Task kind: verification-only / real public network
-Contract Revision: R12
-Next Attempt: 12
-Exact Execution Candidate: 234c616f128deaee55156675d480d03ac5e8670d
+Contract Revision: R13
+Next Attempt: 13
+Exact Execution Candidate: af65b2e2fec4cd3b3303db19415890f4052aa026
 Preferred worker: ubuntu-arm64
-Eligible environment after publication: env:ubuntu-arm64
-Accepted extraction upstream: #66 Final Accepted
-Accepted harness authority: #73 R2 Final Accepted
-Accepted offline runtime authority: #79 Attempt 2 Final Accepted
-Accepted ARM64 sandbox authority: #83 Final Accepted
-Accepted legacy-kernel fd-isolation authority: #85 Final Accepted / merge 76b2032410b19ee18cfb14f00317b97f84e3b691
-Accepted anonymous response Secret containment authority: #95 Final Accepted / merge 804fd60343b081e5e055ba87f68e7939b106bb19
-Accepted broker IPC/wire authority: #97 Final Accepted / merge d9c038547ed2df695571f8dd4f732bdcdd4d5c19
-Accepted clean-build sandbox binding authority: #99 Final Accepted / merge cd95db5f0becb875455789f168b92c44a96a5260
-Accepted bounded extractor failure authority: #101 Final Accepted / merge c2834fd046cbf29a3602e9f13ae5153217c6c886
-Accepted ResolvedMedia compatibility authority: #103 Attempt 2 Coordinator ACCEPTED / PR #104 merge bec606fe0346e60fa5f05f98e27981fca8feffb2
-Accepted Bilibili missing-initial-state fallback authority: #105 Attempt 3 Final Accepted / PR #106 merge 1a38e403a3252239822aeb2a784a20fdfd18c0a6
-Accepted bounded unsupported-stage authority: #107 Attempt 1 Final Accepted / PR #108 merge 234c616f128deaee55156675d480d03ac5e8670d
-Accepted target environment: #63 Final Accepted
-Accepted security/runtime authority: #60 + R008 + ADR 0007
+Eligible environment: env:ubuntu-arm64
+Frozen sample: BV14V411W7r5
+Harness: scripts/generic-ytdlp-real-smoke.sh
 Downstream: #68 BILIBILI-WEB-E2E
 Freshness policy: dependency-aware
 Publication state: non-executable until Coordinator Publication Gate passes and live Issue is status:ready
 ```
 
-#67 remains verification-only. Attempt 11 executed exact Candidate `1a38e403a3252239822aeb2a784a20fdfd18c0a6` on the accepted low-privilege ARM64 target. J0/J1/J2/J4 passed; J3 reached four broker 2xx requests and returned the fixed #101 `UNSUPPORTED_FORMAT` result with no current ResolvedMedia. That result proved the runtime/target/security/broker path was intact, but it did not prove DASH, separate A/V, or any other concrete media cause.
+## Accepted authority
 
-#107 then added and Final Accepted one closed repository-owned secondary stage for `UNSUPPORTED_FORMAT`, preserving the top-level #101 error and all #105/R008/broker/sandbox/Secret boundaries. The admitted stages are only `PRE_FALLBACK`, `FALLBACK_WEBPAGE`, `FALLBACK_NAV`, `FALLBACK_VIEW`, `FALLBACK_DETAIL`, `FALLBACK_PLAYURL`, `MEDIA_SHAPE`, and `UNCLASSIFIED`. R12 re-freezes the same real-site verification contract on exact merged Candidate `234c616f128deaee55156675d480d03ac5e8670d`. It does not assume success and does not authorize any media-format repair.
+R13 consumes the already accepted chain without redefining it:
+
+```text
+#79 offline runtime
+→ #83 ARM64 sandbox
+→ #85 legacy-kernel fd isolation
+→ #95 anonymous response Secret containment
+→ #97 broker framing
+→ #99 exact-Candidate clean-build binding
+→ #101 bounded worker/extractor outcome taxonomy
+→ #103 current ResolvedMedia normalization
+→ #105 narrow Bilibili missing-initial-state continuation
+→ #107 closed unsupported_stage attribution
+→ #109 closed full fallback stage→reason attribution
+```
+
+Accepted #109 Candidate: `35f34fe5967d5e1d4a17671ab8b59c22bf2dacff`.
+Accepted PR: #110.
+Accepted merge/main authority and R13 Exact Execution Candidate: `af65b2e2fec4cd3b3303db19415890f4052aa026`.
+
+#109 proved offline that the repository-owned continuation can traverse:
+
+```text
+webpage
+→ nav / WBI
+→ view
+→ detail
+→ playurl
+→ current muxed http-file ResolvedMedia
+```
+
+and that unsupported outcomes can carry one fixed, stage-valid `fallback_reason`. #109 did **not** prove that the real Bilibili sample succeeds.
+
+## Parent evidence
+
+#67 Attempt 12 executed exact Candidate `234c616f128deaee55156675d480d03ac5e8670d` on the accepted low-privilege Ubuntu ARM64 target. J0/J1/J2/J4 passed and J3 reached the accepted broker path with four 2xx requests, but returned:
+
+```text
+result: UNSUPPORTED
+runtime_cache: offline-hit
+broker_status_class: 2xx
+broker_error_code: n/a
+broker_request_count: 4
+process_error: UNSUPPORTED_FORMAT
+unsupported_stage: FALLBACK_WEBPAGE
+protocol: n/a
+stream_count: 0
+Overall: FAIL
+```
+
+That was a valid compatibility FAIL, not an infrastructure blocker. R13 re-runs the same frozen public sample after #109 so that any remaining unsupported result is localized by both stage and reason.
 
 ## Frozen sample and runtime
 
@@ -41,7 +79,7 @@ site: Bilibili
 mode: public / no-login / non-DRM
 selector: BV14V411W7r5
 source: https://www.bilibili.com/video/BV14V411W7r5/
-formal network: direct / no bypass proxy
+formal network: direct / no proxy / no bypass
 
 yt-dlp: 2026.08.19
 source commit: 3a08beaf031ab68f966401ead017ac81fe8486cf
@@ -49,78 +87,53 @@ wheel sha256: 86a521c89017200d7cc20173b9f1d04c6588dda4eabad324b5c76d5269ee1bf9
 trust anchor: scripts/generic-ytdlp-offline-runtime.lock.json
 ```
 
+Exact accepted target launch boundary remains:
+
+```text
+setpriv --reuid=999 --regid=995 --groups=995,3003 \
+  --inh-caps=-all --ambient-caps=-all --bounding-set=-all -- env -i
+```
+
+with:
+
+```text
+HOME=/home/gateway-runner
+USER=gateway-runner
+LOGNAME=gateway-runner
+PATH=/home/gateway-runner/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+```
+
+Do not substitute root, sudo, capsh, inherited environment, a different identity, a different yt-dlp, or moving main.
+
 ## Goal
 
+Execute one bounded real-target verification on exact Candidate `af65b2e2fec4cd3b3303db19415890f4052aa026`:
+
 ```text
-#79 offline runtime
+frozen offline runtime
+→ accepted low-privilege ARM64 target
 → direct/no-proxy frozen Bilibili sample
-→ scripts/generic-ytdlp-real-smoke.sh
-→ #99 exact-Candidate clean-build sibling binding
-→ #83 ARM64 sandbox
-→ BrokerProcessRunner + #85 ENOSYS fd fallback
-→ R008Broker + #95 response Secret containment
-→ #97 bounded broker wire/framing
-→ #101 bounded worker/extractor outcome envelope
+→ exact-Candidate clean build
+→ sandbox / fd isolation
+→ R008Broker / Secret containment
+→ bounded broker framing
 → normal frozen yt_dlp.extract_info(download=False)
-→ if exact #105 admission matches: bounded missing-initial-state continuation
-→ #107 closed unsupported-stage attribution if current media contract rejects
+→ only if #105 admission matches: bounded Bilibili continuation
+→ #107 unsupported_stage + #109 fallback_reason if unsupported
 → GenericYtdlpAdapter
-→ current ResolvedMedia OR one bounded actionable unsupported stage
+→ current ResolvedMedia OR one bounded actionable unsupported pair
 ```
 
-Exact runtime Candidate for Attempt 12:
+The decisive question is:
 
 ```text
-234c616f128deaee55156675d480d03ac5e8670d
+Can BV14V411W7r5 produce a valid current muxed http-file | hls ResolvedMedia?
+OR, if not, which exact closed unsupported_stage + fallback_reason pair owns the rejection?
 ```
 
-Do not substitute moving main. If accepted semantic changes touch `plugins/generic-ytdlp/**`, `scripts/generic-ytdlp-*`, `gateway-egress/**`/R008/ADR0007, sandbox/fd-isolation, #101/#105/#107 authority, or current SiteAdapter/ResolvedMedia authority before claim, STOP for Coordinator freshness review.
+## Frozen stage taxonomy
 
-The accepted low-privilege ARM64 launch boundary remains the exact historical `setpriv --reuid=999 --regid=995 --groups=995,3003 --inh-caps=-all --ambient-caps=-all --bounding-set=-all -- env -i` shell with `HOME=/home/gateway-runner`, `USER=gateway-runner`, `LOGNAME=gateway-runner`, `PATH=/home/gateway-runner/.cargo/bin:/usr/local/bin:/usr/bin:/bin`, and the exact harness command; do not substitute root, capsh, a different identity, inherited environment, or a different shell.
-
-## Hard boundaries
-
-- no repository/product/security implementation changes;
-- no root/sudo/system package install;
-- no Target package-index/source resolution or replacement yt-dlp;
-- direct/no-proxy site Evidence only;
-- no Cookie/login/profile/fingerprint/CAPTCHA/proxy rotation/access-control bypass;
-- no R008 HTTP limit change, #101 taxonomy bypass, Secret declassification/store/replay, sandbox/fd bypass, alternate socket or direct worker egress;
-- do not broaden, bypass, or modify #105 fallback admission;
-- do not change, forge, broaden, or infer arbitrary meaning from #107 `unsupported_stage`;
-- no full signed media URL, query token, Secret header, raw stderr, exception text, page body or media payload in durable Evidence;
-- no DASH/remux/FFmpeg/navigation/Browser/Web E2E/performance;
-- production GenericYtdlpAdapter default remains DisabledRunner;
-- do not execute #68.
-
-## J0-J4
-
-J0 — verify exact Candidate `234c616f128deaee55156675d480d03ac5e8670d`, accepted low-privilege ARM64 Target, and exact #79 bundle provisioning without Target dependency resolution.
-
-J1 — verify repository trust anchor, wheel SHA/provenance, yt-dlp identity and `runtime_cache: offline-hit | offline-prepared`.
-
-J2 — independently re-confirm direct/no-proxy public HTTPS and frozen Bilibili page status using bounded curl checks with proxy variables cleared.
-
-J3 — run only:
-
-```text
-YTDLP_OFFLINE_BUNDLE="$BUNDLE_PATH" \
-  scripts/generic-ytdlp-real-smoke.sh \
-  'https://www.bilibili.com/video/BV14V411W7r5/'
-```
-
-Required progression signals:
-
-```text
-process_error != SANDBOX_UNAVAILABLE
-process_error != SPAWN_FAILED
-process_error != BROKER_PROTOCOL
-process_error != NONZERO_EXIT
-broker_request_count > 0
-broker_error_code != BROKER_RESPONSE_SECRET_REJECTED
-```
-
-Attempt 12 specifically tests the exact #105+#107 accepted path on the frozen public sample. If a current muxed `http-file | hls` ResolvedMedia is produced, report the existing bounded success fields. If no ResolvedMedia is produced and `process_error == UNSUPPORTED_FORMAT`, the report must include exactly one admitted #107 `unsupported_stage`:
+`unsupported_stage` remains exactly the accepted #107 set:
 
 ```text
 PRE_FALLBACK
@@ -133,122 +146,272 @@ MEDIA_SHAPE
 UNCLASSIFIED
 ```
 
-Do not inspect raw exception/stderr, page bodies, media URLs, or site response details to explain the stage. The stage is repository-control-flow metadata only. Do not translate `MEDIA_SHAPE` into DASH/separate-A/V unless a later Coordinator-controlled Task obtains separate bounded evidence that proves that concrete shape.
+## Frozen reason contract
 
-If resolution fails with another fixed #101 code, retain only the fixed classification (`REQUEST_POLICY_REJECTED`, `BROKER_FAILURE`, `EXTRACTOR_FAILURE`, `UNSUPPORTED_FORMAT`, or `UNEXPECTED_WORKER_FAILURE`). A malformed/unknown/forged stage, a missing stage for the exact Candidate's `UNSUPPORTED_FORMAT` worker result, or any raw diagnostic requirement is a bounded evidence/instrumentation blocker; do not repair it in #67.
+A `fallback_reason` is valid only with `process_error: UNSUPPORTED_FORMAT` and only when admitted for the accompanying stage. R13 accepts the #109 closed mapping:
 
-Capture only bounded safe fields: result, plugin, runtime_cache, broker_status_class, broker_error_code, broker_request_count, protocol, stream_count, title_length, process_error, and `unsupported_stage` only when admitted.
+```text
+PRE_FALLBACK
+  → UNCLASSIFIED | MEDIA_NO_MUXED_STREAM
 
-J4 — verify no staging/worker/sandbox/descendant/media payload leftovers; verified cache may remain; no Vault/profile/Secret state touched; safe-output leak scan PASS.
+FALLBACK_WEBPAGE
+  → RESPONSE_STATUS | RESPONSE_BODY_TOO_LARGE | RESPONSE_ENCODING
+  | RESPONSE_JSON | RESPONSE_SECRET_FIELD | RESPONSE_READ
+  | WEBPAGE_NOT_HTML | WEBPAGE_BANGUMI
+
+FALLBACK_NAV
+  → RESPONSE_STATUS | RESPONSE_BODY_TOO_LARGE | RESPONSE_ENCODING
+  | RESPONSE_JSON | RESPONSE_SECRET_FIELD | RESPONSE_READ
+  | NAV_API_ENVELOPE | NAV_SHAPE | NAV_WBI_SHAPE | NAV_WBI_URL
+
+FALLBACK_VIEW
+  → RESPONSE_STATUS | RESPONSE_BODY_TOO_LARGE | RESPONSE_ENCODING
+  | RESPONSE_JSON | RESPONSE_SECRET_FIELD | RESPONSE_READ
+  | VIEW_API_ENVELOPE | VIEW_ID_MISMATCH | VIEW_TITLE | VIEW_PAGES | VIEW_CID
+
+FALLBACK_DETAIL
+  → RESPONSE_STATUS | RESPONSE_BODY_TOO_LARGE | RESPONSE_ENCODING
+  | RESPONSE_JSON | RESPONSE_SECRET_FIELD | RESPONSE_READ
+  | DETAIL_API_ENVELOPE | DETAIL_SHAPE | DETAIL_ID_MISMATCH
+  | DETAIL_TITLE | DETAIL_PAGES | DETAIL_CID_MISMATCH | DETAIL_TITLE_MISMATCH
+
+FALLBACK_PLAYURL
+  → RESPONSE_STATUS | RESPONSE_BODY_TOO_LARGE | RESPONSE_ENCODING
+  | RESPONSE_JSON | RESPONSE_SECRET_FIELD | RESPONSE_READ
+  | PLAYURL_API_ENVELOPE | PLAYURL_DURL_SHAPE | PLAYURL_DASH_PRESENT
+  | PLAYURL_SEGMENT_SHAPE | PLAYURL_SEGMENT_FIELDS
+
+MEDIA_SHAPE
+  → MEDIA_URL_SHAPE | MEDIA_URL_SENSITIVE_QUERY | MEDIA_EXTENSION
+  | MEDIA_HEADERS | MEDIA_TITLE | MEDIA_NO_MUXED_STREAM
+
+UNCLASSIFIED
+  → UNCLASSIFIED
+```
+
+These are repository-owned control-flow constants only. Do not infer or expose site payload, response text, exception text, HTTP reason text, URL/query data, BVID/CID, codec/format IDs, credentials, tokens, or signed media material from the reason.
+
+## Hard boundaries
+
+- verification-only; no repository/product/security implementation changes;
+- exact Candidate only: `af65b2e2fec4cd3b3303db19415890f4052aa026`;
+- no root/sudo/system install or Target package-index/source resolution;
+- direct/no-proxy real-site Evidence only;
+- no Cookie/login/profile/fingerprint/CAPTCHA/proxy rotation/access-control bypass;
+- no direct worker socket, alternate egress, or R008 bypass;
+- preserve #95 Secret policy, #97 broker protocol, #99 clean-build binding, #83/#85 sandbox/fd authority;
+- preserve #101 top-level taxonomy, #105 normal-extract-first narrow admission, #107 stage taxonomy, #109 reason taxonomy and 96 KiB fallback bound;
+- no arbitrary diagnostics or reason strings;
+- no raw stderr/traceback/exception text, page/body content, request/response headers, source/redirect/media URLs, signed query material, credentials, Cookie/Auth/token/profile/account state, or media payload in durable Evidence;
+- no DASH support, separate-A/V composition, remux, FFmpeg, transcoding, navigation, Browser/Native Panel, Web E2E, performance work;
+- `PLAYURL_DASH_PRESENT` is an actionable compatibility result only, not authorization to implement DASH;
+- production GenericYtdlpAdapter default remains `DisabledRunner`;
+- do not execute #68 and do not create a downstream compatibility Task.
+
+## J0–J4
+
+### J0 — exact target and Candidate
+
+Prove:
+
+- target is the accepted Ubuntu ARM64 phone / `gateway-runner` class;
+- low-privilege identity/launch boundary is unchanged;
+- checkout/build/harness resolve to exact Candidate `af65b2e2fec4cd3b3303db19415890f4052aa026`;
+- no moving-main substitution;
+- no Target dependency resolution or root/sudo fallback.
+
+### J1 — frozen runtime provenance
+
+Verify trust anchor, wheel SHA/provenance, yt-dlp identity and:
+
+```text
+runtime_cache: offline-hit | offline-prepared
+```
+
+### J2 — bounded direct site reachability
+
+Independently re-confirm direct/no-proxy public HTTPS and the frozen Bilibili page status using bounded checks with proxy variables cleared. Do not retain page contents.
+
+### J3 — real resolver smoke
+
+Run only the accepted entry:
+
+```text
+YTDLP_OFFLINE_BUNDLE="$BUNDLE_PATH" \
+  scripts/generic-ytdlp-real-smoke.sh \
+  'https://www.bilibili.com/video/BV14V411W7r5/'
+```
+
+Required infrastructure progression signals:
+
+```text
+process_error != SANDBOX_UNAVAILABLE
+process_error != SPAWN_FAILED
+process_error != BROKER_PROTOCOL
+process_error != NONZERO_EXIT
+broker_request_count > 0
+broker_error_code != BROKER_RESPONSE_SECRET_REJECTED
+```
+
+If current media succeeds, report only bounded success fields:
+
+```text
+result
+plugin
+runtime_cache
+broker_status_class
+broker_error_code
+broker_request_count
+protocol
+stream_count
+title_length
+process_error: n/a
+unsupported_stage: n/a
+fallback_reason: n/a
+```
+
+A PASS candidate must have `protocol: http-file | hls` and `stream_count >= 1`.
+
+If `process_error == UNSUPPORTED_FORMAT`, report exactly one admitted `unsupported_stage` and exactly one stage-valid `fallback_reason`. Do not inspect raw diagnostics to explain it.
+
+If unsupported lacks a reason, contains an unknown reason, or presents a stage→reason pair not admitted above, classify the Attempt as BLOCKED by invalid bounded Evidence and STOP. Do not patch #67.
+
+If another fixed #101 outcome occurs, report only the fixed code and do not fabricate stage/reason.
+
+### J4 — cleanup and safe Evidence
+
+Verify:
+
+- no staging/worker/sandbox/descendant/media payload leftovers;
+- verified offline cache may remain;
+- no Vault/profile/Secret state touched;
+- safe-output leak scan PASS;
+- no prohibited raw data in report/artifact/log evidence retained for #67.
 
 ## Result semantics
 
-PASS requires exact Candidate, accepted #79/#83/#85/#95/#97/#99/#101/#103/#105/#107 path, direct site reachability, former SANDBOX/SPAWN/SECRET/BROKER_PROTOCOL/NONZERO blockers cleared, `broker_request_count > 0`, harness PASS, protocol `http-file | hls`, at least one current-contract muxed stream, and cleanup/security PASS.
+### PASS
 
-CONDITIONAL PASS is only a bounded non-security condition with valid current ResolvedMedia that still permits explicit #68 routing; Coordinator decides.
+Requires all of:
 
-FAIL is only after the complete accepted path executes correctly but the real source cannot be represented by the current first-playback contract. A stable `UNSUPPORTED_FORMAT` with one valid #107 `unsupported_stage` is an actionable compatibility FAIL, not authorization to implement a repair inside #67.
+- exact Candidate and accepted target/runtime/security path;
+- J0–J4 PASS;
+- direct site reachability;
+- broker path exercised (`broker_request_count > 0`);
+- no former sandbox/spawn/secret/broker protocol regression;
+- harness produces valid current `ResolvedMedia`;
+- protocol is `http-file | hls`;
+- at least one current-contract muxed stream;
+- cleanup/security Evidence PASS.
 
-BLOCKED includes offline provenance/transfer failure, repeated SANDBOX/SPAWN/SECRET/BROKER_PROTOCOL errors, a new bounded R008/protocol condition, site unreachability, stable `EXTRACTOR_FAILURE`, invalid/missing #107 stage evidence for an exact-Candidate unsupported result, or inability to produce safe Evidence. Do not repair blockers in #67.
+Only this result makes #67 eligible for Final Acceptance and allows Coordinator to consider publishing #68.
+
+### CONDITIONAL PASS
+
+Only when a valid current ResolvedMedia exists with a bounded non-security limitation. Coordinator decides; an unsupported result is never CONDITIONAL PASS.
+
+### FAIL
+
+The accepted path executes correctly but the frozen source cannot be represented by the current first-playback contract. The canonical compatibility FAIL is:
+
+```text
+process_error: UNSUPPORTED_FORMAT
+unsupported_stage: <valid #107 stage>
+fallback_reason: <valid #109 reason for that stage>
+```
+
+This is actionable Evidence but does not authorize a repair inside #67.
+
+### BLOCKED
+
+Includes:
+
+- provenance/transfer/Target failure;
+- site unreachability;
+- sandbox/spawn/broker/Secret regression;
+- stable `EXTRACTOR_FAILURE` or other infrastructure/runtime blocker;
+- exact-Candidate `UNSUPPORTED_FORMAT` without a valid stage+reason pair;
+- inability to produce bounded safe Evidence.
+
+Do not repair blockers in this verification Task.
 
 ## Claims
 
 ```text
-R1 exact #79/#83/#85/#95/#97/#99/#101/#103/#105/#107 runtime authority
-R2 Target dependency independence
+R1 exact #79/#83/#85/#95/#97/#99/#101/#103/#105/#107/#109 authority
+R2 Target dependency independence / low privilege
 R3 direct/no-bypass public accessibility
-R4 ARM64 sandbox + #85 fd/broker integrity
-R5 #95 response Secret containment
-R6 #97 bounded Rust/Python broker wire continuity
-R7 #105 bounded missing-initial-state continuation and current muxed HTTP/HLS result when applicable
-R8 #107 closed unsupported-stage attribution when current media contract rejects
-R9 Secret/evidence boundary
-R10 cleanup / low-privilege Target safety
+R4 ARM64 sandbox + fd/broker integrity
+R5 response Secret containment
+R6 bounded Rust/Python broker continuity
+R7 #105 continuation preserves current muxed HTTP/HLS semantics
+R8 #107 unsupported_stage attribution is closed and valid
+R9 #109 fallback_reason attribution is closed, stage-scoped and valid
+R10 safe Evidence / Secret boundary
+R11 cleanup / target safety
+R12 result is sufficient to decide #67 PASS or the next smallest compatibility authority
 ```
 
 ## Success criteria
 
-- J0-J4 execute or preserve one concrete bounded blocker.
-- Exact Candidate and accepted authorities are proven.
-- SANDBOX_UNAVAILABLE, SPAWN_FAILED, BROKER_RESPONSE_SECRET_REJECTED and BROKER_PROTOCOL remain cleared unless a new concrete regression is proven.
-- Broker traffic reaches R008 unless a new pre-broker blocker is classified.
-- The accepted #105 continuation is exercised only through the existing normal `extract` path; no caller-selectable fallback authority is introduced.
-- An exact-Candidate `UNSUPPORTED_FORMAT` result includes one admitted fixed #107 stage and no arbitrary diagnostic string.
-- Overall is PASS / CONDITIONAL PASS / FAIL / BLOCKED.
-- R1-R10 reported explicitly.
-- no implementation/security-policy change.
-- Worker reports, releases owner and STOPs; never starts #68.
+1. J0–J4 execute on exact Candidate or preserve one concrete bounded blocker.
+2. R1–R12 are reported explicitly.
+3. Existing infrastructure blockers remain cleared unless a new concrete regression is proven.
+4. #105 fallback is entered only through normal extract and exact accepted admission.
+5. Unsupported results contain one valid #107 stage and one valid #109 stage-scoped reason.
+6. No arbitrary diagnostic or prohibited payload is published.
+7. Overall is `PASS | CONDITIONAL PASS | FAIL | BLOCKED` using the frozen semantics above.
+8. No implementation/security change occurs.
+9. Worker posts the report, transitions to `status:review | status:blocked`, releases owner and STOPs.
+10. Worker never starts #68 or creates the next compatibility Task.
 
 ## Evidence contract
 
-Report bounded metadata only:
+Durable report may include only:
 
 ```text
 Attempt / worker / environment / UTC
 host arch/kernel/uid privilege class
 Exact Candidate SHA
 BV14V411W7r5
-#85/#95/#97/#99/#101/#103/#105/#107 accepted merge SHAs
+accepted #85/#95/#97/#99/#101/#103/#105/#107/#109 merge authorities
 bundle transfer class + trust-anchor/wheel/provenance result
 runtime_cache
 direct public/Bilibili status class
-sandbox + close_range/fd isolation
+sandbox + fd isolation
 R008 containment
 broker wire/framing result
 harness result
-protocol / stream_count / safe title length
+protocol / stream_count / safe title_length
 broker_status_class / broker_error_code / broker_request_count
 process_error
-unsupported_stage (only admitted fixed #107 value, or n/a)
+unsupported_stage (fixed admitted value or n/a)
+fallback_reason (fixed admitted value or n/a)
 cleanup + safe-output scan
-R1-R10
+R1-R12
 Overall
 #68 readiness yes/no + reason
 ```
 
-Never publish credentials, Secret header names/values, signed URLs/query parameters, Cookie/Auth/token/profile/account state, raw stderr/exception text/page body/media payload.
+Never publish credentials, Secret headers/values, source/redirect/media URLs, signed query parameters, Cookie/Auth/token/profile/account state, raw stderr/exception/page/body/media payload.
 
 ## Freshness / Integration Contract
 
-Freshness policy: dependency-aware
-
-Semantic authorities:
-- #107 Attempt 1 Final Accepted and PR #108 merged as `234c616f128deaee55156675d480d03ac5e8670d`; top-level `UNSUPPORTED_FORMAT` is preserved and only the closed fixed secondary stage is added.
-- #105 Attempt 3 Final Accepted and PR #106 merged as `1a38e403a3252239822aeb2a784a20fdfd18c0a6`; normal `extract` remains first and the bounded missing-initial-state continuation is reached only through the production-shaped adapter/process path.
-- #103 Attempt 2 Coordinator ACCEPTED and PR #104 merged as `bec606fe0346e60fa5f05f98e27981fca8feffb2`.
-- #79/#83/#85/#95/#97/#99/#101, R008, ADR 0007, #63 target, and `scripts/generic-ytdlp-real-smoke.sh` as accepted by the prior #67 contract.
+Semantic authority for this Attempt is exact merged main Candidate `af65b2e2fec4cd3b3303db19415890f4052aa026`.
 
 Semantic freshness domains:
-- `plugins/generic-ytdlp/**`, `scripts/generic-ytdlp-*`, GenericYtdlpAdapter/ResolvedMedia normalization, #101 taxonomy, #105 fallback admission, #107 stage attribution, broker/R008/Secret containment, sandbox/fd isolation, and the accepted ARM64 target launch boundary.
 
-Integration surfaces:
-- exact merged main Candidate, generic-ytdlp worker/runtime wiring, bounded stage rendering, broker/sandbox composition, and target harness invocation.
+- `plugins/generic-ytdlp/**`;
+- `scripts/generic-ytdlp-*`;
+- SiteAdapter/ResolvedMedia normalization consumed by generic-ytdlp;
+- #101/#105/#107/#109 error/stage/reason semantics;
+- R008/broker/Secret containment;
+- sandbox/fd isolation;
+- accepted ARM64 target launch boundary.
 
-Task-owned surfaces:
-- none; this is verification-only and must not modify repository/product/security implementation.
+Task-package docs committed after `af65b2e2...` do not replace the runtime Candidate. Before claim, the Worker must prove the target runtime checkout is exactly `af65b2e2...`.
 
-Authority/domain → Claim mapping:
-- #107 / closed unsupported-stage authority: R1, R8, R9.
-- #105 / normal-extract missing-initial-state continuation: R1, R7, R9.
-- #103 / GenericYtdlpAdapter direct media normalization: R1, R7, R8.
-- #79/#83/#85/#95/#97/#99/#101/R008 and target launch boundary: R1, R4, R5, R6, R9, R10.
-- exact Candidate and harness: R1, R2, R3, R7, R8.
-
-Integration verification:
-- JI1: confirm the target checkout and `scripts/generic-ytdlp-real-smoke.sh` resolve to exact Candidate `234c616f128deaee55156675d480d03ac5e8670d` before J0-J4.
-- JI2: n/a; target proof is the declared J0-J4 evidence authority.
-
-Unrelated-main policy:
-- existing exact-Candidate semantic Evidence remains valid; no rebase/full rerun solely because main advanced.
-
-Integration-overlap policy:
-- preserve accepted #103/#105/#107 semantic Evidence; no merge or source changes are performed by this verification Task. If the target harness cannot prove the exact Candidate, stop with bounded evidence.
-
-Semantic-authority-change policy:
-- reconcile the changed authority and rerun mapped Claims only when a Coordinator explicitly revises this contract; do not silently broaden the Attempt.
-
-Strict-main reason:
-- n/a; the real-site proof is frozen to the exact merged Integration Candidate above.
+If any accepted semantic change touches the freshness domains after this publication and before claim, STOP for Coordinator freshness review; do not silently substitute a later main.
 
 ## Stop boundary
 
@@ -257,4 +420,4 @@ normal: [EXECUTION REPORT] → status:review → release owner → STOP
 blocked: [BLOCKER REPORT] → status:blocked → release owner → STOP
 ```
 
-Worker must not merge, mark done/close, implement a blocker, create a downstream compatibility Task, or execute #68.
+Worker must not merge, mark done/close, implement a discovered blocker, create a downstream compatibility Task, or execute #68.
