@@ -6,8 +6,8 @@
 GitHub Issue: #67
 Task ID: GENERIC-YTDLP-BILIBILI-REAL
 Task kind: verification-only / real public network
-Contract Revision: R14
-Next Attempt: 14
+Contract Revision: R15
+Next Attempt: 15
 Exact Execution Candidate: 942a0a1843f8f207332ac646f12ffe6ab5017306
 Preferred worker: ubuntu-arm64
 Eligible environment: env:ubuntu-arm64
@@ -20,10 +20,11 @@ Publication state: non-executable until Coordinator Publication Gate passes and 
 
 ## Accepted authority
 
-R14 consumes the already accepted chain without redefining it:
+R15 consumes the already accepted chain without redefining it:
 
 ```text
 #79 offline runtime
+→ #90 trusted exact-source transport recovery
 → #83 ARM64 sandbox
 → #85 legacy-kernel fd isolation
 → #95 anonymous response Secret containment
@@ -37,13 +38,18 @@ R14 consumes the already accepted chain without redefining it:
 → #111 bounded fallback response normalization
 ```
 
+Accepted #90 Candidate: `152a16ebeb3794a19cf736cb9bdb00bdbe06f8af`.
+Accepted #90 PR: #91.
+Accepted #90 merge authority: `b7774f216e723d6b5eab90f712c2b746ad132f76`.
+#90 proves a generic exact-Candidate transport recovery path: direct smart-HTTP when available, or a hosted source-only `git archive` carrying immutable Candidate/tree/archive/file integrity metadata that is verified on the accepted ARM64 Target before use. Artifact/source transfer is transport only, not runtime or real-site Evidence.
+
 Accepted #109 Candidate: `35f34fe5967d5e1d4a17671ab8b59c22bf2dacff`.
 Accepted #109 PR: #110.
 Accepted #109 merge authority: `af65b2e2fec4cd3b3303db19415890f4052aa026`.
 
 Accepted #111 Candidate: `f402fd7f6b49a7afc2de744f4aa6371bb485385e`.
 Accepted #111 PR: #112.
-Accepted #111 merge/main authority and R14 Exact Execution Candidate: `942a0a1843f8f207332ac646f12ffe6ab5017306`.
+Accepted #111 merge/main authority and R15 Exact Execution Candidate: `942a0a1843f8f207332ac646f12ffe6ab5017306`.
 
 #109 proved offline that the repository-owned continuation can traverse:
 
@@ -78,7 +84,11 @@ stream_count: 0
 Overall: FAIL
 ```
 
-That was a valid compatibility FAIL, not an infrastructure blocker. #111 was then Final Accepted as the bounded repository-owned response normalization repair for this exact `RESPONSE_ENCODING` seam. R14 reruns the same frozen public sample on the accepted #111 merge authority without claiming that the prior real response used any specific content-coding or charset.
+That was a valid compatibility FAIL, not an infrastructure blocker. #111 was then Final Accepted as the bounded repository-owned response normalization repair for this exact `RESPONSE_ENCODING` seam.
+
+#67 Attempt 14 then claimed the same exact runtime Candidate `942a0a1843f8f207332ac646f12ffe6ab5017306`, but stopped correctly at J0: the Target checkout remained on prior R13 Candidate `af65b2e2fec4cd3b3303db19415890f4052aa026`, and two bounded exact-Candidate Git fetch attempts did not transfer `942a0a18...`. J1–J4 were not run. This was an infrastructure/provenance BLOCKED result, not a compatibility result.
+
+R15 therefore preserves the exact #111 merge as runtime authority and changes only Candidate transport/provenance: direct exact-Candidate Git remains acceptable when it succeeds; otherwise the Worker may use the already-Final-Accepted #90 trusted source-bundle route for **the same exact Candidate**. No moving-main/package-head substitution or alternate source is allowed. The real-site decision remains unchanged.
 
 ## Frozen sample and runtime
 
@@ -118,7 +128,10 @@ Do not substitute root, sudo, capsh, inherited environment, a different identity
 Execute one bounded real-target verification on exact Candidate `942a0a1843f8f207332ac646f12ffe6ab5017306`:
 
 ```text
-frozen offline runtime
+exact Candidate source
+→ direct exact Git OR #90 trusted source-bundle transport
+→ Candidate/tree/archive/file integrity verification on Target
+→ frozen offline runtime
 → accepted low-privilege ARM64 target
 → direct/no-proxy frozen Bilibili sample
 → exact-Candidate clean build
@@ -157,7 +170,7 @@ UNCLASSIFIED
 
 ## Frozen reason contract
 
-A `fallback_reason` is valid only with `process_error: UNSUPPORTED_FORMAT` and only when admitted for the accompanying stage. R14 preserves the #109 closed mapping:
+A `fallback_reason` is valid only with `process_error: UNSUPPORTED_FORMAT` and only when admitted for the accompanying stage. R15 preserves the #109 closed mapping:
 
 ```text
 PRE_FALLBACK
@@ -204,11 +217,14 @@ These are repository-owned control-flow constants only. Do not infer or expose s
 
 - verification-only; no repository/product/security implementation changes;
 - exact Candidate only: `942a0a1843f8f207332ac646f12ffe6ab5017306`;
-- no root/sudo/system install or Target package-index/source resolution;
+- no root/sudo/system install or Target package-index/source dependency resolution;
+- Candidate transport may use only direct exact-Candidate Git or the accepted #90 trusted source-bundle route for `942a0a1843f8f207332ac646f12ffe6ab5017306`;
+- source-bundle transport must preserve #90 Candidate/tree/archive/file integrity verification, safe extraction, no `.git` state, and no transfer credentials in J1–J4;
+- artifact/source transfer is transport only and must never be treated as real-site/runtime compatibility Evidence;
 - direct/no-proxy real-site Evidence only;
 - no Cookie/login/profile/fingerprint/CAPTCHA/proxy rotation/access-control bypass;
 - no direct worker socket, alternate egress, or R008 bypass;
-- preserve #95 Secret policy, #97 broker protocol, #99 clean-build binding, #83/#85 sandbox/fd authority;
+- preserve #90 trusted transport authority, #95 Secret policy, #97 broker protocol, #99 clean-build binding, #83/#85 sandbox/fd authority;
 - preserve #101 top-level taxonomy, #105 normal-extract-first narrow admission, #107 stage taxonomy, #109 reason taxonomy, #111 bounded response normalization and the 96 KiB normalized fallback bound;
 - no arbitrary diagnostics or reason strings;
 - no raw stderr/traceback/exception text, page/body content, request/response headers, source/redirect/media URLs, signed query material, credentials, Cookie/Auth/token/profile/account state, or media payload in durable Evidence;
@@ -225,9 +241,12 @@ Prove:
 
 - target is the accepted Ubuntu ARM64 phone / `gateway-runner` class;
 - low-privilege identity/launch boundary is unchanged;
-- checkout/build/harness resolve to exact Candidate `942a0a1843f8f207332ac646f12ffe6ab5017306`;
-- no moving-main substitution;
-- no Target dependency resolution or root/sudo fallback.
+- exact source for Candidate `942a0a1843f8f207332ac646f12ffe6ab5017306` is established by either direct exact-Candidate Git or the accepted #90 trusted source-bundle path;
+- if #90 source-bundle transport is used, Target verifies exact Candidate SHA, manifest repository/schema, tree identity, archive SHA256, per-file integrity and safe extraction before J0 can PASS;
+- transported source contains no `.git` or credential state, and any workflow/artifact transfer credential is absent from J1–J4 runtime;
+- checkout/source tree, build and harness all resolve to exact Candidate `942a0a1843f8f207332ac646f12ffe6ab5017306`;
+- no moving-main/package-head or alternate-source substitution;
+- no Target package-index/source dependency resolution or root/sudo fallback.
 
 ### J1 — frozen runtime provenance
 
@@ -262,32 +281,13 @@ broker_request_count > 0
 broker_error_code != BROKER_RESPONSE_SECRET_REJECTED
 ```
 
-If current media succeeds, report only bounded success fields:
+Then classify only the bounded result.
 
-```text
-result
-plugin
-runtime_cache
-broker_status_class
-broker_error_code
-broker_request_count
-protocol
-stream_count
-title_length
-process_error: n/a
-unsupported_stage: n/a
-fallback_reason: n/a
-```
-
-A PASS candidate must have `protocol: http-file | hls` and `stream_count >= 1`.
-
-If `process_error == UNSUPPORTED_FORMAT`, report exactly one admitted `unsupported_stage` and exactly one stage-valid `fallback_reason`. Do not inspect raw diagnostics to explain it.
+If `process_error: UNSUPPORTED_FORMAT`, the result must also include exactly one valid `unsupported_stage` and one valid stage-scoped `fallback_reason` from the frozen mapping above.
 
 If unsupported lacks a reason, contains an unknown reason, or presents a stage→reason pair not admitted above, classify the Attempt as BLOCKED by invalid bounded Evidence and STOP. Do not patch #67.
 
-If another fixed #101 outcome occurs, report only the fixed code and do not fabricate stage/reason.
-
-### J4 — cleanup and safe Evidence
+### J4 — cleanup and safe-output boundary
 
 Verify:
 
@@ -308,12 +308,9 @@ Requires all of:
 - direct site reachability;
 - broker path exercised (`broker_request_count > 0`);
 - no former sandbox/spawn/secret/broker protocol regression;
-- harness produces valid current `ResolvedMedia`;
-- protocol is `http-file | hls`;
-- at least one current-contract muxed stream;
-- cleanup/security Evidence PASS.
-
-Only this result makes #67 eligible for Final Acceptance and allows Coordinator to consider publishing #68.
+- valid current muxed `http-file | hls` ResolvedMedia;
+- `stream_count >= 1`;
+- cleanup and safe-output PASS.
 
 ### CONDITIONAL PASS
 
@@ -327,13 +324,13 @@ The accepted path executes correctly but the frozen source cannot be represented
 process_error: UNSUPPORTED_FORMAT
 unsupported_stage: <valid #107 stage>
 fallback_reason: <valid #109 reason for that stage>
+protocol: n/a
+stream_count: 0
 ```
-
-This is actionable Evidence but does not authorize a repair inside #67.
 
 ### BLOCKED
 
-Includes:
+Any of:
 
 - provenance/transfer/Target failure;
 - site unreachability;
@@ -344,22 +341,22 @@ Includes:
 
 Do not repair blockers in this verification Task.
 
-## Claims
+## Verification claims
 
-```text
-R1 exact #79/#83/#85/#95/#97/#99/#101/#103/#105/#107/#109/#111 authority
-R2 Target dependency independence / low privilege
-R3 direct/no-bypass public accessibility
-R4 ARM64 sandbox + fd/broker integrity
-R5 response Secret containment
-R6 bounded Rust/Python broker continuity
-R7 #105 continuation preserves current muxed HTTP/HLS semantics
-R8 #107 unsupported_stage attribution is closed and valid
-R9 #109 fallback_reason attribution is closed, stage-scoped and valid
-R10 safe Evidence / Secret boundary
-R11 cleanup / target safety
-R12 result is sufficient to decide #67 PASS or the next smallest compatibility authority
-```
+Report R1–R12 explicitly:
+
+1. R1 exact Candidate and accepted authority chain established;
+2. R2 accepted low-privilege target and frozen runtime provenance;
+3. R3 direct/no-proxy site reachability;
+4. R4 ARM64 sandbox/fd/broker path;
+5. R5 response Secret containment;
+6. R6 bounded broker framing/continuity;
+7. R7 #105 normal-extract-first continuation semantics;
+8. R8 #107 closed unsupported stage semantics;
+9. R9 #109 stage-scoped fallback reason semantics;
+10. R10 no arbitrary/prohibited diagnostics or raw data;
+11. R11 cleanup/target safety;
+12. R12 bounded result sufficient for Coordinator decision.
 
 ## Success criteria
 
@@ -368,36 +365,35 @@ R12 result is sufficient to decide #67 PASS or the next smallest compatibility a
 3. Existing infrastructure blockers remain cleared unless a new concrete regression is proven.
 4. #105 fallback is entered only through normal extract and exact accepted admission.
 5. Unsupported results contain one valid #107 stage and one valid #109 stage-scoped reason.
-6. No arbitrary diagnostic or prohibited payload is published.
-7. Overall is `PASS | CONDITIONAL PASS | FAIL | BLOCKED` using the frozen semantics above.
-8. No implementation/security change occurs.
-9. Worker posts the report, transitions to `status:review | status:blocked`, releases owner and STOPs.
-10. Worker never starts #68 or creates the next compatibility Task.
+6. No raw diagnostic or prohibited data appears in durable Evidence.
+7. #68 is not executed by the Worker.
 
-## Evidence contract
+## Evidence template
 
-Durable report may include only:
+Bounded durable report may include only:
 
 ```text
 Attempt / worker / environment / UTC
 host arch/kernel/uid privilege class
 Exact Candidate SHA
 BV14V411W7r5
-accepted #85/#95/#97/#99/#101/#103/#105/#107/#109/#111 merge authorities
+accepted #90/#85/#95/#97/#99/#101/#103/#105/#107/#109/#111 merge authorities
 bundle transfer class + trust-anchor/wheel/provenance result
 runtime_cache
-direct public/Bilibili status class
-sandbox + fd isolation
-R008 containment
-broker wire/framing result
-harness result
-protocol / stream_count / safe title_length
-broker_status_class / broker_error_code / broker_request_count
+direct public/site status classes
+sandbox/fd result
+broker_status_class
+broker_error_code
+broker_request_count
+protocol
+stream_count
+title_length
 process_error
-unsupported_stage (fixed admitted value or n/a)
-fallback_reason (fixed admitted value or n/a)
-cleanup + safe-output scan
-R1-R12
+unsupported_stage
+fallback_reason
+J0–J4
+R1–R12
+cleanup/safe-output
 Overall
 #68 readiness yes/no + reason
 ```
@@ -412,21 +408,33 @@ Semantic freshness domains:
 
 - `plugins/generic-ytdlp/**`;
 - `scripts/generic-ytdlp-*`;
-- SiteAdapter/ResolvedMedia normalization consumed by generic-ytdlp;
-- #101/#105/#107/#109 error/stage/reason semantics and #111 response-normalization semantics;
+- generic-ytdlp runtime/broker framing;
 - R008/broker/Secret containment;
 - sandbox/fd isolation;
 - accepted ARM64 target launch boundary.
 
-Task-package docs committed after `942a0a18...` do not replace the runtime Candidate. Before claim, the Worker must prove the target runtime checkout is exactly `942a0a18...`.
+Task-package docs committed after `942a0a18...` do not replace the runtime Candidate. Before J0 can PASS, the Worker must prove the Target source/runtime tree is exactly Candidate `942a0a18...` through direct Git or the accepted #90 verified source-bundle route.
 
 If any accepted semantic change touches the freshness domains after this publication and before claim, STOP for Coordinator freshness review; do not silently substitute a later main.
 
 ## Stop boundary
 
+Normal:
+
 ```text
-normal: [EXECUTION REPORT] → status:review → release owner → STOP
-blocked: [BLOCKER REPORT] → status:blocked → release owner → STOP
+[EXECUTION REPORT]
+→ status:review
+→ release active owner
+→ STOP
 ```
 
-Worker must not merge, mark done/close, implement a discovered blocker, create a downstream compatibility Task, or execute #68.
+Blocked:
+
+```text
+[BLOCKER REPORT]
+→ status:blocked
+→ release active owner
+→ STOP
+```
+
+Worker must not merge, set `status:done`, close #67, implement a discovered blocker, create another compatibility Task, or start #68.

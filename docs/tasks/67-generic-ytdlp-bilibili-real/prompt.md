@@ -17,19 +17,19 @@ If it is draft, blocked, review, done, closed, or already owned: STOP.
 ## Frozen execution
 
 ```text
-Contract Revision: R14
-Attempt: 14
+Contract Revision: R15
+Attempt: 15
 Exact Candidate: 942a0a1843f8f207332ac646f12ffe6ab5017306
 Target: accepted Ubuntu ARM64 phone / gateway-runner
 Sample: BV14V411W7r5
 Harness: scripts/generic-ytdlp-real-smoke.sh
 ```
 
-Task-package docs may be newer than the runtime Candidate. Do **not** execute moving main. The target checkout/build/harness used for J0–J4 must resolve exactly to `942a0a1843f8f207332ac646f12ffe6ab5017306`.
+Task-package docs may be newer than the runtime Candidate. Do **not** execute moving main. The target source/build/harness used for J0–J4 must resolve exactly to `942a0a1843f8f207332ac646f12ffe6ab5017306`. Direct exact-Candidate Git is preferred when it succeeds; if it does not, only the already-accepted #90 trusted source-bundle route for this same Candidate may be used.
 
-Read `AGENTS.md`, live #67 and its latest R14 comments, `docs/tasks/67-generic-ytdlp-bilibili-real/task.md`, lifecycle/freshness protocols, #111 Final Acceptance, #109 Final Acceptance, #107/#105 Final Acceptance, and accepted #103/#101/#99/#97/#95/#85/#83/#79/#73/#63/#60/R008 authorities before claim.
+Read `AGENTS.md`, live #67 and its latest R15 comments, `docs/tasks/67-generic-ytdlp-bilibili-real/task.md`, lifecycle/freshness protocols, #111 Final Acceptance, #90 Final Acceptance, #109 Final Acceptance, #107/#105 Final Acceptance, and accepted #103/#101/#99/#97/#95/#85/#83/#79/#73/#63/#60/R008 authorities before claim.
 
-## Why R14 exists
+## Why R15 exists
 
 Attempt 13 reached the real frozen sample through the accepted low-privilege ARM64, sandbox, broker and R008 path, but returned:
 
@@ -40,7 +40,7 @@ fallback_reason: RESPONSE_ENCODING
 broker_request_count: 4
 ```
 
-#111 is now Final Accepted and merged as exact R14 Candidate `942a0a1843f8f207332ac646f12ffe6ab5017306`. It adds only a closed bounded response-normalization layer before existing UTF-8/JSON/HTML fallback admission:
+#111 is now Final Accepted and merged as exact R15 Candidate `942a0a1843f8f207332ac646f12ffe6ab5017306`. It adds only a closed bounded response-normalization layer before existing UTF-8/JSON/HTML fallback admission:
 
 ```text
 identity | gzip | deflate
@@ -51,12 +51,19 @@ identity | gzip | deflate
 
 Malformed, unknown, ambiguous, nested, trailing or truncated coding remains fail-closed. #111 did not run the real site and does not prove what coding/charset the R13 response actually used.
 
-R14 is therefore the next bounded real-target decision point.
+Attempt 14 did not test this compatibility change. It stopped at J0 because the Target remained on prior Candidate `af65b2e2fec4cd3b3303db19415890f4052aa026`, and two bounded direct exact-Candidate fetch attempts did not transfer `942a0a18...`. J1–J4 were not run. This is an infrastructure/provenance blocker only.
+
+#90 is already Final Accepted and merged as `b7774f216e723d6b5eab90f712c2b746ad132f76`. Its generic workflow accepts an exact `candidate_sha`, creates a hosted source-only archive with Candidate SHA, tree SHA, archive SHA256 and per-file manifest, and verifies that exact identity plus safe extraction on the accepted ARM64 Target. #90 Target Evidence proved both smart-HTTP exact fetch and trusted source-bundle verification 3/3.
+
+R15 is therefore the next bounded real-target decision point after restoring exact-Candidate provenance through this already-accepted transport authority.
 
 ## Required path
 
 ```text
-#79 frozen offline runtime
+exact Candidate `942a0a18...`
+→ direct exact Git OR #90 trusted source-bundle transport
+→ Target Candidate/tree/archive/file integrity verification
+→ #79 frozen offline runtime
 → accepted low-privilege ARM64 target
 → direct/no-proxy frozen Bilibili sample
 → #99 exact-Candidate clean-build binding
@@ -110,6 +117,22 @@ If the exact Candidate returns `UNSUPPORTED_FORMAT` without a valid stage+reason
 
 `PLAYURL_DASH_PRESENT` is only a bounded compatibility result. It is not permission to add DASH, remux, FFmpeg or separate-A/V support.
 
+## Exact-Candidate transport gate
+
+J0 must establish exact Candidate `942a0a1843f8f207332ac646f12ffe6ab5017306` before any runtime/site check.
+
+Accepted routes are exactly:
+
+```text
+A. direct exact-Candidate Git succeeds
+OR
+B. #90 trusted source-bundle for candidate_sha=942a0a1843f8f207332ac646f12ffe6ab5017306
+```
+
+If route B is used, preserve the accepted #90 verification contract: Candidate SHA, repository/schema, tree SHA, archive SHA256, per-file manifest/hash and safe extraction must all pass on Target. The extracted source must contain no `.git` or credential state. Any GitHub workflow/artifact transfer credential is transport-only and must be absent from the J1–J4 runtime environment.
+
+Do not use moving main/package head, a different commit, an unverified archive, Target package-index/source dependency resolution, root/sudo, or any alternate network/source bypass. Artifact/source transfer is not real-site Evidence.
+
 ## Real-site command
 
 Run J0–J4 exactly from `task.md`. The only accepted real resolver command is:
@@ -138,9 +161,11 @@ broker_error_code != BROKER_RESPONSE_SECRET_REJECTED
 
 - verification-only; no implementation changes;
 - exact Candidate only, not moving main/package head;
-- no root/sudo/system install or Target dependency resolution;
+- no root/sudo/system install or Target package-index/source dependency resolution;
+- exact source transport is limited to direct exact-Candidate Git or the accepted #90 trusted source-bundle for the same Candidate;
+- no unverified source bundle, moving main/package-head, alternate commit/source, `.git` or transfer credential state in runtime;
 - no Cookie/login/profile/fingerprint/CAPTCHA/proxy/bypass;
-- no R008/#95/#97/#99/#83/#85/#101/#105/#107/#109/#111 weakening;
+- no #90/R008/#95/#97/#99/#83/#85/#101/#105/#107/#109/#111 weakening;
 - preserve the accepted #111 96 KiB normalized fallback bound;
 - no direct worker network or alternate socket;
 - no arbitrary diagnostic strings;
@@ -227,4 +252,4 @@ Blocked:
 
 Worker must not merge, set `status:done`, close #67, implement a discovered blocker, create another compatibility Task, or start #68.
 
-This prompt becomes execution authority only after the Coordinator R14 Publication Gate records PUBLISH and live #67 is `status:ready + env:ubuntu-arm64 + no active owner`.
+This prompt becomes execution authority only after the Coordinator R15 Publication Gate records PUBLISH and live #67 is `status:ready + env:ubuntu-arm64 + no active owner`.
