@@ -61,7 +61,7 @@ Hard boundaries:
 Run J0-J4 exactly from `task.md`. The only real-site harness is:
 
 ```text
-YTDLP_OFFLINE_BUNDLE=<verified-bundle-path> \
+YTDLP_OFFLINE_BUNDLE="$BUNDLE_PATH" \
   scripts/generic-ytdlp-real-smoke.sh \
   'https://www.bilibili.com/video/BV14V411W7r5/'
 ```
