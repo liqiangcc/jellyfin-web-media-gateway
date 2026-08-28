@@ -32,7 +32,10 @@ class DirectFallbackNormalizationTest(unittest.TestCase):
             json_body=False,
             stage=worker.FALLBACK_WEBPAGE,
         )
-        self.assertEqual(webpage, "<html><body>fixture</body></html>")
+        self.assertIsInstance(webpage, worker._WebpageScan)
+        self.assertTrue(webpage.has_html)
+        self.assertFalse(webpage.has_initial_state)
+        self.assertFalse(webpage.has_bangumi)
 
         payload = b'{"code":0,"data":{"fixture":true}}'
         value = worker._fallback_response_body(
@@ -57,14 +60,14 @@ class DirectFallbackNormalizationTest(unittest.TestCase):
                         "Content-Encoding": coding,
                     },
                 )
-                self.assertEqual(
-                    worker._fallback_response_body(
-                        body,
-                        json_body=False,
-                        stage=worker.FALLBACK_WEBPAGE,
-                    ),
-                    payload.decode(),
+                scan = worker._fallback_response_body(
+                    body,
+                    json_body=False,
+                    stage=worker.FALLBACK_WEBPAGE,
                 )
+                self.assertTrue(scan.has_html)
+                self.assertFalse(scan.has_initial_state)
+                self.assertFalse(scan.has_bangumi)
 
     def test_malformed_or_truncated_admitted_codings_fail_closed(self):
         payload = b"<html>fixture</html>"
@@ -114,7 +117,7 @@ class DirectFallbackNormalizationTest(unittest.TestCase):
                 self.assertEqual(raised.exception.reason, worker.RESPONSE_ENCODING)
 
     def test_normalized_bound_is_enforced_after_decompression(self):
-        encoded = gzip.compress(b"x" * (worker.MAX_FALLBACK_TEXT_BYTES + 1), mtime=0)
+        encoded = gzip.compress(b"x" * (worker.MAX_WEBPAGE_SCAN_BYTES + 1), mtime=0)
         with self.assertRaises(worker.UnsupportedFormat) as raised:
             worker._fallback_response_body(
                 self._response(
@@ -125,6 +128,74 @@ class DirectFallbackNormalizationTest(unittest.TestCase):
                 stage=worker.FALLBACK_WEBPAGE,
             )
         self.assertEqual(raised.exception.reason, worker.RESPONSE_BODY_TOO_LARGE)
+
+    def test_json_normalized_bound_remains_the_existing_96_kib_limit(self):
+        payload = b'{"fixture":"' + b"x" * worker.MAX_FALLBACK_TEXT_BYTES + b'"}'
+        encoded = gzip.compress(payload, mtime=0)
+        with self.assertRaises(worker.UnsupportedFormat) as raised:
+            worker._fallback_response_body(
+                self._response(
+                    encoded,
+                    {"Content-Type": "application/json", "Content-Encoding": "gzip"},
+                ),
+                json_body=True,
+                stage=worker.FALLBACK_NAV,
+            )
+        self.assertEqual(
+            (raised.exception.stage, raised.exception.reason),
+            (worker.FALLBACK_NAV, worker.RESPONSE_BODY_TOO_LARGE),
+        )
+
+    def test_oversized_normalized_compressed_webpages_are_admitted_within_scan_bound(self):
+        payload = b"<html>" + b"x" * (worker.MAX_BODY + 4096) + b"</html>"
+        self.assertGreater(len(payload), worker.MAX_BODY)
+        self.assertLessEqual(len(payload), worker.MAX_WEBPAGE_SCAN_BYTES)
+        for coding, encoded in (
+            ("gzip", gzip.compress(payload, mtime=0)),
+            ("deflate", zlib.compress(payload)),
+        ):
+            with self.subTest(coding=coding):
+                self.assertLessEqual(len(encoded), worker.MAX_BODY)
+                scan = worker._scan_webpage_body(
+                    self._response(
+                        encoded,
+                        {
+                            "Content-Type": "text/html; charset=utf-8",
+                            "Content-Encoding": coding,
+                        },
+                    ),
+                    encoded,
+                    chunk_size=1,
+                )
+                self.assertTrue(scan.has_html)
+                self.assertFalse(scan.has_initial_state)
+                self.assertFalse(scan.has_bangumi)
+
+    def test_marker_detection_survives_input_and_decode_chunk_boundaries(self):
+        for marker, attribute in (
+            (b"<html", "has_html"),
+            (b"__initial_state__", "has_initial_state"),
+            (b"bangumi", "has_bangumi"),
+        ):
+            payload = b"prefix-" + marker + b"-suffix"
+            for coding, encoded in (
+                ("identity", payload),
+                ("gzip", gzip.compress(payload, mtime=0)),
+                ("deflate", zlib.compress(payload)),
+            ):
+                with self.subTest(marker=marker, coding=coding):
+                    scan = worker._scan_webpage_body(
+                        self._response(
+                            encoded,
+                            {
+                                "Content-Type": "text/html",
+                                "Content-Encoding": coding,
+                            },
+                        ),
+                        encoded,
+                        chunk_size=1,
+                    )
+                    self.assertTrue(getattr(scan, attribute))
 
     def test_normalized_body_continues_to_json_and_html_admission(self):
         with self.assertRaises(worker.UnsupportedFormat) as raised:
@@ -153,7 +224,7 @@ class DirectFallbackNormalizationTest(unittest.TestCase):
                 json_body=False,
                 stage=worker.FALLBACK_WEBPAGE,
             )
-            if "<html" not in webpage.lower():
+            if not webpage.has_html:
                 raise worker.UnsupportedFormat(
                     worker.FALLBACK_WEBPAGE, worker.WEBPAGE_NOT_HTML
                 )
@@ -172,14 +243,12 @@ class DirectFallbackNormalizationTest(unittest.TestCase):
                 "X-Public": "fixture",
             },
         )
-        self.assertEqual(
-            worker._fallback_response_body(
-                response,
-                json_body=False,
-                stage=worker.FALLBACK_WEBPAGE,
-            ),
-            payload.decode(),
+        scan = worker._fallback_response_body(
+            response,
+            json_body=False,
+            stage=worker.FALLBACK_WEBPAGE,
         )
+        self.assertTrue(scan.has_html)
         for headers in (
             {"Content-Type": "text/html; charset=iso-8859-1"},
             {"Content-Type": "text/html", "Content-Encoding": "gzip, deflate"},
@@ -189,6 +258,25 @@ class DirectFallbackNormalizationTest(unittest.TestCase):
                 with self.assertRaises(worker.UnsupportedFormat) as raised:
                     worker._fallback_response_body(
                         self._response(payload, headers),
+                        json_body=False,
+                        stage=worker.FALLBACK_WEBPAGE,
+                    )
+                self.assertEqual(raised.exception.reason, worker.RESPONSE_ENCODING)
+
+    def test_trailing_and_concatenated_coding_members_fail_closed(self):
+        payload = b"<html>fixture</html>"
+        for coding, encoded in (
+            ("gzip", gzip.compress(payload, mtime=0) + b"trailing"),
+            ("gzip", gzip.compress(payload, mtime=0) + gzip.compress(payload, mtime=0)),
+            ("deflate", zlib.compress(payload) + b"trailing"),
+        ):
+            with self.subTest(coding=coding):
+                with self.assertRaises(worker.UnsupportedFormat) as raised:
+                    worker._fallback_response_body(
+                        self._response(
+                            encoded,
+                            {"Content-Type": "text/html", "Content-Encoding": coding},
+                        ),
                         json_body=False,
                         stage=worker.FALLBACK_WEBPAGE,
                     )
