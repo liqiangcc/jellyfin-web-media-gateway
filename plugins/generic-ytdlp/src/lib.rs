@@ -356,6 +356,208 @@ impl UnsupportedStage {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UnsupportedReason {
+    ResponseStatus,
+    ResponseBodyTooLarge,
+    ResponseEncoding,
+    ResponseJson,
+    ResponseSecretField,
+    WebpageNotHtml,
+    WebpageBangumi,
+    NavApiEnvelope,
+    NavShape,
+    NavWbiShape,
+    NavWbiUrl,
+    ViewApiEnvelope,
+    ViewIdMismatch,
+    ViewTitle,
+    ViewPages,
+    ViewCid,
+    DetailApiEnvelope,
+    DetailShape,
+    DetailIdMismatch,
+    DetailTitle,
+    DetailPages,
+    DetailCidMismatch,
+    DetailTitleMismatch,
+    PlayurlApiEnvelope,
+    PlayurlDurlShape,
+    PlayurlDashPresent,
+    PlayurlSegmentShape,
+    PlayurlSegmentFields,
+    MediaUrlShape,
+    MediaUrlSensitiveQuery,
+    MediaExtension,
+    MediaHeaders,
+    MediaTitle,
+    MediaNoMuxedStream,
+    Unclassified,
+}
+
+impl UnsupportedReason {
+    pub fn from_wire(value: &str) -> Option<Self> {
+        Some(match value {
+            "RESPONSE_STATUS" => Self::ResponseStatus,
+            "RESPONSE_BODY_TOO_LARGE" => Self::ResponseBodyTooLarge,
+            "RESPONSE_ENCODING" => Self::ResponseEncoding,
+            "RESPONSE_JSON" => Self::ResponseJson,
+            "RESPONSE_SECRET_FIELD" => Self::ResponseSecretField,
+            "WEBPAGE_NOT_HTML" => Self::WebpageNotHtml,
+            "WEBPAGE_BANGUMI" => Self::WebpageBangumi,
+            "NAV_API_ENVELOPE" => Self::NavApiEnvelope,
+            "NAV_SHAPE" => Self::NavShape,
+            "NAV_WBI_SHAPE" => Self::NavWbiShape,
+            "NAV_WBI_URL" => Self::NavWbiUrl,
+            "VIEW_API_ENVELOPE" => Self::ViewApiEnvelope,
+            "VIEW_ID_MISMATCH" => Self::ViewIdMismatch,
+            "VIEW_TITLE" => Self::ViewTitle,
+            "VIEW_PAGES" => Self::ViewPages,
+            "VIEW_CID" => Self::ViewCid,
+            "DETAIL_API_ENVELOPE" => Self::DetailApiEnvelope,
+            "DETAIL_SHAPE" => Self::DetailShape,
+            "DETAIL_ID_MISMATCH" => Self::DetailIdMismatch,
+            "DETAIL_TITLE" => Self::DetailTitle,
+            "DETAIL_PAGES" => Self::DetailPages,
+            "DETAIL_CID_MISMATCH" => Self::DetailCidMismatch,
+            "DETAIL_TITLE_MISMATCH" => Self::DetailTitleMismatch,
+            "PLAYURL_API_ENVELOPE" => Self::PlayurlApiEnvelope,
+            "PLAYURL_DURL_SHAPE" => Self::PlayurlDurlShape,
+            "PLAYURL_DASH_PRESENT" => Self::PlayurlDashPresent,
+            "PLAYURL_SEGMENT_SHAPE" => Self::PlayurlSegmentShape,
+            "PLAYURL_SEGMENT_FIELDS" => Self::PlayurlSegmentFields,
+            "MEDIA_URL_SHAPE" => Self::MediaUrlShape,
+            "MEDIA_URL_SENSITIVE_QUERY" => Self::MediaUrlSensitiveQuery,
+            "MEDIA_EXTENSION" => Self::MediaExtension,
+            "MEDIA_HEADERS" => Self::MediaHeaders,
+            "MEDIA_TITLE" => Self::MediaTitle,
+            "MEDIA_NO_MUXED_STREAM" => Self::MediaNoMuxedStream,
+            "UNCLASSIFIED" => Self::Unclassified,
+            _ => return None,
+        })
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ResponseStatus => "RESPONSE_STATUS",
+            Self::ResponseBodyTooLarge => "RESPONSE_BODY_TOO_LARGE",
+            Self::ResponseEncoding => "RESPONSE_ENCODING",
+            Self::ResponseJson => "RESPONSE_JSON",
+            Self::ResponseSecretField => "RESPONSE_SECRET_FIELD",
+            Self::WebpageNotHtml => "WEBPAGE_NOT_HTML",
+            Self::WebpageBangumi => "WEBPAGE_BANGUMI",
+            Self::NavApiEnvelope => "NAV_API_ENVELOPE",
+            Self::NavShape => "NAV_SHAPE",
+            Self::NavWbiShape => "NAV_WBI_SHAPE",
+            Self::NavWbiUrl => "NAV_WBI_URL",
+            Self::ViewApiEnvelope => "VIEW_API_ENVELOPE",
+            Self::ViewIdMismatch => "VIEW_ID_MISMATCH",
+            Self::ViewTitle => "VIEW_TITLE",
+            Self::ViewPages => "VIEW_PAGES",
+            Self::ViewCid => "VIEW_CID",
+            Self::DetailApiEnvelope => "DETAIL_API_ENVELOPE",
+            Self::DetailShape => "DETAIL_SHAPE",
+            Self::DetailIdMismatch => "DETAIL_ID_MISMATCH",
+            Self::DetailTitle => "DETAIL_TITLE",
+            Self::DetailPages => "DETAIL_PAGES",
+            Self::DetailCidMismatch => "DETAIL_CID_MISMATCH",
+            Self::DetailTitleMismatch => "DETAIL_TITLE_MISMATCH",
+            Self::PlayurlApiEnvelope => "PLAYURL_API_ENVELOPE",
+            Self::PlayurlDurlShape => "PLAYURL_DURL_SHAPE",
+            Self::PlayurlDashPresent => "PLAYURL_DASH_PRESENT",
+            Self::PlayurlSegmentShape => "PLAYURL_SEGMENT_SHAPE",
+            Self::PlayurlSegmentFields => "PLAYURL_SEGMENT_FIELDS",
+            Self::MediaUrlShape => "MEDIA_URL_SHAPE",
+            Self::MediaUrlSensitiveQuery => "MEDIA_URL_SENSITIVE_QUERY",
+            Self::MediaExtension => "MEDIA_EXTENSION",
+            Self::MediaHeaders => "MEDIA_HEADERS",
+            Self::MediaTitle => "MEDIA_TITLE",
+            Self::MediaNoMuxedStream => "MEDIA_NO_MUXED_STREAM",
+            Self::Unclassified => "UNCLASSIFIED",
+        }
+    }
+
+    pub const fn valid_for(self, stage: UnsupportedStage) -> bool {
+        use UnsupportedReason::*;
+        match stage {
+            UnsupportedStage::PreFallback => matches!(self, Unclassified | MediaNoMuxedStream),
+            UnsupportedStage::FallbackWebpage => matches!(
+                self,
+                ResponseStatus
+                    | ResponseBodyTooLarge
+                    | ResponseEncoding
+                    | ResponseJson
+                    | ResponseSecretField
+                    | WebpageNotHtml
+                    | WebpageBangumi
+            ),
+            UnsupportedStage::FallbackNav => matches!(
+                self,
+                ResponseStatus
+                    | ResponseBodyTooLarge
+                    | ResponseEncoding
+                    | ResponseJson
+                    | ResponseSecretField
+                    | NavApiEnvelope
+                    | NavShape
+                    | NavWbiShape
+                    | NavWbiUrl
+            ),
+            UnsupportedStage::FallbackView => matches!(
+                self,
+                ResponseStatus
+                    | ResponseBodyTooLarge
+                    | ResponseEncoding
+                    | ResponseJson
+                    | ResponseSecretField
+                    | ViewApiEnvelope
+                    | ViewIdMismatch
+                    | ViewTitle
+                    | ViewPages
+                    | ViewCid
+            ),
+            UnsupportedStage::FallbackDetail => matches!(
+                self,
+                ResponseStatus
+                    | ResponseBodyTooLarge
+                    | ResponseEncoding
+                    | ResponseJson
+                    | ResponseSecretField
+                    | DetailApiEnvelope
+                    | DetailShape
+                    | DetailIdMismatch
+                    | DetailTitle
+                    | DetailPages
+                    | DetailCidMismatch
+                    | DetailTitleMismatch
+            ),
+            UnsupportedStage::FallbackPlayurl => matches!(
+                self,
+                ResponseStatus
+                    | ResponseBodyTooLarge
+                    | ResponseEncoding
+                    | ResponseJson
+                    | ResponseSecretField
+                    | PlayurlApiEnvelope
+                    | PlayurlDurlShape
+                    | PlayurlDashPresent
+                    | PlayurlSegmentShape
+                    | PlayurlSegmentFields
+            ),
+            UnsupportedStage::MediaShape => matches!(
+                self,
+                MediaUrlShape
+                    | MediaUrlSensitiveQuery
+                    | MediaExtension
+                    | MediaHeaders
+                    | MediaTitle
+                    | MediaNoMuxedStream
+            ),
+            UnsupportedStage::Unclassified => matches!(self, Unclassified),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParseError {
     Empty,
     Oversized,
@@ -369,6 +571,7 @@ pub enum ParseError {
     SecretHeader,
     UnsupportedFormat,
     UnsupportedFormatStage(UnsupportedStage),
+    UnsupportedFormatStageReason(UnsupportedStage, UnsupportedReason),
     RequestPolicyRejected,
     BrokerFailure,
     ExtractorFailure,
@@ -428,6 +631,22 @@ pub fn parse_machine_output(bytes: &[u8]) -> Result<ResolvedMedia, ParseError> {
                     UnsupportedStage::from_wire(stage)
                         .map(ParseError::UnsupportedFormatStage)
                         .unwrap_or(ParseError::UnsupportedSchema)
+                }
+                Some(serde_json::Value::String(stage)) if object.len() == 3 => {
+                    let Some(reason) = object
+                        .get("fallback_reason")
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(UnsupportedReason::from_wire)
+                    else {
+                        return Err(ParseError::UnsupportedSchema);
+                    };
+                    let Some(stage) = UnsupportedStage::from_wire(stage) else {
+                        return Err(ParseError::UnsupportedSchema);
+                    };
+                    if !reason.valid_for(stage) {
+                        return Err(ParseError::UnsupportedSchema);
+                    }
+                    ParseError::UnsupportedFormatStageReason(stage, reason)
                 }
                 _ => ParseError::UnsupportedSchema,
             },
