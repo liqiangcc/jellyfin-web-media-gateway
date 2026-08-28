@@ -27,7 +27,7 @@ Accepted security/runtime authority: #60 + R008 + ADR 0007
 Downstream: #68 BILIBILI-WEB-E2E
 Freshness policy: dependency-aware
 Publication state: status:draft until Coordinator Publication Gate passes
-Formal R11 draft freeze: recorded after #67 Attempt 10 bounded EXTRACTOR_FAILURE and #105 Attempt 3 Final Acceptance / PR #106 merge.
+Formal R11 draft freeze: final draft authority is established only after old R10 execution authority has been revoked; pre-draft materialization commits are non-executable history.
 ```
 
 #67 remains verification-only. Attempt 10 preserved the accepted runtime/target/security path, reached three 2xx broker requests, and still returned bounded `EXTRACTOR_FAILURE` without a current ResolvedMedia. #105 then proved and merged the narrow repository-owned missing-initial-state continuation behind the same production-shaped `GenericYtdlpAdapter::resolve_detailed()` → `ProcessRunner::run()` → normal `extract` path used by the real smoke harness. Normal frozen yt-dlp extraction remains first; fallback admission is limited to the frozen BiliBiliIE missing-initial-state condition plus strict Bilibili video URL shape, and deterministic hosted x86_64/native ARM64 J1-J4 proved one muxed `http-file` ResolvedMedia while malformed/initial-state/redirect/Secret/non-media/separate-A/V/unexpected cases remained fail closed. R11 re-freezes the same real-site contract on exact merged Integration Candidate `1a38e403a3252239822aeb2a784a20fdfd18c0a6`; it does not claim the target result in advance.
