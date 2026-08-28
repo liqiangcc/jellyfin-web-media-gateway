@@ -6,9 +6,9 @@
 GitHub Issue: #67
 Task ID: GENERIC-YTDLP-BILIBILI-REAL
 Task kind: verification-only / real public network
-Contract Revision: R9
-Next Attempt: 9
-Exact Execution Candidate: c2834fd046cbf29a3602e9f13ae5153217c6c886
+Contract Revision: R10
+Next Attempt: 10
+Exact Execution Candidate: bec606fe0346e60fa5f05f98e27981fca8feffb2
 Preferred worker: ubuntu-arm64
 Eligible environment after publication: env:ubuntu-arm64
 Accepted extraction upstream: #66 Final Accepted
@@ -20,15 +20,16 @@ Accepted anonymous response Secret containment authority: #95 Final Accepted / m
 Accepted broker IPC/wire authority: #97 Final Accepted / merge d9c038547ed2df695571f8dd4f732bdcdd4d5c19
 Accepted clean-build sandbox binding authority: #99 Final Accepted / merge cd95db5f0becb875455789f168b92c44a96a5260
 Accepted bounded extractor failure authority: #101 Final Accepted / merge c2834fd046cbf29a3602e9f13ae5153217c6c886
+Accepted ResolvedMedia compatibility authority: #103 Attempt 2 Coordinator ACCEPTED / PR #104 merge bec606fe0346e60fa5f05f98e27981fca8feffb2
 Accepted target environment: #63 Final Accepted
 Accepted security/runtime authority: #60 + R008 + ADR 0007
 Downstream: #68 BILIBILI-WEB-E2E
-Freshness policy: dependency-aware / exact Candidate
+Freshness policy: dependency-aware
 Publication state: status:draft until Coordinator Publication Gate passes
-Formal R9 draft freeze: recorded after #67 Attempt 8 blocker and #101 Final Acceptance
+Formal R10 draft freeze: recorded after #67 Attempt 9 bounded EXTRACTOR_FAILURE, #103 Attempt 2 acceptance, and PR #104 merge.
 ```
 
-#67 remains verification-only. Attempt 8 cleared the former sandbox, spawn, response-Secret and broker-framing blockers and reached three 2xx broker requests, but the worker then collapsed its extractor result to `NONZERO_EXIT` without a safe media or failure classification. #101 added a closed Secret-safe taxonomy for request-policy, broker, extractor/site, unsupported-format and unexpected-worker outcomes while leaving crash/nonzero behavior fail closed. It was Final Accepted / merged as `c2834fd046cbf29a3602e9f13ae5153217c6c886`.
+#67 remains verification-only. Attempt 9 cleared the former sandbox, spawn, response-Secret and broker-framing blockers and reached three 2xx broker requests, but returned bounded `EXTRACTOR_FAILURE` without a current ResolvedMedia. #103 then proved and merged the minimal repository-owned direct GenericIE compatibility normalization with deterministic offline evidence and hosted x86_64/native ARM64 J1-J4, as PR #104 merge `bec606fe0346e60fa5f05f98e27981fca8feffb2`. R10 re-freezes the same real-site contract on that exact merged Integration Candidate; it does not claim the target result in advance.
 
 ## Frozen sample and runtime
 
@@ -62,13 +63,13 @@ trust anchor: scripts/generic-ytdlp-offline-runtime.lock.json
 → current ResolvedMedia
 ```
 
-Exact runtime Candidate:
+Exact runtime Candidate for Attempt 10:
 
 ```text
-c2834fd046cbf29a3602e9f13ae5153217c6c886
+bec606fe0346e60fa5f05f98e27981fca8feffb2
 ```
 
-Do not substitute moving main. If accepted semantic changes touch `plugins/generic-ytdlp/**`, `scripts/generic-ytdlp-*`, `gateway-egress/**`/R008/ADR0007, sandbox/fd-isolation, or current SiteAdapter/ResolvedMedia authority before claim, STOP for Coordinator freshness review.
+Do not substitute moving main. If accepted semantic changes touch `plugins/generic-ytdlp/**`, `scripts/generic-ytdlp-*`, `gateway-egress/**`/R008/ADR0007, sandbox/fd-isolation, or current SiteAdapter/ResolvedMedia authority before claim, STOP for Coordinator freshness review. The accepted low-privilege ARM64 launch boundary remains the exact historical `setpriv --reuid=999 --regid=995 --groups=995,3003 --inh-caps=-all --ambient-caps=-all --bounding-set=-all -- env -i` shell with `HOME=/home/gateway-runner`, `USER=gateway-runner`, `LOGNAME=gateway-runner`, `PATH=/home/gateway-runner/.cargo/bin:/usr/local/bin:/usr/bin:/bin`, and the exact harness command; do not substitute root, capsh, a different identity, inherited environment, or a different shell.
 
 ## Hard boundaries
 
@@ -182,6 +183,44 @@ Overall
 ```
 
 Never publish credentials, Secret header names/values, signed URLs/query parameters, Cookie/Auth/token/profile/account state, raw stderr/page body/media payload.
+
+## Freshness / Integration Contract
+
+Freshness policy: dependency-aware
+
+Semantic authorities:
+- #103 Attempt 2 Coordinator ACCEPTED and PR #104 merged as `bec606fe0346e60fa5f05f98e27981fca8feffb2`.
+- #79/#83/#85/#95/#97/#99/#101, R008, ADR 0007, #63 target, and `scripts/generic-ytdlp-real-smoke.sh` as accepted by the prior #67 contract.
+
+Semantic freshness domains:
+- `plugins/generic-ytdlp/**`, `scripts/generic-ytdlp-*`, GenericYtdlpAdapter/ResolvedMedia normalization, broker/R008/Secret containment, sandbox/fd isolation, and the accepted ARM64 target launch boundary.
+
+Integration surfaces:
+- exact merged main Candidate, generic-ytdlp workflow/runtime wiring, broker/sandbox composition, and target harness invocation.
+
+Task-owned surfaces:
+- none; this is verification-only and must not modify repository/product/security implementation.
+
+Authority/domain → Claim mapping:
+- #103 / GenericYtdlpAdapter direct media normalization: R1, R7.
+- #79/#83/#85/#95/#97/#99/R008 and target launch boundary: R1, R4, R5, R6, R8, R9.
+- exact Candidate and harness: R1, R2, R3, R7.
+
+Integration verification:
+- JI1: confirm the target checkout and `scripts/generic-ytdlp-real-smoke.sh` resolve to exact Candidate `bec606fe0346e60fa5f05f98e27981fca8feffb2` before J0-J4.
+- JI2: n/a; target proof is the declared J0-J4 evidence authority.
+
+Unrelated-main policy:
+- existing exact-Candidate semantic Evidence remains valid; no rebase/full rerun solely because main advanced.
+
+Integration-overlap policy:
+- preserve accepted #103 semantic Evidence; no merge or source changes are performed by this verification Task. If the target harness cannot prove the exact Candidate, stop with bounded evidence.
+
+Semantic-authority-change policy:
+- reconcile the changed authority and rerun mapped Claims only when a Coordinator explicitly revises this contract; do not silently broaden the Attempt.
+
+Strict-main reason:
+- n/a; the real-site proof is frozen to the exact merged Integration Candidate above.
 
 ## Stop boundary
 
