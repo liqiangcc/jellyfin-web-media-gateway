@@ -3,8 +3,8 @@
 use gateway_egress::{BrokerCancellation as EgressCancellation, R008Broker};
 use generic_ytdlp::{
     BrokerBackend, BrokerCancellation, BrokerDiagnosticsSnapshot, BrokerProcessRunner,
-    BrokerRequest, BrokerResponse, GenericYtdlpAdapter, RuntimeLimits, YtdlpError,
-    parse_machine_output, render_error_summary,
+    BrokerRequest, BrokerResponse, GenericYtdlpAdapter, RuntimeLimits, UnsupportedStage,
+    YtdlpError, parse_machine_output, render_error_summary,
 };
 use site_adapter_api::SiteAdapter;
 use std::collections::BTreeMap;
@@ -124,6 +124,11 @@ impl InitialStateFallbackFixtureBroker {
             };
         }
         if url.contains("/x/web-interface/view?") {
+            if self.case == "missing-view" {
+                return json(
+                    r#"{"code":0,"data":{"bvid":"BV1OTHER999999","title":"Synthetic detail","pages":[{"cid":123}]}}"#,
+                );
+            }
             return json(
                 r#"{"code":0,"data":{"bvid":"BV1ABC123456","title":"Synthetic detail","pages":[{"cid":123}]}}"#,
             );
@@ -322,16 +327,17 @@ fn initial_state_fallback_continues_through_web_wbi_view_detail_and_playurl() {
 
 #[test]
 fn initial_state_fallback_fail_closes_malformed_redirect_secret_and_media_shapes() {
-    for case in [
-        "malformed-webpage",
-        "initial-state",
-        "redirect",
-        "missing-detail",
-        "secret",
-        "non-media",
-        "separate-av",
-        "malformed-playurl",
-        "unexpected",
+    for (case, expected_stage) in [
+        ("malformed-webpage", UnsupportedStage::FallbackWebpage),
+        ("initial-state", UnsupportedStage::Unclassified),
+        ("redirect", UnsupportedStage::FallbackWebpage),
+        ("missing-detail", UnsupportedStage::FallbackDetail),
+        ("secret", UnsupportedStage::FallbackNav),
+        ("missing-view", UnsupportedStage::FallbackView),
+        ("non-media", UnsupportedStage::MediaShape),
+        ("separate-av", UnsupportedStage::FallbackPlayurl),
+        ("malformed-playurl", UnsupportedStage::FallbackPlayurl),
+        ("unexpected", UnsupportedStage::FallbackPlayurl),
     ] {
         let broker = Arc::new(InitialStateFallbackFixtureBroker::new(case));
         let adapter = GenericYtdlpAdapter::with_runtime_runner(Arc::new(runner_with_backend(
@@ -347,7 +353,7 @@ fn initial_state_fallback_fail_closes_malformed_redirect_secret_and_media_shapes
         assert_eq!(
             adapter.resolve_detailed(&locator),
             Err(generic_ytdlp::YtdlpError::Parse(
-                generic_ytdlp::ParseError::UnsupportedFormat
+                generic_ytdlp::ParseError::UnsupportedFormatStage(expected_stage),
             )),
             "fixture case {case} must remain unsupported"
         );
@@ -403,9 +409,25 @@ fn extract_action_rejects_separate_or_unsupported_formats() {
             .unwrap();
         assert_eq!(
             parse_machine_output(&output.stdout),
-            Err(generic_ytdlp::ParseError::UnsupportedFormat)
+            Err(generic_ytdlp::ParseError::UnsupportedFormatStage(
+                UnsupportedStage::PreFallback,
+            ))
         );
     }
+}
+
+#[test]
+fn unsupported_stage_worker_envelope_contains_only_fixed_stage_values() {
+    let output = runner(Duration::from_secs(5))
+        .run_action(
+            "extract",
+            &Url::parse("https://fixture.example.test/watch?item=unsupported").unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        output.stdout,
+        br#"{"error":"UNSUPPORTED_FORMAT","unsupported_stage":"PRE_FALLBACK"}"#
+    );
 }
 
 struct BrokerDeniedFixture;

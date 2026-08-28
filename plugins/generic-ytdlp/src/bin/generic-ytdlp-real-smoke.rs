@@ -70,6 +70,9 @@ fn main() -> ExitCode {
             let exit_code = match error {
                 generic_ytdlp::YtdlpError::Parse(generic_ytdlp::ParseError::UnsupportedFormat)
                 | generic_ytdlp::YtdlpError::Parse(
+                    generic_ytdlp::ParseError::UnsupportedFormatStage(_),
+                )
+                | generic_ytdlp::YtdlpError::Parse(
                     generic_ytdlp::ParseError::UnsupportedProtocol,
                 ) => 2,
                 generic_ytdlp::YtdlpError::Process(ProcessError::Disabled) => 75,

@@ -1,4 +1,4 @@
-use crate::{BrokerDiagnosticsSnapshot, ProcessError, YtdlpError};
+use crate::{BrokerDiagnosticsSnapshot, ParseError, ProcessError, YtdlpError};
 use site_adapter_api::{ResolvedMedia, StreamProtocol};
 use std::fmt::Write;
 
@@ -27,28 +27,26 @@ pub fn render_success_summary(
 /// Convert all process/parser failures to fixed classifications. Raw process
 /// diagnostics, source URLs and worker stderr never cross this boundary.
 pub fn render_error_summary(error: &YtdlpError, diagnostics: &BrokerDiagnosticsSnapshot) -> String {
-    let (result, error_code) = match error {
-        YtdlpError::InvalidLocator => ("UNSUPPORTED", "INVALID_LOCATOR"),
+    let (result, error_code, unsupported_stage) = match error {
+        YtdlpError::InvalidLocator => ("UNSUPPORTED", "INVALID_LOCATOR", None),
         YtdlpError::Process(process_error) => match process_error {
-            ProcessError::Disabled => ("BLOCKED", "RUNTIME_DISABLED"),
-            _ => ("FAIL", process_error_code(*process_error)),
+            ProcessError::Disabled => ("BLOCKED", "RUNTIME_DISABLED", None),
+            _ => ("FAIL", process_error_code(*process_error), None),
         },
-        YtdlpError::Parse(parse_error) => {
-            let (result, code) = match parse_error {
-                crate::ParseError::UnsupportedFormat => ("UNSUPPORTED", "UNSUPPORTED_FORMAT"),
-                crate::ParseError::RequestPolicyRejected => ("FAIL", "REQUEST_POLICY_REJECTED"),
-                crate::ParseError::BrokerFailure => ("FAIL", "BROKER_FAILURE"),
-                crate::ParseError::ExtractorFailure => ("FAIL", "EXTRACTOR_FAILURE"),
-                crate::ParseError::UnexpectedWorkerFailure => ("FAIL", "UNEXPECTED_WORKER_FAILURE"),
-                crate::ParseError::UnsupportedProtocol => ("UNSUPPORTED", "UNSUPPORTED_PROTOCOL"),
-                crate::ParseError::DrmUnsupported => ("UNSUPPORTED", "DRM_UNSUPPORTED"),
-                crate::ParseError::UnsupportedProtection => {
-                    ("UNSUPPORTED", "UNSUPPORTED_PROTECTION")
-                }
-                _ => ("FAIL", "PARSE_ERROR"),
-            };
-            (result, code)
-        }
+        YtdlpError::Parse(parse_error) => match parse_error {
+            ParseError::UnsupportedFormat => ("UNSUPPORTED", "UNSUPPORTED_FORMAT", None),
+            ParseError::UnsupportedFormatStage(stage) => {
+                ("UNSUPPORTED", "UNSUPPORTED_FORMAT", Some(*stage))
+            }
+            ParseError::RequestPolicyRejected => ("FAIL", "REQUEST_POLICY_REJECTED", None),
+            ParseError::BrokerFailure => ("FAIL", "BROKER_FAILURE", None),
+            ParseError::ExtractorFailure => ("FAIL", "EXTRACTOR_FAILURE", None),
+            ParseError::UnexpectedWorkerFailure => ("FAIL", "UNEXPECTED_WORKER_FAILURE", None),
+            ParseError::UnsupportedProtocol => ("UNSUPPORTED", "UNSUPPORTED_PROTOCOL", None),
+            ParseError::DrmUnsupported => ("UNSUPPORTED", "DRM_UNSUPPORTED", None),
+            ParseError::UnsupportedProtection => ("UNSUPPORTED", "UNSUPPORTED_PROTECTION", None),
+            _ => ("FAIL", "PARSE_ERROR", None),
+        },
     };
     let mut output = String::new();
     append_common(&mut output, result, diagnostics);
@@ -56,6 +54,9 @@ pub fn render_error_summary(error: &YtdlpError, diagnostics: &BrokerDiagnosticsS
     let _ = writeln!(output, "stream_count: 0");
     let _ = writeln!(output, "title_length: n/a");
     let _ = writeln!(output, "process_error: {error_code}");
+    if let Some(stage) = unsupported_stage {
+        let _ = writeln!(output, "unsupported_stage: {}", stage.as_str());
+    }
     output
 }
 

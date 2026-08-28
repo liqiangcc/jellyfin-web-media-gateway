@@ -315,6 +315,47 @@ fn discard_capped<R: Read>(mut reader: R, limit: usize, overflow_signal: &Atomic
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UnsupportedStage {
+    PreFallback,
+    FallbackWebpage,
+    FallbackNav,
+    FallbackView,
+    FallbackDetail,
+    FallbackPlayurl,
+    MediaShape,
+    Unclassified,
+}
+
+impl UnsupportedStage {
+    pub fn from_wire(value: &str) -> Option<Self> {
+        Some(match value {
+            "PRE_FALLBACK" => Self::PreFallback,
+            "FALLBACK_WEBPAGE" => Self::FallbackWebpage,
+            "FALLBACK_NAV" => Self::FallbackNav,
+            "FALLBACK_VIEW" => Self::FallbackView,
+            "FALLBACK_DETAIL" => Self::FallbackDetail,
+            "FALLBACK_PLAYURL" => Self::FallbackPlayurl,
+            "MEDIA_SHAPE" => Self::MediaShape,
+            "UNCLASSIFIED" => Self::Unclassified,
+            _ => return None,
+        })
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::PreFallback => "PRE_FALLBACK",
+            Self::FallbackWebpage => "FALLBACK_WEBPAGE",
+            Self::FallbackNav => "FALLBACK_NAV",
+            Self::FallbackView => "FALLBACK_VIEW",
+            Self::FallbackDetail => "FALLBACK_DETAIL",
+            Self::FallbackPlayurl => "FALLBACK_PLAYURL",
+            Self::MediaShape => "MEDIA_SHAPE",
+            Self::Unclassified => "UNCLASSIFIED",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ParseError {
     Empty,
     Oversized,
@@ -327,6 +368,7 @@ pub enum ParseError {
     UnsupportedProtection,
     SecretHeader,
     UnsupportedFormat,
+    UnsupportedFormatStage(UnsupportedStage),
     RequestPolicyRejected,
     BrokerFailure,
     ExtractorFailure,
@@ -370,14 +412,25 @@ pub fn parse_machine_output(bytes: &[u8]) -> Result<ResolvedMedia, ParseError> {
         }
     })?;
     if let Some(code) = value.get("error").and_then(serde_json::Value::as_str) {
-        if value.as_object().is_none_or(|object| object.len() != 1) {
+        let Some(object) = value.as_object() else {
+            return Err(ParseError::UnsupportedSchema);
+        };
+        if code != "UNSUPPORTED_FORMAT" && object.len() != 1 {
             return Err(ParseError::UnsupportedSchema);
         }
         return Err(match code {
             "REQUEST_POLICY_REJECTED" => ParseError::RequestPolicyRejected,
             "BROKER_FAILURE" => ParseError::BrokerFailure,
             "EXTRACTOR_FAILURE" => ParseError::ExtractorFailure,
-            "UNSUPPORTED_FORMAT" => ParseError::UnsupportedFormat,
+            "UNSUPPORTED_FORMAT" => match object.get("unsupported_stage") {
+                None if object.len() == 1 => ParseError::UnsupportedFormat,
+                Some(serde_json::Value::String(stage)) if object.len() == 2 => {
+                    UnsupportedStage::from_wire(stage)
+                        .map(ParseError::UnsupportedFormatStage)
+                        .unwrap_or(ParseError::UnsupportedSchema)
+                }
+                _ => ParseError::UnsupportedSchema,
+            },
             "UNEXPECTED_WORKER_FAILURE" => ParseError::UnexpectedWorkerFailure,
             _ => ParseError::UnsupportedSchema,
         });
@@ -726,6 +779,37 @@ mod tests {
             parse_machine_output(br#"{"error":"NOT_AN_ADMITTED_FAILURE"}"#),
             Err(ParseError::UnsupportedSchema)
         );
+        for stage in [
+            UnsupportedStage::PreFallback,
+            UnsupportedStage::FallbackWebpage,
+            UnsupportedStage::FallbackNav,
+            UnsupportedStage::FallbackView,
+            UnsupportedStage::FallbackDetail,
+            UnsupportedStage::FallbackPlayurl,
+            UnsupportedStage::MediaShape,
+            UnsupportedStage::Unclassified,
+        ] {
+            let envelope = format!(
+                r#"{{"error":"UNSUPPORTED_FORMAT","unsupported_stage":"{}"}}"#,
+                stage.as_str()
+            );
+            assert_eq!(
+                parse_machine_output(envelope.as_bytes()),
+                Err(ParseError::UnsupportedFormatStage(stage))
+            );
+        }
+        for envelope in [
+            br#"{"error":"UNSUPPORTED_FORMAT","unsupported_stage":"FORGED"}"#.as_slice(),
+            br#"{"error":"UNSUPPORTED_FORMAT","unsupported_stage":null}"#.as_slice(),
+            br#"{"error":"UNSUPPORTED_FORMAT","unsupported_stage":"MEDIA_SHAPE","message":"leak"}"#
+                .as_slice(),
+            br#"{"error":"EXTRACTOR_FAILURE","unsupported_stage":"MEDIA_SHAPE"}"#.as_slice(),
+        ] {
+            assert_eq!(
+                parse_machine_output(envelope),
+                Err(ParseError::UnsupportedSchema)
+            );
+        }
         assert_eq!(
             parse_machine_output(br#"{"error":"BROKER_FAILURE","message":"origin text"}"#),
             Err(ParseError::UnsupportedSchema)

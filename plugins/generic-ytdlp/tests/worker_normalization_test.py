@@ -15,6 +15,20 @@ SPEC.loader.exec_module(worker)
 
 
 class DirectFallbackNormalizationTest(unittest.TestCase):
+    def test_unsupported_stage_is_a_closed_repository_enum(self):
+        expected = {
+            "PRE_FALLBACK",
+            "FALLBACK_WEBPAGE",
+            "FALLBACK_NAV",
+            "FALLBACK_VIEW",
+            "FALLBACK_DETAIL",
+            "FALLBACK_PLAYURL",
+            "MEDIA_SHAPE",
+            "UNCLASSIFIED",
+        }
+        self.assertEqual(worker.UNSUPPORTED_STAGES, frozenset(expected))
+        self.assertEqual(worker.UnsupportedFormat("forged").stage, worker.UNCLASSIFIED)
+
     def test_frozen_generic_ie_offline_fixture_has_top_level_direct_shape(self):
         with worker._ydl() as ydl:
             extractor = GenericIE(ydl)
