@@ -112,6 +112,28 @@ fn unsupported_stage_summary_is_fixed_and_bounded() {
 }
 
 #[test]
+fn unsupported_stage_reason_summary_is_fixed_and_bounded() {
+    let error =
+        generic_ytdlp::YtdlpError::Parse(generic_ytdlp::ParseError::UnsupportedFormatStageReason(
+            generic_ytdlp::UnsupportedStage::FallbackPlayurl,
+            generic_ytdlp::UnsupportedReason::PlayurlDashPresent,
+        ));
+    let summary = render_error_summary(&error, &BrokerDiagnosticsSnapshot::default());
+
+    assert!(summary.contains("unsupported_stage: FALLBACK_PLAYURL"));
+    assert!(summary.contains("fallback_reason: PLAYURL_DASH_PRESENT"));
+    assert!(summary.len() < 320);
+    for sentinel in [
+        "exception-sentinel",
+        "https://fixture.invalid/?token=secret",
+        "Authorization",
+        "media-payload",
+    ] {
+        assert!(!summary.contains(sentinel));
+    }
+}
+
+#[test]
 fn worker_failure_summaries_use_only_fixed_codes() {
     for (error, code) in [
         (

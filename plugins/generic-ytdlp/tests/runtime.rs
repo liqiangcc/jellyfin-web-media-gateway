@@ -3,8 +3,8 @@
 use gateway_egress::{BrokerCancellation as EgressCancellation, R008Broker};
 use generic_ytdlp::{
     BrokerBackend, BrokerCancellation, BrokerDiagnosticsSnapshot, BrokerProcessRunner,
-    BrokerRequest, BrokerResponse, GenericYtdlpAdapter, RuntimeLimits, UnsupportedStage,
-    YtdlpError, parse_machine_output, render_error_summary,
+    BrokerRequest, BrokerResponse, GenericYtdlpAdapter, RuntimeLimits, UnsupportedReason,
+    UnsupportedStage, YtdlpError, parse_machine_output, render_error_summary,
 };
 use site_adapter_api::SiteAdapter;
 use std::collections::BTreeMap;
@@ -86,14 +86,16 @@ impl InitialStateFallbackFixtureBroker {
         }
     }
 
-    fn response(&self, url: &str) -> (String, Vec<u8>) {
+    fn response(&self, url: &str, request_number: usize) -> (u16, String, Vec<u8>) {
+        let fallback = request_number >= 4;
+        let case = if fallback { self.case } else { "success" };
         let page = || {
-            if self.case == "redirect" {
+            if case == "webpage-not-html" || case == "malformed-webpage" {
+                b"not html".to_vec()
+            } else if case == "webpage-bangumi" || case == "redirect" {
                 br#"<html><a href=\"https://www.bilibili.com/bangumi/ep1\">redirect</a></html>"#
                     .to_vec()
-            } else if self.case == "malformed-webpage" {
-                b"{".to_vec()
-            } else if self.case == "initial-state" {
+            } else if case == "initial-state" {
                 br#"<html><script>window.__INITIAL_STATE__ = {};</script></html>"#.to_vec()
             } else {
                 br#"<html><script>window.__APP__ = {};</script></html>"#.to_vec()
@@ -101,58 +103,153 @@ impl InitialStateFallbackFixtureBroker {
         };
         let json = |body: &str| (String::from("application/json"), body.as_bytes().to_vec());
         if url.contains("/video/BV1ABC123456") {
-            return (String::from("text/html"), page());
+            if fallback && case == "webpage-response-status" {
+                return (503, String::from("text/html"), Vec::new());
+            }
+            if fallback && case == "webpage-response-encoding" {
+                return (200, String::from("text/html"), vec![0xff, 0xfe]);
+            }
+            return (200, String::from("text/html"), page());
         }
         if url.ends_with("/x/web-interface/nav") {
-            if self.case == "secret" {
-                return json(
+            if fallback && case == "response-status" {
+                return (503, String::from("application/json"), Vec::new());
+            }
+            if fallback && case == "response-encoding" {
+                return (200, String::from("application/json"), vec![0xff, 0xfe]);
+            }
+            if fallback && case == "response-json" {
+                return (200, String::from("application/json"), b"{".to_vec());
+            }
+            if fallback && (case == "response-secret" || case == "secret") {
+                let (content_type, body) = json(
                     r#"{"code":0,"data":{"isLogin":false,"wbi_img":{"img_url":"https://img.example.test/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png","sub_url":"https://img.example.test/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png"},"token":"fixture-secret"}}"#,
                 );
+                return (200, content_type, body);
             }
-            return json(
+            if fallback && case == "nav-api-envelope" {
+                let (content_type, body) = json(r#"{"code":-1,"data":{}}"#);
+                return (200, content_type, body);
+            }
+            if fallback && case == "nav-shape" {
+                let (content_type, body) =
+                    json(r#"{"code":0,"data":{"isLogin":"false","wbi_img":[]}}"#);
+                return (200, content_type, body);
+            }
+            if fallback && case == "nav-wbi-shape" {
+                let (content_type, body) = json(
+                    r#"{"code":0,"data":{"isLogin":false,"wbi_img":{"img_url":"https://img.example.test/a.png"}}}"#,
+                );
+                return (200, content_type, body);
+            }
+            if fallback && case == "nav-wbi-url" {
+                let (content_type, body) = json(
+                    r#"{"code":0,"data":{"isLogin":false,"wbi_img":{"img_url":"http://img.example.test/a.png","sub_url":"https://img.example.test/b.png"}}}"#,
+                );
+                return (200, content_type, body);
+            }
+            let (_, body) = json(
                 r#"{"code":0,"data":{"isLogin":false,"wbi_img":{"img_url":"https://img.example.test/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png","sub_url":"https://img.example.test/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.png"}}}"#,
             );
+            return (200, String::from("application/json"), body);
         }
         if url.contains("/x/web-interface/view/detail?") {
-            return match self.case {
-                "missing-detail" => json(
-                    r#"{"code":0,"data":{"View":{"bvid":"BV1ABC123456","pages":[{"cid":123}]}}}"#,
-                ),
-                _ => json(
-                    r#"{"code":0,"data":{"View":{"bvid":"BV1ABC123456","title":"Synthetic detail","pages":[{"cid":123}]}}}"#,
-                ),
+            let body = match case {
+                "detail-api-envelope" => r#"{"code":-1,"data":{}}"#,
+                "detail-shape" => r#"{"code":0,"data":{"View":[]}}"#,
+                "detail-id-mismatch" => {
+                    r#"{"code":0,"data":{"View":{"bvid":"BV1OTHER999999","title":"Synthetic detail","pages":[{"cid":123}]}}}"#
+                }
+                "detail-title" => {
+                    r#"{"code":0,"data":{"View":{"bvid":"BV1ABC123456","title":"","pages":[{"cid":123}]}}}"#
+                }
+                "detail-pages" => {
+                    r#"{"code":0,"data":{"View":{"bvid":"BV1ABC123456","title":"Synthetic detail","pages":[]}}}"#
+                }
+                "detail-cid-mismatch" => {
+                    r#"{"code":0,"data":{"View":{"bvid":"BV1ABC123456","title":"Synthetic detail","pages":[{"cid":456}]}}}"#
+                }
+                "detail-title-mismatch" => {
+                    r#"{"code":0,"data":{"View":{"bvid":"BV1ABC123456","title":"Other detail","pages":[{"cid":123}]}}}"#
+                }
+                "missing-detail" => {
+                    r#"{"code":0,"data":{"View":{"bvid":"BV1ABC123456","pages":[{"cid":123}]}}}"#
+                }
+                _ => {
+                    r#"{"code":0,"data":{"View":{"bvid":"BV1ABC123456","title":"Synthetic detail","pages":[{"cid":123}]}}}"#
+                }
             };
+            return (
+                200,
+                String::from("application/json"),
+                body.as_bytes().to_vec(),
+            );
         }
         if url.contains("/x/web-interface/view?") {
-            if self.case == "missing-view" {
-                return json(
-                    r#"{"code":0,"data":{"bvid":"BV1OTHER999999","title":"Synthetic detail","pages":[{"cid":123}]}}"#,
-                );
-            }
-            return json(
-                r#"{"code":0,"data":{"bvid":"BV1ABC123456","title":"Synthetic detail","pages":[{"cid":123}]}}"#,
+            let body = match case {
+                "view-api-envelope" => r#"{"code":-1,"data":{}}"#,
+                "view-id-mismatch" | "missing-view" => {
+                    r#"{"code":0,"data":{"bvid":"BV1OTHER999999","title":"Synthetic detail","pages":[{"cid":123}]}}"#
+                }
+                "view-title" => {
+                    r#"{"code":0,"data":{"bvid":"BV1ABC123456","title":"","pages":[{"cid":123}]}}"#
+                }
+                "view-pages" => {
+                    r#"{"code":0,"data":{"bvid":"BV1ABC123456","title":"Synthetic detail","pages":[]}}"#
+                }
+                "view-cid" => {
+                    r#"{"code":0,"data":{"bvid":"BV1ABC123456","title":"Synthetic detail","pages":[{"cid":"bad"}]}}"#
+                }
+                _ => {
+                    r#"{"code":0,"data":{"bvid":"BV1ABC123456","title":"Synthetic detail","pages":[{"cid":123}]}}"#
+                }
+            };
+            return (
+                200,
+                String::from("application/json"),
+                body.as_bytes().to_vec(),
             );
         }
         if url.contains("/x/player/playurl?") {
-            return match self.case {
-                "non-media" => json(
-                    r#"{"code":0,"data":{"durl":[{"url":"https://media.example.test/fallback/page.html"}]}}"#,
-                ),
-                "separate-av" => json(
-                    r#"{"code":0,"data":{"dash":{"video":[{"baseUrl":"https://media.example.test/video.mp4"}],"audio":[{"baseUrl":"https://media.example.test/audio.m4a"}]}}}"#,
-                ),
-                "malformed-playurl" => json(
-                    r#"{"code":0,"data":{"durl":{"url":"https://media.example.test/fallback/video.mp4"}}}"#,
-                ),
-                "unexpected" => json(
-                    r#"{"code":0,"data":{"durl":[{"url":"https://media.example.test/fallback/video.mp4","unexpected":true}]}}"#,
-                ),
-                _ => json(
-                    r#"{"code":0,"data":{"durl":[{"url":"https://media.example.test/fallback/video.mp4","size":1234}]}}"#,
-                ),
+            let body = match case {
+                "playurl-api-envelope" => r#"{"code":-1,"data":{}}"#,
+                "playurl-durl-shape" => r#"{"code":0,"data":{"durl":[]}}"#,
+                "playurl-dash-present" | "separate-av" => {
+                    r#"{"code":0,"data":{"dash":{},"durl":[{"url":"https://media.example.test/fallback/video.mp4"}]}}"#
+                }
+                "playurl-segment-shape" => r#"{"code":0,"data":{"durl":[null]}}"#,
+                "playurl-segment-fields" | "unexpected" => {
+                    r#"{"code":0,"data":{"durl":[{"url":"https://media.example.test/fallback/video.mp4","unexpected":true}]}}"#
+                }
+                "media-url-shape" => {
+                    r#"{"code":0,"data":{"durl":[{"url":"ftp://media.example.test/fallback/video.mp4"}]}}"#
+                }
+                "media-url-sensitive-query" => {
+                    r#"{"code":0,"data":{"durl":[{"url":"https://media.example.test/fallback/video.mp4?token=fixture"}]}}"#
+                }
+                "media-extension" => {
+                    r#"{"code":0,"data":{"durl":[{"url":"https://media.example.test/fallback/video.webm"}]}}"#
+                }
+                "non-media" => {
+                    r#"{"code":0,"data":{"durl":[{"url":"https://media.example.test/fallback/page.html"}]}}"#
+                }
+                "malformed-playurl" => {
+                    r#"{"code":0,"data":{"durl":{"url":"https://media.example.test/fallback/video.mp4"}}}"#
+                }
+                _ => {
+                    r#"{"code":0,"data":{"durl":[{"url":"https://media.example.test/fallback/video.mp4","size":1234}]}}"#
+                }
             };
+            return (
+                200,
+                String::from("application/json"),
+                body.as_bytes().to_vec(),
+            );
         }
-        (String::from("application/json"), br#"{}"#.to_vec())
+        let (_, body) = json(
+            r#"{"code":0,"data":{"bvid":"BV1ABC123456","title":"Synthetic detail","pages":[{"cid":123}]}}"#,
+        );
+        (200, String::from("application/json"), body)
     }
 }
 
@@ -161,10 +258,10 @@ impl BrokerBackend for InitialStateFallbackFixtureBroker {
         assert_eq!(request.operation, "http");
         assert_eq!(request.method, "GET");
         assert!(request.headers.keys().all(|name| name != "Cookie"));
-        self.requests.fetch_add(1, Ordering::AcqRel);
-        let (content_type, body) = self.response(&request.url);
+        let request_number = self.requests.fetch_add(1, Ordering::AcqRel) + 1;
+        let (status, content_type, body) = self.response(&request.url, request_number);
         BrokerResponse {
-            status: 200,
+            status,
             reason: "OK".into(),
             headers: BTreeMap::from([(String::from("content-type"), content_type)]),
             body,
@@ -327,17 +424,207 @@ fn initial_state_fallback_continues_through_web_wbi_view_detail_and_playurl() {
 
 #[test]
 fn initial_state_fallback_fail_closes_malformed_redirect_secret_and_media_shapes() {
-    for (case, expected_stage) in [
-        ("malformed-webpage", UnsupportedStage::FallbackWebpage),
-        ("initial-state", UnsupportedStage::Unclassified),
-        ("redirect", UnsupportedStage::FallbackWebpage),
-        ("missing-detail", UnsupportedStage::FallbackDetail),
-        ("secret", UnsupportedStage::FallbackNav),
-        ("missing-view", UnsupportedStage::FallbackView),
-        ("non-media", UnsupportedStage::MediaShape),
-        ("separate-av", UnsupportedStage::FallbackPlayurl),
-        ("malformed-playurl", UnsupportedStage::FallbackPlayurl),
-        ("unexpected", UnsupportedStage::FallbackPlayurl),
+    for (case, expected_stage, expected_reason) in [
+        (
+            "webpage-not-html",
+            UnsupportedStage::FallbackWebpage,
+            UnsupportedReason::WebpageNotHtml,
+        ),
+        (
+            "webpage-bangumi",
+            UnsupportedStage::FallbackWebpage,
+            UnsupportedReason::WebpageBangumi,
+        ),
+        (
+            "initial-state",
+            UnsupportedStage::Unclassified,
+            UnsupportedReason::Unclassified,
+        ),
+        (
+            "response-status",
+            UnsupportedStage::FallbackNav,
+            UnsupportedReason::ResponseStatus,
+        ),
+        (
+            "response-encoding",
+            UnsupportedStage::FallbackNav,
+            UnsupportedReason::ResponseEncoding,
+        ),
+        (
+            "response-json",
+            UnsupportedStage::FallbackNav,
+            UnsupportedReason::ResponseJson,
+        ),
+        (
+            "response-secret",
+            UnsupportedStage::FallbackNav,
+            UnsupportedReason::ResponseSecretField,
+        ),
+        (
+            "nav-api-envelope",
+            UnsupportedStage::FallbackNav,
+            UnsupportedReason::NavApiEnvelope,
+        ),
+        (
+            "nav-shape",
+            UnsupportedStage::FallbackNav,
+            UnsupportedReason::NavShape,
+        ),
+        (
+            "nav-wbi-shape",
+            UnsupportedStage::FallbackNav,
+            UnsupportedReason::NavWbiShape,
+        ),
+        (
+            "nav-wbi-url",
+            UnsupportedStage::FallbackNav,
+            UnsupportedReason::NavWbiUrl,
+        ),
+        (
+            "view-api-envelope",
+            UnsupportedStage::FallbackView,
+            UnsupportedReason::ViewApiEnvelope,
+        ),
+        (
+            "view-id-mismatch",
+            UnsupportedStage::FallbackView,
+            UnsupportedReason::ViewIdMismatch,
+        ),
+        (
+            "view-title",
+            UnsupportedStage::FallbackView,
+            UnsupportedReason::ViewTitle,
+        ),
+        (
+            "view-pages",
+            UnsupportedStage::FallbackView,
+            UnsupportedReason::ViewPages,
+        ),
+        (
+            "view-cid",
+            UnsupportedStage::FallbackView,
+            UnsupportedReason::ViewCid,
+        ),
+        (
+            "detail-api-envelope",
+            UnsupportedStage::FallbackDetail,
+            UnsupportedReason::DetailApiEnvelope,
+        ),
+        (
+            "detail-shape",
+            UnsupportedStage::FallbackDetail,
+            UnsupportedReason::DetailShape,
+        ),
+        (
+            "detail-id-mismatch",
+            UnsupportedStage::FallbackDetail,
+            UnsupportedReason::DetailIdMismatch,
+        ),
+        (
+            "detail-title",
+            UnsupportedStage::FallbackDetail,
+            UnsupportedReason::DetailTitle,
+        ),
+        (
+            "detail-pages",
+            UnsupportedStage::FallbackDetail,
+            UnsupportedReason::DetailPages,
+        ),
+        (
+            "detail-cid-mismatch",
+            UnsupportedStage::FallbackDetail,
+            UnsupportedReason::DetailCidMismatch,
+        ),
+        (
+            "detail-title-mismatch",
+            UnsupportedStage::FallbackDetail,
+            UnsupportedReason::DetailTitleMismatch,
+        ),
+        (
+            "playurl-api-envelope",
+            UnsupportedStage::FallbackPlayurl,
+            UnsupportedReason::PlayurlApiEnvelope,
+        ),
+        (
+            "playurl-durl-shape",
+            UnsupportedStage::FallbackPlayurl,
+            UnsupportedReason::PlayurlDurlShape,
+        ),
+        (
+            "playurl-dash-present",
+            UnsupportedStage::FallbackPlayurl,
+            UnsupportedReason::PlayurlDashPresent,
+        ),
+        (
+            "playurl-segment-shape",
+            UnsupportedStage::FallbackPlayurl,
+            UnsupportedReason::PlayurlSegmentShape,
+        ),
+        (
+            "playurl-segment-fields",
+            UnsupportedStage::FallbackPlayurl,
+            UnsupportedReason::PlayurlSegmentFields,
+        ),
+        (
+            "media-url-shape",
+            UnsupportedStage::MediaShape,
+            UnsupportedReason::MediaUrlShape,
+        ),
+        (
+            "media-url-sensitive-query",
+            UnsupportedStage::MediaShape,
+            UnsupportedReason::MediaUrlSensitiveQuery,
+        ),
+        (
+            "media-extension",
+            UnsupportedStage::MediaShape,
+            UnsupportedReason::MediaExtension,
+        ),
+        (
+            "malformed-webpage",
+            UnsupportedStage::FallbackWebpage,
+            UnsupportedReason::WebpageNotHtml,
+        ),
+        (
+            "redirect",
+            UnsupportedStage::FallbackWebpage,
+            UnsupportedReason::WebpageBangumi,
+        ),
+        (
+            "missing-detail",
+            UnsupportedStage::FallbackDetail,
+            UnsupportedReason::DetailTitle,
+        ),
+        (
+            "secret",
+            UnsupportedStage::FallbackNav,
+            UnsupportedReason::ResponseSecretField,
+        ),
+        (
+            "missing-view",
+            UnsupportedStage::FallbackView,
+            UnsupportedReason::ViewIdMismatch,
+        ),
+        (
+            "non-media",
+            UnsupportedStage::MediaShape,
+            UnsupportedReason::MediaExtension,
+        ),
+        (
+            "separate-av",
+            UnsupportedStage::FallbackPlayurl,
+            UnsupportedReason::PlayurlDashPresent,
+        ),
+        (
+            "malformed-playurl",
+            UnsupportedStage::FallbackPlayurl,
+            UnsupportedReason::PlayurlDurlShape,
+        ),
+        (
+            "unexpected",
+            UnsupportedStage::FallbackPlayurl,
+            UnsupportedReason::PlayurlSegmentFields,
+        ),
     ] {
         let broker = Arc::new(InitialStateFallbackFixtureBroker::new(case));
         let adapter = GenericYtdlpAdapter::with_runtime_runner(Arc::new(runner_with_backend(
@@ -353,7 +640,10 @@ fn initial_state_fallback_fail_closes_malformed_redirect_secret_and_media_shapes
         assert_eq!(
             adapter.resolve_detailed(&locator),
             Err(generic_ytdlp::YtdlpError::Parse(
-                generic_ytdlp::ParseError::UnsupportedFormatStage(expected_stage),
+                generic_ytdlp::ParseError::UnsupportedFormatStageReason(
+                    expected_stage,
+                    expected_reason,
+                ),
             )),
             "fixture case {case} must remain unsupported"
         );
@@ -400,7 +690,10 @@ fn explicit_runtime_constructor_resolves_through_current_adapter_contract() {
 
 #[test]
 fn extract_action_rejects_separate_or_unsupported_formats() {
-    for path in ["separate", "unsupported"] {
+    for (path, reason) in [
+        ("separate", UnsupportedReason::MediaNoMuxedStream),
+        ("unsupported", UnsupportedReason::Unclassified),
+    ] {
         let output = runner(Duration::from_secs(5))
             .run_action(
                 "extract",
@@ -409,8 +702,9 @@ fn extract_action_rejects_separate_or_unsupported_formats() {
             .unwrap();
         assert_eq!(
             parse_machine_output(&output.stdout),
-            Err(generic_ytdlp::ParseError::UnsupportedFormatStage(
+            Err(generic_ytdlp::ParseError::UnsupportedFormatStageReason(
                 UnsupportedStage::PreFallback,
+                reason,
             ))
         );
     }
@@ -426,7 +720,7 @@ fn unsupported_stage_worker_envelope_contains_only_fixed_stage_values() {
         .unwrap();
     assert_eq!(
         output.stdout,
-        br#"{"error":"UNSUPPORTED_FORMAT","unsupported_stage":"PRE_FALLBACK"}"#
+        br#"{"error":"UNSUPPORTED_FORMAT","unsupported_stage":"PRE_FALLBACK","fallback_reason":"UNCLASSIFIED"}"#
     );
 }
 

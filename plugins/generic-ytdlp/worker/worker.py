@@ -35,6 +35,8 @@ MAX_HEADER_NAME = 128
 MAX_HEADER_VALUE = 4096
 DIRECT_MEDIA_EXTENSIONS = frozenset({"mp4", "m4v", "m3u8"})
 BILIBILI_API_ORIGIN = "https://api.bilibili.com"
+# Keep fallback documents within the existing R008 response ceiling while
+# retaining the full runtime bound used by the broker and adapter.
 MAX_FALLBACK_TEXT_BYTES = MAX_BODY
 SECRET_FIELD_NAMES = frozenset(
     {
@@ -102,19 +104,151 @@ UNSUPPORTED_STAGES = frozenset(
         UNCLASSIFIED,
     }
 )
+RESPONSE_STATUS = "RESPONSE_STATUS"
+RESPONSE_BODY_TOO_LARGE = "RESPONSE_BODY_TOO_LARGE"
+RESPONSE_ENCODING = "RESPONSE_ENCODING"
+RESPONSE_JSON = "RESPONSE_JSON"
+RESPONSE_SECRET_FIELD = "RESPONSE_SECRET_FIELD"
+RESPONSE_READ = "RESPONSE_READ"
+WEBPAGE_NOT_HTML = "WEBPAGE_NOT_HTML"
+WEBPAGE_BANGUMI = "WEBPAGE_BANGUMI"
+NAV_API_ENVELOPE = "NAV_API_ENVELOPE"
+NAV_SHAPE = "NAV_SHAPE"
+NAV_WBI_SHAPE = "NAV_WBI_SHAPE"
+NAV_WBI_URL = "NAV_WBI_URL"
+VIEW_API_ENVELOPE = "VIEW_API_ENVELOPE"
+VIEW_ID_MISMATCH = "VIEW_ID_MISMATCH"
+VIEW_TITLE = "VIEW_TITLE"
+VIEW_PAGES = "VIEW_PAGES"
+VIEW_CID = "VIEW_CID"
+DETAIL_API_ENVELOPE = "DETAIL_API_ENVELOPE"
+DETAIL_SHAPE = "DETAIL_SHAPE"
+DETAIL_ID_MISMATCH = "DETAIL_ID_MISMATCH"
+DETAIL_TITLE = "DETAIL_TITLE"
+DETAIL_PAGES = "DETAIL_PAGES"
+DETAIL_CID_MISMATCH = "DETAIL_CID_MISMATCH"
+DETAIL_TITLE_MISMATCH = "DETAIL_TITLE_MISMATCH"
+PLAYURL_API_ENVELOPE = "PLAYURL_API_ENVELOPE"
+PLAYURL_DURL_SHAPE = "PLAYURL_DURL_SHAPE"
+PLAYURL_DASH_PRESENT = "PLAYURL_DASH_PRESENT"
+PLAYURL_SEGMENT_SHAPE = "PLAYURL_SEGMENT_SHAPE"
+PLAYURL_SEGMENT_FIELDS = "PLAYURL_SEGMENT_FIELDS"
+MEDIA_URL_SHAPE = "MEDIA_URL_SHAPE"
+MEDIA_URL_SENSITIVE_QUERY = "MEDIA_URL_SENSITIVE_QUERY"
+MEDIA_EXTENSION = "MEDIA_EXTENSION"
+MEDIA_HEADERS = "MEDIA_HEADERS"
+MEDIA_TITLE = "MEDIA_TITLE"
+MEDIA_NO_MUXED_STREAM = "MEDIA_NO_MUXED_STREAM"
+UNSUPPORTED_REASONS = frozenset(
+    {
+        RESPONSE_STATUS,
+        RESPONSE_BODY_TOO_LARGE,
+        RESPONSE_ENCODING,
+        RESPONSE_JSON,
+        RESPONSE_SECRET_FIELD,
+        RESPONSE_READ,
+        WEBPAGE_NOT_HTML,
+        WEBPAGE_BANGUMI,
+        NAV_API_ENVELOPE,
+        NAV_SHAPE,
+        NAV_WBI_SHAPE,
+        NAV_WBI_URL,
+        VIEW_API_ENVELOPE,
+        VIEW_ID_MISMATCH,
+        VIEW_TITLE,
+        VIEW_PAGES,
+        VIEW_CID,
+        DETAIL_API_ENVELOPE,
+        DETAIL_SHAPE,
+        DETAIL_ID_MISMATCH,
+        DETAIL_TITLE,
+        DETAIL_PAGES,
+        DETAIL_CID_MISMATCH,
+        DETAIL_TITLE_MISMATCH,
+        PLAYURL_API_ENVELOPE,
+        PLAYURL_DURL_SHAPE,
+        PLAYURL_DASH_PRESENT,
+        PLAYURL_SEGMENT_SHAPE,
+        PLAYURL_SEGMENT_FIELDS,
+        MEDIA_URL_SHAPE,
+        MEDIA_URL_SENSITIVE_QUERY,
+        MEDIA_EXTENSION,
+        MEDIA_HEADERS,
+        MEDIA_TITLE,
+        MEDIA_NO_MUXED_STREAM,
+        UNCLASSIFIED,
+    }
+)
+_COMMON_RESPONSE_REASONS = frozenset(
+    {
+        RESPONSE_STATUS,
+        RESPONSE_BODY_TOO_LARGE,
+        RESPONSE_ENCODING,
+        RESPONSE_JSON,
+        RESPONSE_SECRET_FIELD,
+        RESPONSE_READ,
+    }
+)
+_REASONS_BY_STAGE = {
+    PRE_FALLBACK: frozenset({UNCLASSIFIED, MEDIA_NO_MUXED_STREAM}),
+    FALLBACK_WEBPAGE: _COMMON_RESPONSE_REASONS | frozenset({WEBPAGE_NOT_HTML, WEBPAGE_BANGUMI}),
+    FALLBACK_NAV: _COMMON_RESPONSE_REASONS
+    | frozenset({NAV_API_ENVELOPE, NAV_SHAPE, NAV_WBI_SHAPE, NAV_WBI_URL}),
+    FALLBACK_VIEW: _COMMON_RESPONSE_REASONS
+    | frozenset({VIEW_API_ENVELOPE, VIEW_ID_MISMATCH, VIEW_TITLE, VIEW_PAGES, VIEW_CID}),
+    FALLBACK_DETAIL: _COMMON_RESPONSE_REASONS
+    | frozenset(
+        {
+            DETAIL_API_ENVELOPE,
+            DETAIL_SHAPE,
+            DETAIL_ID_MISMATCH,
+            DETAIL_TITLE,
+            DETAIL_PAGES,
+            DETAIL_CID_MISMATCH,
+            DETAIL_TITLE_MISMATCH,
+        }
+    ),
+    FALLBACK_PLAYURL: _COMMON_RESPONSE_REASONS
+    | frozenset(
+        {
+            PLAYURL_API_ENVELOPE,
+            PLAYURL_DURL_SHAPE,
+            PLAYURL_DASH_PRESENT,
+            PLAYURL_SEGMENT_SHAPE,
+            PLAYURL_SEGMENT_FIELDS,
+        }
+    ),
+    MEDIA_SHAPE: frozenset(
+        {
+            MEDIA_URL_SHAPE,
+            MEDIA_URL_SENSITIVE_QUERY,
+            MEDIA_EXTENSION,
+            MEDIA_HEADERS,
+            MEDIA_TITLE,
+            MEDIA_NO_MUXED_STREAM,
+        }
+    ),
+    UNCLASSIFIED: frozenset({UNCLASSIFIED}),
+}
 
 
 class UnsupportedFormat(Exception):
     """The fixed first-playback policy cannot represent the extraction."""
 
-    def __init__(self, stage: str = UNCLASSIFIED):
-        # Keep the wire value repository-owned even if a future caller passes
-        # an accidental arbitrary string.
-        self.stage = (
-            stage
-            if isinstance(stage, str) and stage in UNSUPPORTED_STAGES
-            else UNCLASSIFIED
-        )
+    def __init__(self, stage: str = UNCLASSIFIED, reason: str = UNCLASSIFIED):
+        # Keep both wire values repository-owned. Invalid stage/reason pairs
+        # fail closed to the single unclassified pair.
+        if (
+            isinstance(stage, str)
+            and stage in UNSUPPORTED_STAGES
+            and isinstance(reason, str)
+            and reason in _REASONS_BY_STAGE.get(stage, ())
+        ):
+            self.stage = stage
+            self.reason = reason
+        else:
+            self.stage = UNCLASSIFIED
+            self.reason = UNCLASSIFIED
         super().__init__()
 
 
@@ -355,13 +489,13 @@ def _is_secret_header(name: str, value: str) -> bool:
 def _public_headers(info: dict[str, Any], fmt: dict[str, Any]) -> dict[str, str]:
     headers = fmt.get("http_headers") or info.get("http_headers") or {}
     if not isinstance(headers, dict):
-        raise UnsupportedFormat(MEDIA_SHAPE)
+        raise UnsupportedFormat(MEDIA_SHAPE, MEDIA_HEADERS)
     public: dict[str, str] = {}
     for name, value in headers.items():
         if not isinstance(name, str) or not isinstance(value, str):
-            raise UnsupportedFormat(MEDIA_SHAPE)
+            raise UnsupportedFormat(MEDIA_SHAPE, MEDIA_HEADERS)
         if _is_secret_header(name, value):
-            raise UnsupportedFormat(MEDIA_SHAPE)
+            raise UnsupportedFormat(MEDIA_SHAPE, MEDIA_HEADERS)
         public[name] = value
     return public
 
@@ -378,10 +512,10 @@ def _reject_secret_fields(value: Any, stage: str) -> None:
     if isinstance(value, dict):
         for name, child in value.items():
             if not isinstance(name, str):
-                raise UnsupportedFormat(stage)
+                raise UnsupportedFormat(stage, RESPONSE_SECRET_FIELD)
             normalized = name.lower().replace("_", "-")
             if normalized in SECRET_FIELD_NAMES:
-                raise UnsupportedFormat(stage)
+                raise UnsupportedFormat(stage, RESPONSE_SECRET_FIELD)
             _reject_secret_fields(child, stage)
     elif isinstance(value, list):
         for child in value:
@@ -392,23 +526,26 @@ def _fallback_response_body(response: Response, *, json_body: bool, stage: str) 
     try:
         status = int(response.status)
     except (TypeError, ValueError):
-        raise UnsupportedFormat(stage) from None
+        raise UnsupportedFormat(stage, RESPONSE_STATUS) from None
     if not 200 <= status < 300:
-        raise UnsupportedFormat(stage)
-    body = response.read(MAX_FALLBACK_TEXT_BYTES + 1)
+        raise UnsupportedFormat(stage, RESPONSE_STATUS)
+    try:
+        body = response.read(MAX_FALLBACK_TEXT_BYTES + 1)
+    except Exception:
+        raise UnsupportedFormat(stage, RESPONSE_READ) from None
     if len(body) > MAX_FALLBACK_TEXT_BYTES:
-        raise UnsupportedFormat(stage)
+        raise UnsupportedFormat(stage, RESPONSE_BODY_TOO_LARGE)
     try:
         text = body.decode("utf-8")
     except UnicodeDecodeError:
-        raise UnsupportedFormat(stage) from None
+        raise UnsupportedFormat(stage, RESPONSE_ENCODING) from None
     if json_body:
         try:
             value = json.loads(text)
         except (TypeError, ValueError):
-            raise UnsupportedFormat(stage) from None
+            raise UnsupportedFormat(stage, RESPONSE_JSON) from None
         if not isinstance(value, dict):
-            raise UnsupportedFormat(stage)
+            raise UnsupportedFormat(stage, RESPONSE_JSON)
         _reject_secret_fields(value, stage)
         return value
     return text
@@ -418,48 +555,55 @@ def _fallback_json(ydl: BrokerOnlyYDL, url: str, stage: str) -> dict[str, Any]:
     response = ydl.urlopen(Request(url))
     value = _fallback_response_body(response, json_body=True, stage=stage)
     if not isinstance(value, dict):
-        raise UnsupportedFormat(stage)
+        raise UnsupportedFormat(stage, RESPONSE_JSON)
     return value
 
 
-def _api_data(payload: dict[str, Any], stage: str) -> dict[str, Any]:
+def _api_data(payload: dict[str, Any], stage: str, reason: str) -> dict[str, Any]:
     if (
         payload.get("code") != 0
         or not isinstance(payload.get("data"), dict)
         or any(name not in {"code", "message", "ttl", "data"} for name in payload)
     ):
-        raise UnsupportedFormat(stage)
+        raise UnsupportedFormat(stage, reason)
     return payload["data"]
 
 
-def _required_text(value: Any, *, stage: str, max_bytes: int = MAX_TITLE_BYTES) -> str:
-    if not isinstance(value, str) or not value.strip() or len(value.encode()) > max_bytes:
-        raise UnsupportedFormat(stage)
+def _required_text(
+    value: Any, *, stage: str, reason: str, max_bytes: int = MAX_TITLE_BYTES
+) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise UnsupportedFormat(stage, reason)
+    try:
+        if len(value.encode()) > max_bytes:
+            raise UnsupportedFormat(stage, reason)
+    except UnicodeEncodeError:
+        raise UnsupportedFormat(stage, reason) from None
     return value
 
 
-def _required_cid(value: Any, stage: str) -> str:
+def _required_cid(value: Any, stage: str, reason: str) -> str:
     if isinstance(value, bool):
-        raise UnsupportedFormat(stage)
+        raise UnsupportedFormat(stage, reason)
     if isinstance(value, int):
         cid = str(value)
     elif isinstance(value, str) and value.isdecimal():
         cid = value
     else:
-        raise UnsupportedFormat(stage)
+        raise UnsupportedFormat(stage, reason)
     if not 1 <= len(cid) <= 32:
-        raise UnsupportedFormat(stage)
+        raise UnsupportedFormat(stage, reason)
     return cid
 
 
-def _required_public_url(value: Any, stage: str) -> str:
+def _required_public_url(value: Any, stage: str, reason: str) -> str:
     if not isinstance(value, str) or len(value.encode()) > MAX_URL_BYTES:
-        raise UnsupportedFormat(stage)
+        raise UnsupportedFormat(stage, reason)
     try:
         parsed = urllib.parse.urlparse(value)
         query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
     except ValueError:
-        raise UnsupportedFormat(stage) from None
+        raise UnsupportedFormat(stage, reason) from None
     if (
         parsed.scheme != "https"
         or not parsed.hostname
@@ -469,18 +613,18 @@ def _required_public_url(value: Any, stage: str) -> str:
         or parsed.query
         or query
     ):
-        raise UnsupportedFormat(stage)
+        raise UnsupportedFormat(stage, reason)
     return value
 
 
 def _fallback_media_url(value: Any) -> str:
     if not isinstance(value, str) or len(value.encode()) > MAX_URL_BYTES:
-        raise UnsupportedFormat(MEDIA_SHAPE)
+        raise UnsupportedFormat(MEDIA_SHAPE, MEDIA_URL_SHAPE)
     try:
         parsed = urllib.parse.urlparse(value)
         query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
     except ValueError:
-        raise UnsupportedFormat(MEDIA_SHAPE) from None
+        raise UnsupportedFormat(MEDIA_SHAPE, MEDIA_URL_SHAPE) from None
     if (
         parsed.scheme not in {"http", "https"}
         or not parsed.hostname
@@ -488,12 +632,12 @@ def _fallback_media_url(value: Any) -> str:
         or parsed.password
         or parsed.fragment
     ):
-        raise UnsupportedFormat(MEDIA_SHAPE)
+        raise UnsupportedFormat(MEDIA_SHAPE, MEDIA_URL_SHAPE)
     if any(name.lower() in SENSITIVE_QUERY_NAMES for name, _ in query):
-        raise UnsupportedFormat(MEDIA_SHAPE)
+        raise UnsupportedFormat(MEDIA_SHAPE, MEDIA_URL_SENSITIVE_QUERY)
     extension = parsed.path.rsplit(".", 1)[-1].lower() if "." in parsed.path else ""
     if extension not in {"mp4", "m4v"}:
-        raise UnsupportedFormat(MEDIA_SHAPE)
+        raise UnsupportedFormat(MEDIA_SHAPE, MEDIA_EXTENSION)
     return value
 
 
@@ -555,26 +699,27 @@ def _extract_initial_state_fallback(url: str) -> dict[str, Any]:
         )
         lowered = webpage.lower()
         if "<html" not in lowered:
-            raise UnsupportedFormat(FALLBACK_WEBPAGE)
+            raise UnsupportedFormat(FALLBACK_WEBPAGE, WEBPAGE_NOT_HTML)
         if "__initial_state__" in lowered:
             raise InitialStateFallbackNotApplicable
         redirected_url = getattr(webpage_response, "url", "")
         if "bangumi" in redirected_url.lower() or "bangumi" in lowered:
-            raise UnsupportedFormat(FALLBACK_WEBPAGE)
+            raise UnsupportedFormat(FALLBACK_WEBPAGE, WEBPAGE_BANGUMI)
 
         nav = _api_data(
             _fallback_json(
                 ydl, f"{BILIBILI_API_ORIGIN}/x/web-interface/nav", FALLBACK_NAV
             ),
             FALLBACK_NAV,
+            NAV_API_ENVELOPE,
         )
         wbi_img = nav.get("wbi_img")
         if not isinstance(nav.get("isLogin"), bool) or not isinstance(wbi_img, dict):
-            raise UnsupportedFormat(FALLBACK_NAV)
+            raise UnsupportedFormat(FALLBACK_NAV, NAV_SHAPE)
         if set(wbi_img) != {"img_url", "sub_url"}:
-            raise UnsupportedFormat(FALLBACK_NAV)
-        _required_public_url(wbi_img.get("img_url"), FALLBACK_NAV)
-        _required_public_url(wbi_img.get("sub_url"), FALLBACK_NAV)
+            raise UnsupportedFormat(FALLBACK_NAV, NAV_WBI_SHAPE)
+        _required_public_url(wbi_img.get("img_url"), FALLBACK_NAV, NAV_WBI_URL)
+        _required_public_url(wbi_img.get("sub_url"), FALLBACK_NAV, NAV_WBI_URL)
         view = _api_data(
             _fallback_json(
                 ydl,
@@ -582,14 +727,17 @@ def _extract_initial_state_fallback(url: str) -> dict[str, Any]:
                 FALLBACK_VIEW,
             ),
             FALLBACK_VIEW,
+            VIEW_API_ENVELOPE,
         )
         if view.get("bvid") != video_id:
-            raise UnsupportedFormat(FALLBACK_VIEW)
-        view_title = _required_text(view.get("title"), stage=FALLBACK_VIEW)
+            raise UnsupportedFormat(FALLBACK_VIEW, VIEW_ID_MISMATCH)
+        view_title = _required_text(
+            view.get("title"), stage=FALLBACK_VIEW, reason=VIEW_TITLE
+        )
         view_pages = view.get("pages")
         if not isinstance(view_pages, list) or not view_pages or not isinstance(view_pages[0], dict):
-            raise UnsupportedFormat(FALLBACK_VIEW)
-        view_cid = _required_cid(view_pages[0].get("cid"), FALLBACK_VIEW)
+            raise UnsupportedFormat(FALLBACK_VIEW, VIEW_PAGES)
+        view_cid = _required_cid(view_pages[0].get("cid"), FALLBACK_VIEW, VIEW_CID)
 
         detail = _api_data(
             _fallback_json(
@@ -598,20 +746,26 @@ def _extract_initial_state_fallback(url: str) -> dict[str, Any]:
                 FALLBACK_DETAIL,
             ),
             FALLBACK_DETAIL,
+            DETAIL_API_ENVELOPE,
         )
         detail_view = detail.get("View")
-        if not isinstance(detail_view, dict) or detail_view.get("bvid") != video_id:
-            raise UnsupportedFormat(FALLBACK_DETAIL)
-        detail_title = _required_text(detail_view.get("title"), stage=FALLBACK_DETAIL)
+        if not isinstance(detail_view, dict):
+            raise UnsupportedFormat(FALLBACK_DETAIL, DETAIL_SHAPE)
+        if detail_view.get("bvid") != video_id:
+            raise UnsupportedFormat(FALLBACK_DETAIL, DETAIL_ID_MISMATCH)
+        detail_title = _required_text(
+            detail_view.get("title"), stage=FALLBACK_DETAIL, reason=DETAIL_TITLE
+        )
         detail_pages = detail_view.get("pages")
-        if (
-            not isinstance(detail_pages, list)
-            or not detail_pages
-            or not isinstance(detail_pages[0], dict)
-            or _required_cid(detail_pages[0].get("cid"), FALLBACK_DETAIL) != view_cid
-            or detail_title != view_title
-        ):
-            raise UnsupportedFormat(FALLBACK_DETAIL)
+        if not isinstance(detail_pages, list) or not detail_pages or not isinstance(detail_pages[0], dict):
+            raise UnsupportedFormat(FALLBACK_DETAIL, DETAIL_PAGES)
+        detail_cid = _required_cid(
+            detail_pages[0].get("cid"), FALLBACK_DETAIL, DETAIL_CID_MISMATCH
+        )
+        if detail_cid != view_cid:
+            raise UnsupportedFormat(FALLBACK_DETAIL, DETAIL_CID_MISMATCH)
+        if detail_title != view_title:
+            raise UnsupportedFormat(FALLBACK_DETAIL, DETAIL_TITLE_MISMATCH)
 
         playurl = _api_data(
             _fallback_json(
@@ -620,18 +774,21 @@ def _extract_initial_state_fallback(url: str) -> dict[str, Any]:
                 FALLBACK_PLAYURL,
             ),
             FALLBACK_PLAYURL,
+            PLAYURL_API_ENVELOPE,
         )
+        if "dash" in playurl:
+            raise UnsupportedFormat(FALLBACK_PLAYURL, PLAYURL_DASH_PRESENT)
         durl = playurl.get("durl")
-        if not isinstance(durl, list) or len(durl) != 1 or "dash" in playurl:
-            raise UnsupportedFormat(FALLBACK_PLAYURL)
+        if not isinstance(durl, list) or len(durl) != 1:
+            raise UnsupportedFormat(FALLBACK_PLAYURL, PLAYURL_DURL_SHAPE)
         segment = durl[0]
         if not isinstance(segment, dict):
-            raise UnsupportedFormat(FALLBACK_PLAYURL)
+            raise UnsupportedFormat(FALLBACK_PLAYURL, PLAYURL_SEGMENT_SHAPE)
         if any(
             name not in {"url", "backup_url", "size", "length", "order"}
             for name in segment
         ):
-            raise UnsupportedFormat(FALLBACK_PLAYURL)
+            raise UnsupportedFormat(FALLBACK_PLAYURL, PLAYURL_SEGMENT_FIELDS)
         media_url = _fallback_media_url(segment.get("url"))
     return {
         "title": detail_title,
@@ -652,7 +809,7 @@ def _formats(info: dict[str, Any]) -> list[dict[str, Any]]:
     formats = info.get("formats")
     if formats is not None:
         if not isinstance(formats, list):
-            raise UnsupportedFormat(PRE_FALLBACK)
+            raise UnsupportedFormat(PRE_FALLBACK, UNCLASSIFIED)
         return formats
 
     # GenericIE returns this bounded top-level shape when a non-HTML response
@@ -660,7 +817,7 @@ def _formats(info: dict[str, Any]) -> list[dict[str, Any]]:
     # it into the same candidate shape as the formats path; do not infer a
     # format for unknown extensions or for non-direct extractor results.
     if info.get("direct") is not True:
-        raise UnsupportedFormat(PRE_FALLBACK)
+        raise UnsupportedFormat(PRE_FALLBACK, UNCLASSIFIED)
     raw_url = info.get("url")
     ext = info.get("ext")
     if (
@@ -668,11 +825,11 @@ def _formats(info: dict[str, Any]) -> list[dict[str, Any]]:
         or not isinstance(ext, str)
         or not ext
     ):
-        raise UnsupportedFormat(PRE_FALLBACK)
+        raise UnsupportedFormat(PRE_FALLBACK, UNCLASSIFIED)
     path = urllib.parse.urlparse(raw_url).path.lower()
     extension = path.rsplit(".", 1)[-1] if "." in path else ""
     if extension not in DIRECT_MEDIA_EXTENSIONS or ext.lower() != extension:
-        raise UnsupportedFormat(PRE_FALLBACK)
+        raise UnsupportedFormat(PRE_FALLBACK, UNCLASSIFIED)
     return [
         {
             "format_id": "direct",
@@ -700,7 +857,7 @@ def _extract(url: str) -> dict[str, Any]:
         return _extract_initial_state_fallback(url)
 
     if not isinstance(info, dict) or info.get("_type") in {"playlist", "multi_video"}:
-        raise UnsupportedFormat(PRE_FALLBACK)
+        raise UnsupportedFormat(PRE_FALLBACK, UNCLASSIFIED)
     formats = _formats(info)
 
     for fmt in reversed(formats):
@@ -730,7 +887,7 @@ def _extract(url: str) -> dict[str, Any]:
             continue
         title = info.get("title")
         if not isinstance(title, str) or not title.strip():
-            raise UnsupportedFormat(MEDIA_SHAPE)
+            raise UnsupportedFormat(MEDIA_SHAPE, MEDIA_TITLE)
         return {
             "title": title,
             "protection": "clear",
@@ -744,7 +901,7 @@ def _extract(url: str) -> dict[str, Any]:
                 }
             ],
         }
-    raise UnsupportedFormat(PRE_FALLBACK)
+    raise UnsupportedFormat(PRE_FALLBACK, MEDIA_NO_MUXED_STREAM)
 
 
 def _network_matrix(url: str) -> dict[str, Any]:
@@ -965,7 +1122,11 @@ def main() -> int:
         else:
             return 64
     except UnsupportedFormat as error:
-        result = {"error": UNSUPPORTED_FORMAT, "unsupported_stage": error.stage}
+        result = {
+            "error": UNSUPPORTED_FORMAT,
+            "unsupported_stage": error.stage,
+            "fallback_reason": error.reason,
+        }
     except (RequestPolicyFailure, BrokerFailure, DownloadError, ExtractorError):
         result = {"error": _FAILURE_CODE or EXTRACTOR_FAILURE}
     except Exception:

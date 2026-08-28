@@ -27,25 +27,35 @@ pub fn render_success_summary(
 /// Convert all process/parser failures to fixed classifications. Raw process
 /// diagnostics, source URLs and worker stderr never cross this boundary.
 pub fn render_error_summary(error: &YtdlpError, diagnostics: &BrokerDiagnosticsSnapshot) -> String {
-    let (result, error_code, unsupported_stage) = match error {
-        YtdlpError::InvalidLocator => ("UNSUPPORTED", "INVALID_LOCATOR", None),
+    let (result, error_code, unsupported_stage, fallback_reason) = match error {
+        YtdlpError::InvalidLocator => ("UNSUPPORTED", "INVALID_LOCATOR", None, None),
         YtdlpError::Process(process_error) => match process_error {
-            ProcessError::Disabled => ("BLOCKED", "RUNTIME_DISABLED", None),
-            _ => ("FAIL", process_error_code(*process_error), None),
+            ProcessError::Disabled => ("BLOCKED", "RUNTIME_DISABLED", None, None),
+            _ => ("FAIL", process_error_code(*process_error), None, None),
         },
         YtdlpError::Parse(parse_error) => match parse_error {
-            ParseError::UnsupportedFormat => ("UNSUPPORTED", "UNSUPPORTED_FORMAT", None),
+            ParseError::UnsupportedFormat => ("UNSUPPORTED", "UNSUPPORTED_FORMAT", None, None),
             ParseError::UnsupportedFormatStage(stage) => {
-                ("UNSUPPORTED", "UNSUPPORTED_FORMAT", Some(*stage))
+                ("UNSUPPORTED", "UNSUPPORTED_FORMAT", Some(*stage), None)
             }
-            ParseError::RequestPolicyRejected => ("FAIL", "REQUEST_POLICY_REJECTED", None),
-            ParseError::BrokerFailure => ("FAIL", "BROKER_FAILURE", None),
-            ParseError::ExtractorFailure => ("FAIL", "EXTRACTOR_FAILURE", None),
-            ParseError::UnexpectedWorkerFailure => ("FAIL", "UNEXPECTED_WORKER_FAILURE", None),
-            ParseError::UnsupportedProtocol => ("UNSUPPORTED", "UNSUPPORTED_PROTOCOL", None),
-            ParseError::DrmUnsupported => ("UNSUPPORTED", "DRM_UNSUPPORTED", None),
-            ParseError::UnsupportedProtection => ("UNSUPPORTED", "UNSUPPORTED_PROTECTION", None),
-            _ => ("FAIL", "PARSE_ERROR", None),
+            ParseError::UnsupportedFormatStageReason(stage, reason) => (
+                "UNSUPPORTED",
+                "UNSUPPORTED_FORMAT",
+                Some(*stage),
+                Some(*reason),
+            ),
+            ParseError::RequestPolicyRejected => ("FAIL", "REQUEST_POLICY_REJECTED", None, None),
+            ParseError::BrokerFailure => ("FAIL", "BROKER_FAILURE", None, None),
+            ParseError::ExtractorFailure => ("FAIL", "EXTRACTOR_FAILURE", None, None),
+            ParseError::UnexpectedWorkerFailure => {
+                ("FAIL", "UNEXPECTED_WORKER_FAILURE", None, None)
+            }
+            ParseError::UnsupportedProtocol => ("UNSUPPORTED", "UNSUPPORTED_PROTOCOL", None, None),
+            ParseError::DrmUnsupported => ("UNSUPPORTED", "DRM_UNSUPPORTED", None, None),
+            ParseError::UnsupportedProtection => {
+                ("UNSUPPORTED", "UNSUPPORTED_PROTECTION", None, None)
+            }
+            _ => ("FAIL", "PARSE_ERROR", None, None),
         },
     };
     let mut output = String::new();
@@ -56,6 +66,9 @@ pub fn render_error_summary(error: &YtdlpError, diagnostics: &BrokerDiagnosticsS
     let _ = writeln!(output, "process_error: {error_code}");
     if let Some(stage) = unsupported_stage {
         let _ = writeln!(output, "unsupported_stage: {}", stage.as_str());
+    }
+    if let Some(reason) = fallback_reason {
+        let _ = writeln!(output, "fallback_reason: {}", reason.as_str());
     }
     output
 }
