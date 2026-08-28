@@ -35,7 +35,11 @@ MAX_HEADER_NAME = 128
 MAX_HEADER_VALUE = 4096
 DIRECT_MEDIA_EXTENSIONS = frozenset({"mp4", "m4v", "m3u8"})
 BILIBILI_API_ORIGIN = "https://api.bilibili.com"
-MAX_FALLBACK_TEXT_BYTES = MAX_BODY
+# Keep fallback documents below the R008 response ceiling so an oversized
+# fallback document can be classified by the worker before broker framing
+# rejects it. The stricter bound also limits JSON/text retained by this
+# compatibility-only continuation.
+MAX_FALLBACK_TEXT_BYTES = MAX_BODY // 2
 SECRET_FIELD_NAMES = frozenset(
     {
         "authorization",

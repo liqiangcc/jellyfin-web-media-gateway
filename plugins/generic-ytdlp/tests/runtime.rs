@@ -107,7 +107,11 @@ impl InitialStateFallbackFixtureBroker {
                 return (503, String::from("text/html"), Vec::new());
             }
             if fallback && case == "webpage-response-too-large" {
-                return (200, String::from("text/html"), vec![b'a'; 96 * 1024 + 1]);
+                return (
+                    200,
+                    String::from("text/html"),
+                    vec![b'a'; gateway_egress::MAX_BODY_BYTES],
+                );
             }
             if fallback && case == "webpage-response-encoding" {
                 return (200, String::from("text/html"), vec![0xff, 0xfe]);
@@ -122,7 +126,7 @@ impl InitialStateFallbackFixtureBroker {
                 return (
                     200,
                     String::from("application/json"),
-                    vec![b'a'; 96 * 1024 + 1],
+                    vec![b'a'; gateway_egress::MAX_BODY_BYTES],
                 );
             }
             if fallback && case == "response-encoding" {
