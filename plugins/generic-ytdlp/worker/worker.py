@@ -21,6 +21,7 @@ from typing import Any
 from yt_dlp import YoutubeDL
 from yt_dlp.networking import Request, RequestDirector, RequestHandler, Response
 from yt_dlp.networking.exceptions import RequestError
+from yt_dlp.utils import DownloadError, ExtractorError
 from yt_dlp.version import __version__
 
 EXPECTED_VERSION = "2026.08.19"
@@ -37,10 +38,30 @@ MAX_FRAME = (
     + 4 * 1024
 )
 _BROKER_STREAM: socket.socket | None = None
+_FAILURE_CODE: str | None = None
+
+REQUEST_POLICY_REJECTED = "REQUEST_POLICY_REJECTED"
+BROKER_FAILURE = "BROKER_FAILURE"
+EXTRACTOR_FAILURE = "EXTRACTOR_FAILURE"
+UNSUPPORTED_FORMAT = "UNSUPPORTED_FORMAT"
+UNEXPECTED_WORKER_FAILURE = "UNEXPECTED_WORKER_FAILURE"
 
 
 class UnsupportedFormat(Exception):
     """The fixed first-playback policy cannot represent the extraction."""
+
+
+class RequestPolicyFailure(RequestError):
+    """A repository-owned request rule rejected the operation."""
+
+
+class BrokerFailure(RequestError):
+    """The bounded broker capability rejected or failed the operation."""
+
+
+def _remember_failure(code: str) -> None:
+    global _FAILURE_CODE
+    _FAILURE_CODE = code
 
 
 def _read_exact(stream: socket.socket, size: int) -> bytes:
@@ -65,22 +86,35 @@ def _broker_request(request: dict[str, Any]) -> dict[str, Any]:
     payload = json.dumps(request, separators=(",", ":")).encode()
     if not payload or len(payload) > MAX_FRAME:
         raise RequestError("broker frame rejected")
-    _BROKER_STREAM.sendall(len(payload).to_bytes(4, "big") + payload)
-    length = int.from_bytes(_read_exact(_BROKER_STREAM, 4), "big")
+    try:
+        _BROKER_STREAM.sendall(len(payload).to_bytes(4, "big") + payload)
+        length = int.from_bytes(_read_exact(_BROKER_STREAM, 4), "big")
+    except (OSError, RuntimeError):
+        _remember_failure(BROKER_FAILURE)
+        raise BrokerFailure("broker transport failed") from None
     if length == 0 or length > MAX_FRAME:
-        raise RequestError("broker frame rejected")
-    response = json.loads(_read_exact(_BROKER_STREAM, length))
+        _remember_failure(BROKER_FAILURE)
+        raise BrokerFailure("broker frame rejected")
+    try:
+        response = json.loads(_read_exact(_BROKER_STREAM, length))
+    except (json.JSONDecodeError, OSError, RuntimeError):
+        _remember_failure(BROKER_FAILURE)
+        raise BrokerFailure("broker envelope rejected") from None
     if not isinstance(response, dict):
-        raise RequestError("broker envelope rejected")
+        _remember_failure(BROKER_FAILURE)
+        raise BrokerFailure("broker envelope rejected")
     if response.get("error"):
-        raise RequestError("broker request rejected")
+        _remember_failure(BROKER_FAILURE)
+        raise BrokerFailure("broker request rejected")
     body_hex = response.get("body_hex", "")
     if not isinstance(body_hex, str) or len(body_hex) > MAX_BODY * 2:
-        raise RequestError("broker body rejected")
+        _remember_failure(BROKER_FAILURE)
+        raise BrokerFailure("broker body rejected")
     try:
         response["body"] = binascii.unhexlify(body_hex)
     except (binascii.Error, ValueError):
-        raise RequestError("broker body rejected") from None
+        _remember_failure(BROKER_FAILURE)
+        raise BrokerFailure("broker body rejected") from None
     return response
 
 
@@ -94,12 +128,15 @@ class BrokerRH(RequestHandler):
 
     def _send(self, request: Request) -> Response:
         if request.proxies:
-            raise RequestError("proxy configuration is not admitted")
+            _remember_failure(REQUEST_POLICY_REJECTED)
+            raise RequestPolicyFailure("proxy configuration is not admitted")
         headers = self._get_headers(request)
         if any(_is_secret_header(name, value) for name, value in headers.items()):
-            raise RequestError("secret request headers are not admitted")
+            _remember_failure(REQUEST_POLICY_REJECTED)
+            raise RequestPolicyFailure("secret request headers are not admitted")
         if request.data is not None and not isinstance(request.data, bytes):
-            raise RequestError("streaming request bodies are not admitted")
+            _remember_failure(REQUEST_POLICY_REJECTED)
+            raise RequestPolicyFailure("streaming request bodies are not admitted")
         response = _broker_request(
             {
                 "operation": "http",
@@ -459,61 +496,86 @@ def _spawn_long_lived_descendant() -> None:
 
 
 def main() -> int:
+    global _FAILURE_CODE
     if __version__ != EXPECTED_VERSION or os.environ.get("YTDLP_EXPECTED_VERSION") != EXPECTED_VERSION:
         return 42
     if sys.argv[1:] and sys.argv[1] == "crash":
         os._exit(7)
     action = sys.argv[1] if len(sys.argv) > 1 else "probe"
     url = sys.argv[2] if len(sys.argv) > 2 else "https://fixture.example.test/media"
-    if action == "probe":
-        result = _probe(url)
-    elif action == "extract":
-        try:
+    _FAILURE_CODE = None
+    try:
+        if action == "probe":
+            result = _probe(url)
+        elif action == "extract":
             result = _extract(url)
-        except UnsupportedFormat:
-            result = {"error": "UNSUPPORTED_FORMAT"}
-    elif action == "multi-probe":
-        _probe(url)
-        result = _probe(url)
-    elif action == "network-matrix":
-        result = _network_matrix(url)
-    elif action == "ambient-fd":
-        result = _ambient_fd_report(url)
-    elif action == "timeout":
-        import time
+        elif action == "classification-request-policy":
+            with _ydl() as ydl:
+                ydl.urlopen(Request(url, headers={"Authorization": "Bearer policy-sentinel"}))
+            raise AssertionError("request policy fixture unexpectedly passed")
+        elif action == "classification-extractor":
+            raise DownloadError(
+                "extractor failed at https://fixture.invalid/watch?token=query-sentinel "
+                "Authorization=Bearer credential-sentinel"
+            )
+        elif action == "classification-unexpected":
+            raise RuntimeError(
+                "unexpected https://fixture.invalid/?sig=unexpected-sentinel"
+            )
+        elif action == "classification-malformed":
+            sys.stdout.write("{")  # deterministic parser-negative fixture
+            sys.stdout.flush()
+            return 0
+        elif action == "classification-unknown":
+            result = {"error": "UNKNOWN_WORKER_FAILURE"}
+        elif action == "multi-probe":
+            _probe(url)
+            result = _probe(url)
+        elif action == "network-matrix":
+            result = _network_matrix(url)
+        elif action == "ambient-fd":
+            result = _ambient_fd_report(url)
+        elif action == "timeout":
+            import time
 
-        time.sleep(60)
-        return 0
-    elif action in {"timeout-descendant", "cancel-descendant"}:
-        import time
+            time.sleep(60)
+            return 0
+        elif action in {"timeout-descendant", "cancel-descendant"}:
+            import time
 
-        _spawn_long_lived_descendant()
-        time.sleep(60)
-        return 0
-    elif action == "cancel-probe-descendant":
-        _spawn_long_lived_descendant()
-        result = _probe(url)
-    elif action == "crash-descendant":
-        _spawn_long_lived_descendant()
-        os._exit(7)
-    elif action == "overflow-descendant":
-        _spawn_long_lived_descendant()
-        sys.stdout.write("x" * (512 * 1024))
-        sys.stdout.flush()
-        return 0
-    elif action == "overflow":
-        sys.stdout.write("x" * (512 * 1024))
-        sys.stdout.flush()
-        return 0
-    elif action == "diagnostic-sentinel":
-        sys.stderr.write(
-            "source=https://fixture.example.test/watch?sig=signed-query-secret "
-            "Authorization=Bearer secret-token Cookie=session-secret\n"
-        )
-        sys.stderr.flush()
-        return 65
-    else:
-        return 64
+            _spawn_long_lived_descendant()
+            time.sleep(60)
+            return 0
+        elif action == "cancel-probe-descendant":
+            _spawn_long_lived_descendant()
+            result = _probe(url)
+        elif action == "crash-descendant":
+            _spawn_long_lived_descendant()
+            os._exit(7)
+        elif action == "overflow-descendant":
+            _spawn_long_lived_descendant()
+            sys.stdout.write("x" * (512 * 1024))
+            sys.stdout.flush()
+            return 0
+        elif action == "overflow":
+            sys.stdout.write("x" * (512 * 1024))
+            sys.stdout.flush()
+            return 0
+        elif action == "diagnostic-sentinel":
+            sys.stderr.write(
+                "source=https://fixture.example.test/watch?sig=signed-query-secret "
+                "Authorization=Bearer secret-token Cookie=session-secret\n"
+            )
+            sys.stderr.flush()
+            return 65
+        else:
+            return 64
+    except UnsupportedFormat:
+        result = {"error": UNSUPPORTED_FORMAT}
+    except (RequestPolicyFailure, BrokerFailure, DownloadError, ExtractorError):
+        result = {"error": _FAILURE_CODE or EXTRACTOR_FAILURE}
+    except Exception:
+        result = {"error": _FAILURE_CODE or UNEXPECTED_WORKER_FAILURE}
     sys.stdout.write(json.dumps(result, separators=(",", ":")))
     sys.stdout.flush()
     if _BROKER_STREAM is not None:
