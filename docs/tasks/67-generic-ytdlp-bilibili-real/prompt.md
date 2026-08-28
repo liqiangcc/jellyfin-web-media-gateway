@@ -25,7 +25,7 @@ Sample: BV14V411W7r5
 Harness: scripts/generic-ytdlp-real-smoke.sh
 ```
 
-Formal R11 bootstrap freeze is non-executable until Coordinator Publication Gate publishes the Issue as a fresh ready Attempt.
+Formal R11 bootstrap authority is established only after old R10 execution authority has been revoked and the Coordinator Publication Gate publishes the Issue as a fresh ready Attempt. Any pre-draft materialization is non-executable history.
 
 Read `AGENTS.md`, Issue #67/comments, `task.md`, lifecycle/freshness protocols, #105 Final Acceptance, #103/#101/#99/#97 Final Acceptance, and accepted #95/#85/#83/#79/#63/#73/#66/#60 authorities before claim.
 
