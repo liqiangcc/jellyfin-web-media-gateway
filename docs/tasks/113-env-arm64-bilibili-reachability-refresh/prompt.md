@@ -1,6 +1,6 @@
-# Session Bootstrap — ENV-ARM64-BILIBILI-REACHABILITY-REFRESH
+# Session Bootstrap — ENV-ARM64-BILIBILI-REACHABILITY-REFRESH R2
 
-Execute Issue #113 using the repository Worker protocol.
+Execute Issue #113 Contract Revision R2 / Attempt 2 using the repository Worker protocol.
 
 ## Claim gate
 
@@ -15,11 +15,13 @@ no active owner
 
 Otherwise STOP.
 
-Read `AGENTS.md`, live #113, `docs/tasks/113-env-arm64-bilibili-reachability-refresh/task.md`, lifecycle protocols, #67 R15 blocker review, #63 Final Acceptance and #36 site-reachability boundary before claim.
+Read `AGENTS.md`, live #113, `docs/tasks/113-env-arm64-bilibili-reachability-refresh/task.md`, lifecycle protocols, #67 R17 Attempt 17 blocker review, #113 Attempt 1 Final Acceptance, #63 Final Acceptance and #36 site-reachability boundary before claim.
+
+R2 trigger authority is only: #67 R17 exact Candidate `80fb081b129f8f664124b84ddcc9698039e2cfd1` had J0/J1 PASS, public direct/no-proxy `2xx`, unchanged frozen sample `4xx`, and J3 NOT RUN. This does not prove or disprove #114 compatibility.
 
 ## Goal
 
-Only refresh normal-network reachability of the unchanged frozen sample:
+Only refresh normal-network reachability of the unchanged frozen sample for #113 R2 / Attempt 2:
 
 ```text
 BV14V411W7r5
@@ -60,6 +62,8 @@ Overall: BLOCKED
 ```
 
 A BLOCKED result must not trigger proxy/fingerprint/Cookie/challenge/bypass behavior.
+
+A PASS returns only fresh reachability authority to the Coordinator for a later #67 Publication Gate; it does not authorize #67 execution from this Worker and does not change runtime Candidate `80fb081b129f8f664124b84ddcc9698039e2cfd1`.
 
 ## Evidence boundary
 

@@ -6,8 +6,10 @@
 GitHub Issue: #113
 Task ID: ENV-ARM64-BILIBILI-REACHABILITY-REFRESH
 Task kind: verification-only / environment + public-site reachability
-Parent: #67 GENERIC-YTDLP-BILIBILI-REAL / R15 Attempt 15
-Planning Base: 82613fb5ba1a74cb883d31dac6f14dfaeb54bf0f
+Contract Revision: R2
+Attempt: 2
+Parent: #67 GENERIC-YTDLP-BILIBILI-REAL / R17 Attempt 17
+Planning Base: 9a6fc52a70a83ab49b5b07c426c74985734b664e
 Preferred worker: ubuntu-arm64
 Eligible environment: env:ubuntu-arm64
 Target: accepted Ubuntu ARM64 phone / gateway-runner
@@ -17,20 +19,22 @@ Publication state: non-executable until Coordinator Publication Gate passes
 
 ## Trigger
 
-#67 R15 established exact Candidate `942a0a1843f8f207332ac646f12ffe6ab5017306` and frozen runtime on the accepted phone, but stopped at J2:
+#67 R17 established exact Candidate `80fb081b129f8f664124b84ddcc9698039e2cfd1` and frozen runtime provenance on the accepted phone, but stopped at J2 before resolver execution:
 
 ```text
+J0 exact Candidate: PASS
+J1 frozen runtime: PASS
 direct public HTTPS: 2xx
 direct frozen Bilibili sample: 4xx
 J3: NOT RUN
 Overall: BLOCKED
 ```
 
-This is site-reachability/environment Evidence only. It is not a generic-ytdlp compatibility result and does not invalidate #111.
+This is site-reachability/environment Evidence only. It is not a generic-ytdlp compatibility result and does not invalidate #114. The accepted #114 webpage-normalization repair remains unexercised against a normally reachable frozen sample in R17.
 
 Historical accepted Evidence:
-- #63 Final Acceptance previously proved the same frozen sample reachable with direct/no-proxy HTTP 200 on the accepted phone.
-- #63 also recorded one transient direct-path failure before a bounded identical-path retry recovered to HTTP 200.
+- #113 Attempt 1 previously refreshed the same frozen sample on the same accepted phone with identical direct/no-proxy probes and returned `4xx → 2xx → 2xx`, satisfying two consecutive `2xx`.
+- #63 Final Acceptance also proved the same frozen sample reachable with direct/no-proxy HTTP 200 on the accepted phone and recorded a transient direct-path failure before a bounded identical-path retry recovered.
 - #36 freezes the policy that if the unchanged public sample is unavailable from a permitted normal-network host, the result is BLOCKED and no proxy/fingerprint/Cookie/login/CAPTCHA/access-control bypass may be attempted.
 
 ## Goal
@@ -77,7 +81,7 @@ PASS proves only:
 BILIBILI_HOST_ELIGIBLE_FOR_#67_REFRESH=yes
 ```
 
-It does not prove extraction, ResolvedMedia, #111 behavior, playback or #68 readiness.
+It does not prove extraction, ResolvedMedia, #114 behavior, playback or #68 readiness.
 
 ### BLOCKED
 
