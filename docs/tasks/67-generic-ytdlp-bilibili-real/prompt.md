@@ -17,19 +17,19 @@ If Issue state is `status:draft`, `status:blocked`, `status:review`, or already 
 ## Frozen execution
 
 ```text
-Contract Revision: R8
-Attempt: 8
-Exact Candidate: cd95db5f0becb875455789f168b92c44a96a5260
+Contract Revision: R9
+Attempt: 9
+Exact Candidate: c2834fd046cbf29a3602e9f13ae5153217c6c886
 Target: accepted Ubuntu ARM64 phone / gateway-runner
 Sample: BV14V411W7r5
 Harness: scripts/generic-ytdlp-real-smoke.sh
 ```
 
-Formal R8 bootstrap freeze was materialized while #67 was `status:draft`; it becomes executable only after Coordinator Publication Gate publishes the Issue.
+Formal R9 bootstrap freeze was materialized while #67 was `status:draft`; it becomes executable only after Coordinator Publication Gate publishes the Issue.
 
-Read `AGENTS.md`, Issue #67/comments, `task.md`, lifecycle/freshness protocols, #99 and #97 Final Acceptance, and accepted #95/#85/#83/#79/#63/#73/#66/#60 authorities before claim.
+Read `AGENTS.md`, Issue #67/comments, `task.md`, lifecycle/freshness protocols, #101/#99/#97 Final Acceptance, and accepted #95/#85/#83/#79/#63/#73/#66/#60 authorities before claim.
 
-Attempt 7 preserved exact runtime and Target identity and proved direct/no-proxy Bilibili reachability, but returned `process_error: SANDBOX_UNAVAILABLE` with `broker_request_count: 0` before the accepted sandbox path. #99 proved and repaired the clean-build sibling artifact closure, including a native ARM64 clean-built pair reaching the broker through the fixed sibling, and was Final Accepted/merged as `cd95db5f0becb875455789f168b92c44a96a5260`.
+Attempt 8 preserved exact runtime and Target identity, cleared all former sandbox/spawn/Secret/framing blockers, and reached three 2xx broker requests, but returned only `process_error: NONZERO_EXIT` with no ResolvedMedia. #101 added a fixed Secret-safe worker outcome taxonomy and was Final Accepted/merged as `c2834fd046cbf29a3602e9f13ae5153217c6c886`.
 
 Required path:
 
@@ -41,6 +41,7 @@ Required path:
 → #85 fd fallback
 → R008 + #95 response containment
 → #97 bounded broker framing
+→ #101 bounded worker/extractor outcome envelope
 → yt_dlp.extract_info(download=False)
 → current ResolvedMedia
 ```
@@ -50,7 +51,7 @@ Hard boundaries:
 - exact Candidate only, not moving main;
 - no root/sudo/system install or Target package-index resolution;
 - no Cookie/login/profile/fingerprint/CAPTCHA/proxy/bypass;
-- no R008/#95/#97/#83/#85 weakening;
+- no R008/#101/#99/#95/#97/#83/#85 weakening;
 - no direct worker network/alternate socket;
 - no Secret/full signed URL/raw stderr/page/media payload in Evidence;
 - no DASH/remux/FFmpeg/navigation/Browser/Web E2E/performance;
@@ -65,16 +66,20 @@ YTDLP_OFFLINE_BUNDLE=<verified-bundle-path> \
   'https://www.bilibili.com/video/BV14V411W7r5/'
 ```
 
-Decisive Attempt-8 signals:
+Decisive Attempt-9 signals:
 
 ```text
 runtime_cache: offline-hit | offline-prepared
 process_error != SANDBOX_UNAVAILABLE
 process_error != SPAWN_FAILED
 process_error != BROKER_PROTOCOL
+process_error != NONZERO_EXIT
 broker_request_count > 0
 broker_error_code != BROKER_RESPONSE_SECRET_REJECTED
 ```
+
+If no ResolvedMedia is produced, require one fixed #101 classification and
+report only that code. Never inspect or publish raw stderr or exception text.
 
 If a bounded blocker repeats, report it and STOP; do not fix it in #67. If media classification is reached, report only bounded protocol/stream/title fields and Overall `PASS | CONDITIONAL PASS | FAIL | BLOCKED`.
 
