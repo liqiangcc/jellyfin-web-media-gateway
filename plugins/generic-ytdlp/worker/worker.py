@@ -299,15 +299,48 @@ def _is_muxed(fmt: dict[str, Any]) -> bool:
     return fmt.get("vcodec") != "none" and fmt.get("acodec") != "none"
 
 
+def _formats(info: dict[str, Any]) -> list[dict[str, Any]]:
+    formats = info.get("formats")
+    if formats is not None:
+        if not isinstance(formats, list):
+            raise UnsupportedFormat
+        return formats
+
+    # GenericIE returns this bounded top-level shape when a non-HTML response
+    # has a known media extension but no recognized media MIME type. Normalize
+    # it into the same candidate shape as the formats path; do not infer a
+    # format for unknown extensions or for non-direct extractor results.
+    if info.get("direct") is not True:
+        raise UnsupportedFormat
+    raw_url = info.get("url")
+    ext = info.get("ext")
+    if (
+        not isinstance(raw_url, str)
+        or not isinstance(ext, str)
+        or not ext
+        or ext in {"unknown", "unknown_video"}
+    ):
+        raise UnsupportedFormat
+    return [
+        {
+            "format_id": "direct",
+            "url": raw_url,
+            "ext": ext,
+            "protocol": None,
+            "vcodec": None,
+            "acodec": None,
+            "http_headers": info.get("http_headers"),
+        }
+    ]
+
+
 def _extract(url: str) -> dict[str, Any]:
     with _ydl() as ydl:
         info = ydl.extract_info(url, download=False)
 
     if not isinstance(info, dict) or info.get("_type") in {"playlist", "multi_video"}:
         raise UnsupportedFormat
-    formats = info.get("formats") or []
-    if not isinstance(formats, list):
-        raise UnsupportedFormat
+    formats = _formats(info)
 
     for fmt in reversed(formats):
         if not isinstance(fmt, dict) or not _is_muxed(fmt):
