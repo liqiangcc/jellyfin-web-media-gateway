@@ -6,9 +6,9 @@
 GitHub Issue: #67
 Task ID: GENERIC-YTDLP-BILIBILI-REAL
 Task kind: verification-only / real public network
-Contract Revision: R8
-Next Attempt: 8
-Exact Execution Candidate: cd95db5f0becb875455789f168b92c44a96a5260
+Contract Revision: R9
+Next Attempt: 9
+Exact Execution Candidate: c2834fd046cbf29a3602e9f13ae5153217c6c886
 Preferred worker: ubuntu-arm64
 Eligible environment after publication: env:ubuntu-arm64
 Accepted extraction upstream: #66 Final Accepted
@@ -19,15 +19,16 @@ Accepted legacy-kernel fd-isolation authority: #85 Final Accepted / merge 76b203
 Accepted anonymous response Secret containment authority: #95 Final Accepted / merge 804fd60343b081e5e055ba87f68e7939b106bb19
 Accepted broker IPC/wire authority: #97 Final Accepted / merge d9c038547ed2df695571f8dd4f732bdcdd4d5c19
 Accepted clean-build sandbox binding authority: #99 Final Accepted / merge cd95db5f0becb875455789f168b92c44a96a5260
+Accepted bounded extractor failure authority: #101 Final Accepted / merge c2834fd046cbf29a3602e9f13ae5153217c6c886
 Accepted target environment: #63 Final Accepted
 Accepted security/runtime authority: #60 + R008 + ADR 0007
 Downstream: #68 BILIBILI-WEB-E2E
 Freshness policy: dependency-aware / exact Candidate
 Publication state: status:draft until Coordinator Publication Gate passes
-Formal R8 draft freeze: recorded after #67 Attempt 7 blocker and #99 Final Acceptance
+Formal R9 draft freeze: recorded after #67 Attempt 8 blocker and #101 Final Acceptance
 ```
 
-#67 remains verification-only. Attempt 7 verified the exact offline runtime, low-privilege Linux 4.19 ARM64 Target and direct/no-proxy Bilibili reachability, but stopped before broker traffic with `SANDBOX_UNAVAILABLE` because the clean smoke build did not produce its required sibling sandbox. #99 closed that artifact-wiring defect without weakening the accepted sandbox and was Final Accepted / merged as `cd95db5f0becb875455789f168b92c44a96a5260`.
+#67 remains verification-only. Attempt 8 cleared the former sandbox, spawn, response-Secret and broker-framing blockers and reached three 2xx broker requests, but the worker then collapsed its extractor result to `NONZERO_EXIT` without a safe media or failure classification. #101 added a closed Secret-safe taxonomy for request-policy, broker, extractor/site, unsupported-format and unexpected-worker outcomes while leaving crash/nonzero behavior fail closed. It was Final Accepted / merged as `c2834fd046cbf29a3602e9f13ae5153217c6c886`.
 
 ## Frozen sample and runtime
 
@@ -55,6 +56,7 @@ trust anchor: scripts/generic-ytdlp-offline-runtime.lock.json
 → BrokerProcessRunner + #85 ENOSYS fd fallback
 → R008Broker + #95 response Secret containment
 → #97 bounded broker wire/framing
+→ #101 bounded worker/extractor outcome envelope
 → yt_dlp.extract_info(download=False)
 → GenericYtdlpAdapter
 → current ResolvedMedia
@@ -63,7 +65,7 @@ trust anchor: scripts/generic-ytdlp-offline-runtime.lock.json
 Exact runtime Candidate:
 
 ```text
-cd95db5f0becb875455789f168b92c44a96a5260
+c2834fd046cbf29a3602e9f13ae5153217c6c886
 ```
 
 Do not substitute moving main. If accepted semantic changes touch `plugins/generic-ytdlp/**`, `scripts/generic-ytdlp-*`, `gateway-egress/**`/R008/ADR0007, sandbox/fd-isolation, or current SiteAdapter/ResolvedMedia authority before claim, STOP for Coordinator freshness review.
@@ -75,7 +77,7 @@ Do not substitute moving main. If accepted semantic changes touch `plugins/gener
 - no Target package-index/source resolution or replacement yt-dlp;
 - direct/no-proxy site Evidence only;
 - no Cookie/login/profile/fingerprint/CAPTCHA/proxy rotation/access-control bypass;
-- no R008 HTTP limit change, Secret declassification/store/replay, sandbox/fd bypass, alternate socket or direct worker egress;
+- no R008 HTTP limit change, #101 taxonomy bypass, Secret declassification/store/replay, sandbox/fd bypass, alternate socket or direct worker egress;
 - no full signed media URL, query token, Secret header, raw stderr, page body or media payload in durable Evidence;
 - no DASH/remux/FFmpeg/navigation/Browser/Web E2E/performance;
 - production GenericYtdlpAdapter default remains DisabledRunner;
@@ -103,9 +105,16 @@ Required progression signals:
 process_error != SANDBOX_UNAVAILABLE
 process_error != SPAWN_FAILED
 process_error != BROKER_PROTOCOL
+process_error != NONZERO_EXIT
 broker_request_count > 0
 broker_error_code != BROKER_RESPONSE_SECRET_REJECTED
 ```
+
+If resolution still does not succeed, `process_error` must be one of the
+accepted fixed #101 codes (`REQUEST_POLICY_REJECTED`, `BROKER_FAILURE`,
+`EXTRACTOR_FAILURE`, `UNSUPPORTED_FORMAT`, or
+`UNEXPECTED_WORKER_FAILURE`) rather than raw diagnostics or generic
+`NONZERO_EXIT`.
 
 Capture only bounded safe fields: result, plugin, runtime_cache, broker_status_class, broker_error_code, broker_request_count, protocol, stream_count, title_length, process_error.
 
@@ -113,7 +122,7 @@ J4 — verify no staging/worker/sandbox/descendant/media payload leftovers; veri
 
 ## Result semantics
 
-PASS requires exact Candidate, accepted #79/#83/#85/#95/#97/#99 path, direct site reachability, former SANDBOX/SPAWN/SECRET/BROKER_PROTOCOL blockers cleared, `broker_request_count > 0`, harness PASS, protocol `http-file | hls`, at least one current-contract muxed stream, and cleanup/security PASS.
+PASS requires exact Candidate, accepted #79/#83/#85/#95/#97/#99/#101 path, direct site reachability, former SANDBOX/SPAWN/SECRET/BROKER_PROTOCOL/NONZERO blockers cleared, `broker_request_count > 0`, harness PASS, protocol `http-file | hls`, at least one current-contract muxed stream, and cleanup/security PASS.
 
 CONDITIONAL PASS is only a bounded non-security condition with valid current ResolvedMedia that still permits explicit #68 routing; Coordinator decides.
 
@@ -124,7 +133,7 @@ BLOCKED includes offline provenance/transfer failure, repeated SANDBOX/SPAWN/SEC
 ## Claims
 
 ```text
-R1 exact #79/#83/#85/#95/#97/#99 runtime authority
+R1 exact #79/#83/#85/#95/#97/#99/#101 runtime authority
 R2 Target dependency independence
 R3 direct/no-bypass public accessibility
 R4 ARM64 sandbox + #85 fd/broker integrity
@@ -155,7 +164,7 @@ Attempt / worker / environment / UTC
 host arch/kernel/uid privilege class
 Exact Candidate SHA
 BV14V411W7r5
-#85/#95/#97/#99 accepted merge SHAs
+#85/#95/#97/#99/#101 accepted merge SHAs
 bundle transfer class + trust-anchor/wheel/provenance result
 runtime_cache
 direct public/Bilibili status class
