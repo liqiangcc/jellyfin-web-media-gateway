@@ -710,8 +710,8 @@ fn explicit_runtime_constructor_resolves_through_current_adapter_contract() {
 #[test]
 fn extract_action_rejects_separate_or_unsupported_formats() {
     for (path, reason) in [
-        ("separate", UnsupportedReason::MediaNoMuxedStream),
-        ("unsupported", UnsupportedReason::MediaNoMuxedStream),
+        ("separate", UnsupportedReason::Unclassified),
+        ("unsupported", UnsupportedReason::Unclassified),
     ] {
         let output = runner(Duration::from_secs(5))
             .run_action(
@@ -739,7 +739,7 @@ fn unsupported_stage_worker_envelope_contains_only_fixed_stage_values() {
         .unwrap();
     assert_eq!(
         output.stdout,
-        br#"{"error":"UNSUPPORTED_FORMAT","unsupported_stage":"PRE_FALLBACK","fallback_reason":"MEDIA_NO_MUXED_STREAM"}"#
+        br#"{"error":"UNSUPPORTED_FORMAT","unsupported_stage":"PRE_FALLBACK","fallback_reason":"UNCLASSIFIED"}"#
     );
 }
 
