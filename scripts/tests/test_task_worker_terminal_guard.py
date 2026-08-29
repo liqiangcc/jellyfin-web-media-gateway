@@ -1,5 +1,6 @@
 import importlib.util
 import pathlib
+import sys
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -7,6 +8,7 @@ PATH = ROOT / "scripts" / "task-worker-terminal-guard.py"
 spec = importlib.util.spec_from_file_location("task_worker_terminal_guard", PATH)
 mod = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
+sys.modules[spec.name] = mod
 spec.loader.exec_module(mod)
 
 
