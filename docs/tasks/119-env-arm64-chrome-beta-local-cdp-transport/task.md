@@ -1,151 +1,180 @@
-# Task #119 — Establish deterministic local-only DevTools transport for Chrome Beta
+# Task #119 — ENV-ARM64-CHROME-BETA-LOCAL-CDP-TRANSPORT
 
 ## Identity
 
 - Issue: #119
-- Task ID: `ENV-ARM64-CHROME-BETA-LOCAL-CDP-TRANSPORT`
 - Kind: environment transport verification / provisioning
-- Parent blocked task: #118
-- Upstream: #116 remains blocked; #117 remains draft
 - Planning base: `d62b4a3cfdbde296413786c077ef35c444ae98b5`
-- Eligible environment: `env:ubuntu-arm64`
-- Worker: independent Ubuntu ARM64 Worker on accepted phone
-
-## Trigger evidence
-
-#118 Attempt 2 established all of the following:
-
-- official `com.chrome.beta` is installed and distinct from `com.android.chrome`;
-- verified launcher starts Chrome Beta successfully;
-- Chrome Beta PID is present while running;
-- a `chrome_devtools_remote` abstract socket is observed while Beta is running;
-- Ubuntu-side temporary `socat` loopback bridge did not yield bounded `/json/version` or `/json/list` responses;
-- teardown and safe-output boundaries passed.
-
-Therefore this Task must not repeat browser provisioning. The only unresolved prerequisite is local-only DevTools transport usable from Ubuntu ARM64.
+- Environment: `env:ubuntu-arm64`
+- Parent authority: #118 Coordinator Review Attempt 2, Decision `SPLIT`
+- Upstream accepted fact: official `com.chrome.beta` version `153.0.8010.18` is installed, distinct from `com.android.chrome`, starts via `com.chrome.beta/com.google.android.apps.chrome.Main`, and exposes a `chrome_devtools_remote` abstract socket during bounded execution.
+- #118 remains blocked until this Task PASS.
+- #116 remains blocked; #117 remains draft.
 
 ## Goal
 
-Establish one deterministic and reversible transport:
+Establish one deterministic, reversible, local-only transport from the Ubuntu ARM64 Worker to the **exact Chrome Beta DevTools endpoint**, then prove bounded `/json/version` and `/json/list` health and deterministic teardown.
 
-`Ubuntu ARM64 Worker -> local/process-private endpoint -> exact Chrome Beta DevTools endpoint`
+Do not reinstall/provision a browser. Do not implement browser-diag MCP. Do not access Bilibili.
 
-Then prove it with bounded field-only CDP health checks.
+## Control-plane rule
 
-## Execution contract
+Codex/GPT control-plane on this phone must:
 
-### T0 — Claim and fixed-state check
+- remove inherited `NO_PROXY` and `no_proxy` for the Codex process;
+- explicitly use existing `127.0.0.1:7890` for HTTP/HTTPS/ALL proxy variables.
 
-1. Read live #119.
-2. Claim only when OPEN + `status:ready` + `env:ubuntu-arm64` + no owner.
-3. Confirm task package SHA supplied by Publication Gate.
-4. Confirm #118 remains blocked and #117 remains draft.
-5. Post `[EXECUTION CHECKPOINT]` before changing device state.
+This proxy rule is **control-plane only**. Task browser/CDP traffic must not use that proxy.
 
-### T1 — Exact Chrome Beta endpoint identity
+## T0 — claim and fixed authority
 
-1. Confirm `com.chrome.beta` is installed.
-2. Record only package identity/version and verified launcher identity.
-3. Start only Chrome Beta with a bounded timeout.
-4. Confirm Beta PID is present.
-5. Inspect only `/proc/net/unix` entries relevant to Chrome DevTools and determine the exact socket identity attributable to the running Beta instance.
-6. Do not enumerate normal Chrome tabs/profile/session state.
+Before device work:
 
-PASS T1 only when the Worker can select one exact Beta-owned DevTools socket rather than assuming a generic socket name.
+1. Re-read live #119.
+2. Require `OPEN + status:ready + env:ubuntu-arm64 + no owner`.
+3. Claim #119 according to repository Worker protocol.
+4. Record the exact Task Package SHA.
+5. Do not substitute moving `main` after claim.
 
-### T2 — Preferred Termux-host transport
+If the gate does not match, STOP without device work.
 
-Preferred first path because #118's Ubuntu-side abstract-socket bridge failed:
+## T1 — exact Beta endpoint identity
 
-1. Check whether Termux already has a trusted Unix/TCP bridge utility capable of `ABSTRACT-CONNECT` or equivalent.
-2. If `socat` is absent in Termux, installation is permitted only from the already-configured official Termux repository. Do not download an APK/binary from arbitrary URLs.
-3. From the Termux host context, connect only to the exact Beta DevTools abstract socket identified in T1.
-4. Bridge it to the narrowest endpoint Ubuntu can consume:
-   - first choice: shared filesystem Unix socket;
-   - second choice: `127.0.0.1` listener if and only if it is reachable only locally and no public interface is exposed.
-5. If a shared Unix socket is used, permissions must be the minimum required for Ubuntu to connect and the socket must be removed during teardown.
+Start only the dedicated package using the verified launcher:
 
-Do not bind `0.0.0.0`, LAN, Tailscale, or another externally reachable address.
+`com.chrome.beta/com.google.android.apps.chrome.Main`
 
-### T3 — Fallback on-demand ADB transport
+Use hard timeouts for Android activity-manager operations.
 
-Run only if T2 cannot establish usable transport.
+Bounded observations only:
 
-1. Check for a trusted packaged ADB client in Termux/Ubuntu repositories.
-2. ADB use is allowed only as an on-demand local transport.
-3. Do not permanently enable TCP adbd solely for this Task.
-4. Do not bypass Android pairing, authorization, lock-screen, or other device confirmation.
-5. If an ordinary local abstract-socket forward can be created safely, bind the client side only to loopback/process-local scope.
-6. If safe ADB transport cannot be established within these rules, BLOCK rather than widening exposure.
+- Chrome Beta PID present/absent;
+- candidate DevTools abstract socket names from `/proc/net/unix`;
+- associate the endpoint with the Beta process/package using bounded process/socket ownership evidence where available;
+- do not enumerate targets/tabs from stable Chrome;
+- do not inspect any profile/session storage.
 
-### T4 — Bounded CDP proof
+Do **not** assume generic `chrome_devtools_remote` is the correct endpoint merely because it exists. The transport proof must use the endpoint attributable to Chrome Beta.
 
-With Chrome Beta running and the accepted local transport active:
+If exact Beta endpoint identity cannot be established safely, BLOCK.
 
-1. Probe `/json/version` with a hard timeout.
-2. Parse only an allowlisted bounded summary such as:
-   - response reachable yes/no;
-   - browser product/version present yes/no or sanitized product family/version;
-   - protocol version present yes/no.
-3. Probe `/json/list` with a hard timeout.
-4. Parse only:
-   - valid array yes/no;
-   - bounded target count;
-   - page target present yes/no.
-5. Do not print raw JSON, target URLs, titles, websocketDebuggerUrl, headers, body content, query strings, tokens, cookies, or profile/session data.
+## T2 — preferred Termux-host bridge
 
-PASS T4 requires both bounded checks PASS.
+First determine whether the Android/Termux host context can connect to the exact Beta abstract socket.
 
-### T5 — Teardown
+Preferred path:
 
-Always run, including on BLOCK/FAIL:
+`Chrome Beta abstract DevTools socket -> Termux-host local bridge -> Ubuntu-visible process-local/shared Unix socket or 127.0.0.1 endpoint`
 
-1. Stop/remove every temporary bridge, listener, Unix socket, ADB forward and temp probe file created by this Task.
-2. Force-stop only `com.chrome.beta`.
-3. Verify:
-   - Beta PID absent;
-   - selected Beta DevTools socket absent;
-   - temporary loopback listener absent;
-   - temporary shared Unix socket absent;
-   - no public/LAN/Tailscale DevTools listener exists;
-   - normal `com.android.chrome` state unchanged.
-4. Safe-output boundary PASS.
+Rules:
 
-## Success criteria
+- Prefer already-installed trusted tools.
+- If Termux `socat` is required and absent, installation is allowed only from the configured official Termux repository.
+- Any TCP listener must bind exactly `127.0.0.1`; prefer shared Unix socket where practical.
+- Never bind `0.0.0.0`, LAN, Wi-Fi, Tailscale, or another remotely reachable address.
+- No proxy for CDP traffic.
+- Temporary files/sockets must use Task-specific paths and be removed during teardown.
 
-Overall PASS requires all of:
+Perform a bounded transport handshake before HTTP health checks. Do not output raw payloads.
 
-- T1 exact Beta DevTools endpoint identity PASS;
-- T2 or T3 deterministic local-only transport PASS;
-- `/json/version` bounded field check PASS;
-- `/json/list` bounded field check PASS;
-- T5 teardown PASS;
-- safe-output boundary PASS.
+## T3 — ADB fallback only if T2 cannot work
 
-A transport that only opens a socket but cannot return the two bounded CDP health responses is not PASS.
+Only if the Termux-host bridge is not viable, investigate a standard on-demand ADB abstract-socket forward.
 
-## Block conditions
+Allowed only when all are true:
 
-BLOCK if any of the following is required:
+- ADB tooling is obtained from a trusted platform/Termux package source;
+- no device security/confirmation is bypassed;
+- no permanent TCP adbd is enabled solely for this Task;
+- forwarding is on-demand and deterministic to tear down;
+- exposure remains loopback/process-local only.
 
-- use or inspection of normal `com.android.chrome` profile/tab/session state;
-- public/LAN/Tailscale/`0.0.0.0` DevTools listener;
-- arbitrary APK/binary download;
-- permanent TCP adbd solely for this Task;
-- bypass of device authorization/pairing/security confirmation;
-- Bilibili/site navigation;
-- widening to browser-diag MCP, yt-dlp, resolver, broker, R008, #116/#117/#67/#113/#68.
+Do not change Android security settings merely to force PASS. If safe ADB transport is unavailable, BLOCK.
 
-## Codex control-plane rule
+## T4 — bounded neutral CDP proof
 
-This is not Task network evidence. For the phone Ubuntu Codex/GPT process only:
+With the exact Beta endpoint and accepted transport active, validate only:
 
-- remove inherited `NO_PROXY` and `no_proxy`;
-- explicitly set HTTP/HTTPS/ALL proxy variables (upper and lower case as needed) to `http://127.0.0.1:7890`;
-- this proxy authorization applies only to Codex/GPT control-plane traffic, not Chrome/CDP/Bilibili/task probes.
+### `/json/version`
 
-## Durable report
+PASS requires a parseable response containing expected bounded protocol/product metadata. Output only booleans/coarse identifiers needed for the Task, for example:
 
-On PASS, post a bounded `[EXECUTION REPORT]`, move to `status:review`, release owner, STOP.
+- `version_health=PASS|FAIL`
+- `browser_product_family=ChromeBeta|other`
+- `protocol_version_present=yes|no`
 
-On blocker, post `[BLOCKER REPORT]` with the exact failed stage and sanitized evidence, move to `status:blocked`, release owner, STOP.
+Do not output raw JSON, websocket debugger URLs, user-agent strings if they contain unnecessary detail, or arbitrary fields.
+
+### `/json/list`
+
+PASS requires a parseable bounded target list. Output only:
+
+- `target_health=PASS|FAIL`
+- bounded `target_count`
+- bounded target-type summary if needed.
+
+Never output titles, target URLs, websocket URLs, page content, headers, cookies, storage, or tokens.
+
+Both checks must PASS. Socket existence alone is not PASS.
+
+## T5 — teardown
+
+Order:
+
+1. stop temporary bridge/forward;
+2. force-stop only `com.chrome.beta` with a hard timeout;
+3. remove Task temp files/sockets;
+4. verify Beta PID absent;
+5. verify exact Beta DevTools endpoint absent;
+6. verify loopback bridge/forward listener absent;
+7. verify stable `com.android.chrome` state is unchanged;
+8. safe-output check PASS.
+
+Cleanup failures are blockers; do not hide them.
+
+## Hard boundaries
+
+- Dedicated `com.chrome.beta` only.
+- Never attach to, enumerate, read, start for diagnosis, or copy normal `com.android.chrome` profile/tabs/state.
+- No Cookie/Auth/login/password/local-storage/session-storage/cache/history/profile extraction or replay.
+- No raw DevTools event dumps or raw `/json/*` responses.
+- No page/body data, arbitrary headers, URLs/titles, signed/query URLs, tokens, or media payloads.
+- No public/LAN/Tailscale/`0.0.0.0` DevTools listener.
+- No Bilibili/site navigation.
+- No proxy for browser/CDP Task traffic.
+- No UA/Referer/header spoofing, fingerprint emulation, CAPTCHA/challenge/access-control bypass.
+- No #116/#117/#67/#113/#68 execution.
+- No yt-dlp/generic-ytdlp/R008/broker/resolver/sandbox widening.
+- No product/runtime changes.
+
+## Success
+
+`PASS` requires all:
+
+- exact Chrome Beta DevTools endpoint identity established;
+- deterministic local-only transport usable from Ubuntu ARM64;
+- `/json/version` field check PASS;
+- `/json/list` field check PASS;
+- teardown PASS;
+- safe-output boundary PASS;
+- stable Chrome unchanged.
+
+## Blocked
+
+`BLOCKED` if a deterministic local-only path cannot be established within these boundaries, or if health/teardown cannot be proven.
+
+On blocker:
+
+1. post `[BLOCKER REPORT]` with sanitized bounded evidence;
+2. set `status:blocked`;
+3. release owner;
+4. STOP.
+
+## Normal finish
+
+This is verification/environment-only and does not require a product PR. On PASS:
+
+1. post a durable execution report with transport authority and sanitized health/teardown evidence;
+2. set `status:review`;
+3. release owner;
+4. STOP for Coordinator Review.
