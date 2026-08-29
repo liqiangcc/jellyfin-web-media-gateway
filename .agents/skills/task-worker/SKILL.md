@@ -145,37 +145,61 @@ Do not self-trigger a full rerun simply because Current Main != Evidence Base un
 
 ## Integration-only Attempt
 
-If the latest Coordinator Review / `[INTEGRATION GATE]` says `Revision class: INTEGRATION_ONLY`, reuse the same Issue/branch/PR, preserve Task Candidate ancestry, integrate the frozen base narrowly, run only declared integration jobs, and report Task Candidate / Integration Base / Integration Candidate separately. If conflict resolution changes Task-owned semantics, stop and let Coordinator reclassify.
+If the latest Coordinator Review / `[INTEGRATION GATE]` says:
+
+```text
+Revision class: INTEGRATION_ONLY
+```
+
+then this Attempt is intentionally narrow.
+
+Required behavior:
+
+1. reuse the same Issue / branch / PR;
+2. identify the previously accepted `Task Candidate`;
+3. identify the Coordinator-frozen `Integration Base SHA`;
+4. **prefer merging that exact Integration Base into the worker branch** rather than rebasing/re-writing the Task Candidate, so Task Candidate ancestry remains auditable;
+5. do not make unrelated product/implementation changes;
+6. if the merge is clean and does not alter Task-owned semantic implementation, run only the declared `JI*` integration jobs;
+7. produce an exact `Integration Candidate SHA`;
+8. report Task Candidate + Integration Base + Integration Candidate + exact JI Evidence separately.
+
+If merge/conflict resolution touches Task-owned semantic code, changes an accepted authority assumption, or makes the previous Task Candidate Evidence no longer safely reusable:
+
+- do not guess that it is still integration-only;
+- preserve the branch/PR state;
+- report the semantic conflict/problem;
+- let Coordinator reclassify to `SEMANTIC_FRESHNESS` / Contract Revision as appropriate.
+
+Do not claim that a JI-only run re-proved all C1-Cn. Explicitly state which semantic Evidence is reused and which new integration Evidence was produced.
 
 ## Semantic-freshness Attempt
 
-If Coordinator says `Revision class: SEMANTIC_FRESHNESS`, integrate/reconcile only the specified accepted authority and rerun only the Claims/Jobs required by the Coordinator/Task Freshness Contract. If Scope/Claims/Success Criteria would change, stop rather than silently rewriting the Task Contract.
+If Coordinator says:
+
+```text
+Revision class: SEMANTIC_FRESHNESS
+```
+
+then integrate/reconcile the specified accepted authority and rerun only the Claims/Jobs listed by Coordinator/Task Freshness Contract, unless the Contract requires broader verification.
+
+If the required authority change invalidates Scope/Claims/Success Criteria, stop and report rather than silently rewriting the Task Contract.
 
 ## Operator privilege versus final runtime privilege
 
-For infrastructure bootstrap Tasks, distinguish the bootstrap operator from the service being created. Privileged setup explicitly allowed by the Task does not permit the final service/Runner to violate its low-privilege security contract.
+For infrastructure bootstrap Tasks, distinguish the bootstrap operator from the service being created.
+
+An operator may legitimately require privileged setup steps when the Task explicitly permits them. That does not allow the final service/Runner to violate its low-privilege security contract. Verify final runtime identity and access boundaries separately.
 
 ## Fresh terminal-write authority guard
 
-A startup/claim read is not authority to write terminal state later. Immediately before the first irreversible Worker terminal mutation, perform a fresh live Issue read-back. This guard applies to normal and blocked completion and covers the report comment, status transition, and owner release.
+A startup/claim read is not authority to write terminal state later. Immediately before the first irreversible Worker terminal mutation, perform a fresh live Issue read-back. This guard applies to both normal and blocked completion and covers the report comment, status transition, and owner release.
 
-Require the fresh snapshot to prove:
-
-```text
-Issue is OPEN
-status:in-progress is still present
-current Attempt is this Worker Attempt
-active owner/claim still matches this Worker
-status:done is absent
-no durable [FINAL ACCEPTANCE] is present
-no newer Coordinator gate / Attempt supersedes this Worker
-```
+Require the fresh snapshot to prove: Issue is open; `status:in-progress` is present; the current Attempt and active owner still match this Worker; `status:done` is absent; no durable `[FINAL ACCEPTANCE]` exists; and no newer Coordinator gate/Attempt has superseded this Worker.
 
 If any check fails or authority is ambiguous, fail closed: post no terminal report, change no status, release/reassign no owner, do not reopen the Issue, and STOP with `STALE_AUTHORITY`. A stale Worker must never clean up ownership that may belong to a newer Attempt.
 
-`scripts/task-worker-terminal-guard.py` is the repository-owned pure decision helper for a normalized freshly fetched snapshot. It performs no GitHub mutation and does not replace the authoritative live GitHub read.
-
-Evaluate the guard at the last safe point before the first terminal write. GitHub multi-operation atomicity is not claimed. If authority is known to become stale after an earlier mutation, do not continue later status/owner writes; stop and defer reconciliation to Coordinator.
+`scripts/task-worker-terminal-guard.py` is the repository-owned pure decision helper for normalized fresh snapshots. It performs no GitHub mutation and does not replace the authoritative live GitHub read. Evaluate the guard at the last safe point before the first terminal write. GitHub multi-operation atomicity is not claimed; if authority becomes known stale after an earlier mutation, do not continue later status/owner writes.
 
 Coordinator Final Acceptance/close is not a Worker terminal write and remains governed by the Final Acceptance Gate.
 
@@ -184,12 +208,12 @@ Coordinator Final Acceptance/close is not a Worker terminal write and remains go
 Before leaving the Attempt:
 
 1. commit/push or otherwise persist in-scope candidate changes when required;
-2. confirm final Candidate / PR / Evidence identities;
+2. confirm the final Task Candidate / Integration Candidate / PR identities supersede any early checkpoint identity as appropriate;
 3. collect the Evidence required by `task.md` and the latest Coordinator Review;
-4. prepare the complete `[EXECUTION REPORT]` payload without posting it;
-5. perform the fresh terminal-write authority guard above; if rejected, STOP with zero Issue mutations;
-6. only while authorized, post the report and include the real Attempt, SHA/PR, Claims, commands, host/target, Evidence, problems, freshness identities and unverified scope;
-7. transition to `status:review` only while the same authority remains current;
+4. prepare the complete report payload, perform the fresh terminal-write authority guard above, and STOP with zero Issue mutations if it rejects;
+5. comment the current Issue using the exact `[EXECUTION REPORT]` structure from `docs/tasks/issue-lifecycle-protocol.md`;
+6. include the real Attempt number, base/task-candidate/integration-candidate SHA as applicable, PR, Claim results, Jobs/commands, execution host, Runner/Target, Evidence, problems, freshness identities, and unverified scope;
+7. transition the Issue to `status:review` only while the same authority remains current;
 8. release active execution ownership only while the same authority remains current;
 9. re-read the Issue to verify report + status are durable;
 10. stop.
@@ -202,22 +226,46 @@ Do not set `status:done`, close the Issue, or immediately start Attempt N+1.
 
 If a required permission, GitHub capability, device, Runner, Secret-at-runtime, network condition, dependency, or target capability is unavailable:
 
-1. preserve a safe state and any durable branch/commit/PR/Evidence anchor;
-2. clean temporary resources when required;
-3. prepare the complete `[BLOCKER REPORT]` payload without posting it;
-4. perform the fresh terminal-write authority guard above; if rejected, STOP with zero Issue mutations;
-5. only while authorized, post the blocker with exact completed work, stop point, Evidence, minimal resume condition, cleanup/safe state and reusable anchor;
-6. transition to `status:blocked` only while the same authority remains current;
-7. release active execution ownership only while the same authority remains current and repository policy permits;
-8. re-read the Issue to verify the report/status;
-9. stop.
+1. preserve a safe state;
+2. preserve/reuse any existing durable branch / commit / draft PR / Evidence anchor;
+3. clean temporary resources when required;
+4. prepare the complete blocker payload, perform the fresh terminal-write authority guard above, and STOP with zero Issue mutations if it rejects;
+5. comment the Issue using `[BLOCKER REPORT]` from `docs/tasks/issue-lifecycle-protocol.md`;
+6. state exactly what was completed, where execution stopped, Evidence, minimal resume condition, cleanup/safe state, and reusable durable anchor;
+7. transition to `status:blocked` only while the same authority remains current;
+8. release active execution ownership only while the same authority remains current, unless the repository explicitly requires ownership for blocker recovery;
+9. re-read the Issue to verify the report/status;
+10. stop.
 
 Never bypass a security boundary or lower Success Criteria to avoid BLOCKED.
 
 ## After a REVISE
 
-Read the previous Attempt report and Coordinator Review/revision class, reuse a valid durable branch/PR, begin a new Attempt only after a fresh claim, and execute only the required revision class.
+When a Coordinator has posted `Decision: REVISE` and returned the same Task to `status:ready`:
+
+- read the previous Attempt report and Coordinator Review;
+- read the revision class (`IMPLEMENTATION | EVIDENCE | SEMANTIC_FRESHNESS | INTEGRATION_ONLY`) when present;
+- confirm whether the Contract is unchanged;
+- inspect and reuse the previous durable branch/PR when it remains valid;
+- begin a new Attempt only after a fresh claim;
+- execute only the required revision class;
+- re-run the verification required by the current Task Contract/Coordinator Review, not mechanically every previous job when integration protocol explicitly preserves semantic Evidence.
 
 ## Completion output to the user
 
-After an authorized durable Issue update, summarize Issue, Attempt, outcome, Issue state, Candidate identities, report posted, and `Next authority: Web Coordinator`. If the terminal guard rejects the Worker, report `STALE_AUTHORITY` and `Issue mutations: none`.
+After the durable Issue update, summarize only:
+
+```text
+Issue: #<issue>
+Attempt: <N>
+Execution outcome: COMPLETED | PARTIAL | FAILED | BLOCKED
+Issue state: review | blocked
+Task Candidate: <sha or n/a>
+Integration Candidate: <sha or n/a>
+Report: posted
+Next authority: Web Coordinator
+```
+
+If the fresh terminal-write guard rejects authority, report `STALE_AUTHORITY`, `Issue mutations: none`, and STOP.
+
+The Issue plus durable branch/PR/Evidence anchor is the recoverable handoff. Chat text is not the state authority.
