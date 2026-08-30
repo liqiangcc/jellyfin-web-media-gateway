@@ -27,14 +27,20 @@ def snap(*, state="open", labels=None, owner="alice", attempt=2, final_after=Fal
 
 
 class TerminalGuardTests(unittest.TestCase):
-    def decision(self, snapshot):
-        return mod.evaluate(snapshot, expected_attempt=2, expected_owner="alice")
+    def decision(self, snapshot, expected_status="status:in-progress"):
+        return mod.evaluate(snapshot, expected_attempt=2, expected_owner="alice", expected_status=expected_status)
 
     def test_authorized_execution_report_path(self):
         self.assertEqual(self.decision(snap()), mod.Decision(True, "authorized"))
 
     def test_authorized_blocker_report_path_uses_same_guard(self):
         self.assertTrue(self.decision(snap()).allowed)
+
+    def test_authorized_normal_owner_release_from_review(self):
+        self.assertTrue(self.decision(snap(labels=["env:cloud", "status:review"]), expected_status="status:review").allowed)
+
+    def test_authorized_blocker_owner_release_from_blocked(self):
+        self.assertTrue(self.decision(snap(labels=["env:cloud", "status:blocked"]), expected_status="status:blocked").allowed)
 
     def test_historical_final_acceptance_before_reopen_does_not_block_new_claim(self):
         self.assertTrue(self.decision(snap(historical_final_acceptance_present=True)).allowed)
@@ -58,7 +64,7 @@ class TerminalGuardTests(unittest.TestCase):
         self.assertEqual(self.decision(snap(superseded_after=True)).reason, "newer-authority-after-claim")
 
     def test_not_in_progress_rejected(self):
-        self.assertEqual(self.decision(snap(labels=["env:cloud", "status:review"])).reason, "not-in-progress")
+        self.assertEqual(self.decision(snap(labels=["env:cloud", "status:review"])).reason, "unexpected-status")
 
     def test_ambiguous_chronology_fails_closed(self):
         value = snap()

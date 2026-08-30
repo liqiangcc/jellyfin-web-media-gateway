@@ -132,7 +132,10 @@ Worker 的 claim-time read-back 不能作为之后 terminal write 的永久 auth
 
 ```text
 Issue is open
-status:in-progress is current
+status expected for the pending mutation is current
+  - in-progress before report/status
+  - review before normal owner release
+  - blocked before blocker owner release
 Attempt still matches this Worker
 active owner still matches this Worker
 status:done is absent
@@ -166,7 +169,7 @@ execute
 → prepare [EXECUTION REPORT]
 → fresh guard → post [EXECUTION REPORT]
 → fresh guard → status:review
-→ fresh guard → release active execution ownership
+→ fresh guard(expected=review) → release active execution ownership
 → STOP
 ```
 
@@ -180,7 +183,7 @@ Worker 不等待聊天里的隐式 Review，也不自动开始下一 Attempt。
 prepare [BLOCKER REPORT]
 → fresh guard → post [BLOCKER REPORT]
 → fresh guard → status:blocked
-→ fresh guard → release active execution ownership unless explicitly resolving blocker
+→ fresh guard(expected=blocked) → release active execution ownership unless explicitly resolving blocker
 → STOP
 ```
 

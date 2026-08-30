@@ -198,7 +198,7 @@ Claim-time authority is not authority to write terminal state later. Immediately
 Proceed only if the fresh snapshot proves all of:
 
 - the Issue is open;
-- `status:in-progress` is current;
+- the status expected for the pending mutation is current (`status:in-progress` before report/status; `status:review` before normal owner release; `status:blocked` before blocker owner release);
 - the current Attempt still matches this Worker;
 - active execution ownership still matches this Worker;
 - `status:done` is absent;
@@ -221,8 +221,8 @@ Before leaving the Attempt:
 4. prepare the complete `[EXECUTION REPORT]` payload, including the real Attempt number, base/task-candidate/integration-candidate SHA as applicable, PR, Claim results, Jobs/commands, execution host, Runner/Target, Evidence, problems, freshness identities, and unverified scope, but do not post it yet;
 5. freshly re-read the Issue and apply the terminal-write authority guard; if it rejects, STOP with zero terminal Issue mutations;
 6. only after guard PASS, post the `[EXECUTION REPORT]`;
-7. freshly re-read and reapply the guard before changing status; only after PASS transition the Issue to `status:review`;
-8. freshly re-read and reapply the guard before ownership mutation; only after PASS release active execution ownership;
+7. freshly re-read and reapply the guard expecting `status:in-progress` before changing status; only after PASS transition the Issue to `status:review`;
+8. freshly re-read and reapply the guard expecting `status:review` before ownership mutation; only after PASS release active execution ownership;
 9. re-read the Issue to verify report + status are durable;
 10. stop.
 
@@ -240,8 +240,8 @@ If a required permission, GitHub capability, device, Runner, Secret-at-runtime, 
 4. prepare the complete `[BLOCKER REPORT]` payload, including exactly what was completed, where execution stopped, Evidence, minimal resume condition, cleanup/safe state, and reusable durable anchor, but do not post it yet;
 5. freshly re-read the Issue and apply the terminal-write authority guard; if it rejects, STOP with zero terminal Issue mutations;
 6. only after guard PASS, post the `[BLOCKER REPORT]`;
-7. freshly re-read and reapply the guard before changing status; only after PASS transition to `status:blocked`;
-8. if ownership should be released, freshly re-read and reapply the guard before ownership mutation; only after PASS release active execution ownership;
+7. freshly re-read and reapply the guard expecting `status:in-progress` before changing status; only after PASS transition to `status:blocked`;
+8. if ownership should be released, freshly re-read and reapply the guard expecting `status:blocked` before ownership mutation; only after PASS release active execution ownership;
 9. re-read the Issue to verify the report/status;
 10. stop.
 

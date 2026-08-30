@@ -17,7 +17,7 @@ class Decision(NamedTuple):
     reason: str
 
 
-def evaluate(snapshot: dict, *, expected_attempt: int, expected_owner: str) -> Decision:
+def evaluate(snapshot: dict, *, expected_attempt: int, expected_owner: str, expected_status: str = "status:in-progress") -> Decision:
     state = str(snapshot.get("state", "")).lower()
     labels_raw = snapshot.get("labels")
     labels = {str(x) for x in labels_raw} if isinstance(labels_raw, list) else set()
@@ -26,8 +26,8 @@ def evaluate(snapshot: dict, *, expected_attempt: int, expected_owner: str) -> D
         return Decision(False, "issue-not-open")
     if "status:done" in labels:
         return Decision(False, "status-done")
-    if "status:in-progress" not in labels:
-        return Decision(False, "not-in-progress")
+    if expected_status not in labels:
+        return Decision(False, "unexpected-status")
     if snapshot.get("attempt") != expected_attempt:
         return Decision(False, "attempt-superseded")
     if snapshot.get("owner") != expected_owner:
@@ -48,9 +48,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--attempt", type=int, required=True)
     parser.add_argument("--owner", required=True)
+    parser.add_argument("--expected-status", default="status:in-progress", choices=["status:in-progress", "status:review", "status:blocked"])
     args = parser.parse_args()
     snapshot = json.load(sys.stdin)
-    decision = evaluate(snapshot, expected_attempt=args.attempt, expected_owner=args.owner)
+    decision = evaluate(snapshot, expected_attempt=args.attempt, expected_owner=args.owner, expected_status=args.expected_status)
     result = "AUTHORIZED" if decision.allowed else "STALE_AUTHORITY"
     print(json.dumps({"result": result, "allowed": decision.allowed, "reason": decision.reason}, separators=(",", ":")))
     return 0 if decision.allowed else 3

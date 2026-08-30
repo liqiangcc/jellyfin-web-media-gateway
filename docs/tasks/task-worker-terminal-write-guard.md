@@ -11,7 +11,10 @@ A terminal sequence can include `[EXECUTION REPORT]` or `[BLOCKER REPORT]`, tran
 Proceed with the pending mutation only when the fresh normalized snapshot proves all of:
 
 - Issue is open;
-- `status:in-progress` is current;
+- the status expected for the pending mutation is current:
+  - `status:in-progress` before report or status mutation;
+  - `status:review` before normal owner release;
+  - `status:blocked` before blocker owner release;
 - current Attempt matches this Worker;
 - active owner/claim matches this Worker;
 - `status:done` is absent;
@@ -34,9 +37,10 @@ If authority becomes stale after an earlier terminal mutation, preserve that ear
   "labels": ["status:in-progress", "env:cloud"],
   "owner": "worker-login",
   "attempt": 3,
+  "status": "status:review",
   "final_acceptance_after_claim": false,
   "superseded_after_claim": false
 }
 ```
 
-Both chronology booleans are required. Missing/non-boolean values are `authority-ambiguous` and fail closed.
+The caller also supplies the expected status for the pending mutation. Both chronology booleans are required. Missing/non-boolean values are `authority-ambiguous` and fail closed.
