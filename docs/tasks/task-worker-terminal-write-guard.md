@@ -4,22 +4,39 @@ This document is normative lifecycle guidance used with `issue-lifecycle-protoco
 
 ## Rule
 
-Claim-time authority expires as live Issue state changes. Immediately before the first irreversible Worker terminal mutation, freshly read the live Issue.
+Claim-time authority expires as live Issue state changes. Immediately before **each** irreversible Worker terminal mutation, freshly read the live Issue.
 
-A terminal sequence includes `[EXECUTION REPORT]` or `[BLOCKER REPORT]`, transition to `status:review` or `status:blocked`, and release/reassignment of active execution ownership.
+A terminal sequence can include `[EXECUTION REPORT]` or `[BLOCKER REPORT]`, transition to `status:review` or `status:blocked`, and release/reassignment of active execution ownership. Each mutation gets its own last-safe-point read; one read before the whole sequence is not enough.
 
-Proceed only when the fresh snapshot proves all of:
+Proceed with the pending mutation only when the fresh normalized snapshot proves all of:
 
 - Issue is open;
 - `status:in-progress` is current;
 - current Attempt matches this Worker;
 - active owner/claim matches this Worker;
 - `status:done` is absent;
-- no durable `[FINAL ACCEPTANCE]` exists;
+- no Final Acceptance newer than this Attempt's claim/checkpoint authority exists;
 - no newer Coordinator gate/Attempt supersedes this Worker.
 
-If any condition fails or authority is ambiguous, fail closed with `STALE_AUTHORITY`: post no terminal report, change no status, release/reassign no owner, do not reopen the Issue, and STOP. In particular, a stale Worker must not "clean up" ownership that may belong to a newer Attempt.
+A historical Final Acceptance that predates an explicit Coordinator Reopen and this new claim does not by itself reject the new Attempt. The live reader must compare append-only history to the current durable claim/checkpoint; ambiguous chronology fails closed.
 
-This is a last-safe-point guard, not a distributed lock. GitHub multi-operation atomicity is not claimed. If authority becomes known stale after an earlier mutation, do not continue later status/owner writes. Coordinator Final Acceptance/close remains governed by the existing Final Acceptance Gate.
+If any condition fails or authority is ambiguous, return `STALE_AUTHORITY`: do not perform the pending terminal mutation, do not reopen the Issue, and STOP. A stale Worker must never release/reassign an owner that may belong to a newer Attempt.
 
-`scripts/task-worker-terminal-guard.py` is a pure local decision helper for normalized freshly-read snapshots. It performs no GitHub mutation and never replaces the live GitHub read.
+If authority becomes stale after an earlier terminal mutation, preserve that earlier append-only history but perform no later status/owner mutations. This guard does not claim GitHub multi-operation atomicity and does not introduce a distributed lock. Coordinator Final Acceptance/close remains governed by the existing Final Acceptance Gate.
+
+## Pure normalized helper
+
+`scripts/task-worker-terminal-guard.py` is an optional pure decision helper. It performs no GitHub mutation and never replaces the authoritative live GitHub read. The caller normalizes the fresh live state into:
+
+```json
+{
+  "state": "open",
+  "labels": ["status:in-progress", "env:cloud"],
+  "owner": "worker-login",
+  "attempt": 3,
+  "final_acceptance_after_claim": false,
+  "superseded_after_claim": false
+}
+```
+
+Both chronology booleans are required. Missing/non-boolean values are `authority-ambiguous` and fail closed.
