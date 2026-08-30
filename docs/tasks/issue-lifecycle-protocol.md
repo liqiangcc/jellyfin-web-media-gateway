@@ -124,17 +124,52 @@ claim
 
 ---
 
+## 3.1. Fresh terminal-write authority guard
+
+Worker 的 claim-time read-back 不能作为之后 terminal write 的永久 authority。就在 Worker **每一个**不可逆 terminal mutation 之前，必须重新读取 live Issue。terminal mutation 包括 `[EXECUTION REPORT]` / `[BLOCKER REPORT]` comment、`status:review` / `status:blocked` 变更和 owner release/reassignment。
+
+只有 fresh snapshot 同时证明以下条件时才允许当前 mutation：
+
+```text
+Issue is open
+status expected for the pending mutation is current
+  - in-progress before report/status
+  - review before normal owner release
+  - blocked before blocker owner release
+Attempt still matches this Worker
+active owner still matches this Worker
+status:done is absent
+no [FINAL ACCEPTANCE] newer than the current claim/checkpoint authority exists
+no newer Coordinator gate / Attempt supersedes this Worker
+```
+
+历史 `[FINAL ACCEPTANCE]` 如果早于明确的 `[COORDINATOR REOPEN]` 和当前 fresh claim，本身不会阻塞新的合法 Attempt。时间顺序或 authority 无法无歧义确认时必须 fail closed。
+
+如果 guard 拒绝：
+
+```text
+STALE_AUTHORITY
+→ do not perform the pending terminal mutation
+→ no reopen
+→ STOP
+```
+
+如果 stale 是在 report 已经 append-only 写入后才出现，则保留该历史 comment，但不得继续后续 status/owner write。特别地，stale Worker 不得以“cleanup”为由释放可能已经属于新 Attempt 的 owner。
+
+这是 repeated last-safe-point guard，不是 distributed lock，也不声称 GitHub 多次 mutation 具有原子性。Coordinator 的 Final Acceptance / close 仍只受第 13 节约束。
+
 ## 4. Worker Feedback Rule
 
-Worker 在 Attempt 结束时必须把结果评论到当前 Issue，然后再改变状态。
+Worker 在 Attempt 结束时必须按 3.1 在每个 terminal mutation 前 fresh-read authority；只有当前 mutation 的 guard PASS 才能继续。
 
 ### 4.1 正常结束
 
 ```text
 execute
-→ post [EXECUTION REPORT]
-→ status:review
-→ release active execution ownership
+→ prepare [EXECUTION REPORT]
+→ fresh guard → post [EXECUTION REPORT]
+→ fresh guard → status:review
+→ fresh guard(expected=review) → release active execution ownership
 → STOP
 ```
 
@@ -145,9 +180,10 @@ Worker 不等待聊天里的隐式 Review，也不自动开始下一 Attempt。
 如果缺少权限、设备、Secret、Runner、外部条件或必需 capability，不能继续：
 
 ```text
-post [BLOCKER REPORT]
-→ status:blocked
-→ release active execution ownership unless explicitly resolving blocker
+prepare [BLOCKER REPORT]
+→ fresh guard → post [BLOCKER REPORT]
+→ fresh guard → status:blocked
+→ fresh guard(expected=blocked) → release active execution ownership unless explicitly resolving blocker
 → STOP
 ```
 

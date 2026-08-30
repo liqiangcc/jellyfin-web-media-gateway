@@ -191,6 +191,26 @@ For infrastructure bootstrap Tasks, distinguish the bootstrap operator from the 
 
 An operator may legitimately require privileged setup steps when the Task explicitly permits them. That does not allow the final service/Runner to violate its low-privilege security contract. Verify final runtime identity and access boundaries separately.
 
+## Fresh terminal-write authority guard
+
+Claim-time authority is not authority to write terminal state later. Immediately before each irreversible Worker terminal mutation, freshly read the live Issue and apply `docs/tasks/task-worker-terminal-write-guard.md` (optionally using `scripts/task-worker-terminal-guard.py` for the pure normalized decision).
+
+Proceed only if the fresh snapshot proves all of:
+
+- the Issue is open;
+- the status expected for the pending mutation is current (`status:in-progress` before report/status; `status:review` before normal owner release; `status:blocked` before blocker owner release);
+- the current Attempt still matches this Worker;
+- active execution ownership still matches this Worker;
+- `status:done` is absent;
+- no `[FINAL ACCEPTANCE]` newer than the current claim/checkpoint authority exists;
+- no newer Coordinator gate / Attempt has superseded this Worker.
+
+A historical Final Acceptance that predates an explicit Coordinator REOPEN and the current fresh claim does not by itself reject the new Attempt. Chronology or authority ambiguity fails closed.
+
+If any condition fails or authority is ambiguous, fail closed with `STALE_AUTHORITY`: do not perform the pending terminal mutation, do not reopen the Issue, and STOP. In particular, a stale Worker must not release or reassign ownership that may belong to a newer Attempt.
+
+This is a repeated last-safe-point guard, not a distributed lock. GitHub multi-operation atomicity is not claimed. If authority becomes stale after an earlier terminal mutation, that earlier write remains append-only history but all later status/owner writes must stop. Coordinator Final Acceptance/close remains governed by the existing Final Acceptance Gate.
+
 ## Normal Attempt completion
 
 Before leaving the Attempt:
@@ -198,12 +218,13 @@ Before leaving the Attempt:
 1. commit/push or otherwise persist in-scope candidate changes when required;
 2. confirm the final Task Candidate / Integration Candidate / PR identities supersede any early checkpoint identity as appropriate;
 3. collect the Evidence required by `task.md` and the latest Coordinator Review;
-4. comment the current Issue using the exact `[EXECUTION REPORT]` structure from `docs/tasks/issue-lifecycle-protocol.md`;
-5. include the real Attempt number, base/task-candidate/integration-candidate SHA as applicable, PR, Claim results, Jobs/commands, execution host, Runner/Target, Evidence, problems, freshness identities, and unverified scope;
-6. transition the Issue to `status:review`;
-7. release active execution ownership;
-8. re-read the Issue to verify report + status are durable;
-9. stop.
+4. prepare the complete `[EXECUTION REPORT]` payload, including the real Attempt number, base/task-candidate/integration-candidate SHA as applicable, PR, Claim results, Jobs/commands, execution host, Runner/Target, Evidence, problems, freshness identities, and unverified scope, but do not post it yet;
+5. freshly re-read the Issue and apply the terminal-write authority guard; if it rejects, STOP with zero terminal Issue mutations;
+6. only after guard PASS, post the `[EXECUTION REPORT]`;
+7. freshly re-read and reapply the guard expecting `status:in-progress` before changing status; only after PASS transition the Issue to `status:review`;
+8. freshly re-read and reapply the guard expecting `status:review` before ownership mutation; only after PASS release active execution ownership;
+9. re-read the Issue to verify report + status are durable;
+10. stop.
 
 Worker execution outcome is not Coordinator acceptance.
 
@@ -216,12 +237,13 @@ If a required permission, GitHub capability, device, Runner, Secret-at-runtime, 
 1. preserve a safe state;
 2. preserve/reuse any existing durable branch / commit / draft PR / Evidence anchor;
 3. clean temporary resources when required;
-4. comment the Issue using `[BLOCKER REPORT]` from `docs/tasks/issue-lifecycle-protocol.md`;
-5. state exactly what was completed, where execution stopped, Evidence, minimal resume condition, cleanup/safe state, and reusable durable anchor;
-6. transition to `status:blocked`;
-7. release active execution ownership unless the repository explicitly requires ownership for blocker recovery;
-8. re-read the Issue to verify the report/status;
-9. stop.
+4. prepare the complete `[BLOCKER REPORT]` payload, including exactly what was completed, where execution stopped, Evidence, minimal resume condition, cleanup/safe state, and reusable durable anchor, but do not post it yet;
+5. freshly re-read the Issue and apply the terminal-write authority guard; if it rejects, STOP with zero terminal Issue mutations;
+6. only after guard PASS, post the `[BLOCKER REPORT]`;
+7. freshly re-read and reapply the guard expecting `status:in-progress` before changing status; only after PASS transition to `status:blocked`;
+8. if ownership should be released, freshly re-read and reapply the guard expecting `status:blocked` before ownership mutation; only after PASS release active execution ownership;
+9. re-read the Issue to verify the report/status;
+10. stop.
 
 Never bypass a security boundary or lower Success Criteria to avoid BLOCKED.
 
