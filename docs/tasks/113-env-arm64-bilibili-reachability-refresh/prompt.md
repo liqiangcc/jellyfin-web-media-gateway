@@ -1,6 +1,6 @@
-# Session Bootstrap — ENV-ARM64-BILIBILI-REACHABILITY-REFRESH R2
+# Session Bootstrap — ENV-ARM64-BILIBILI-REACHABILITY-REFRESH R3
 
-Execute Issue #113 Contract Revision R2 / Attempt 2 using the repository Worker protocol.
+Execute Issue #113 Contract Revision R3 / Attempt 4 using the repository Worker protocol.
 
 ## Claim gate
 
@@ -15,36 +15,43 @@ no active owner
 
 Otherwise STOP.
 
-Read `AGENTS.md`, live #113, `docs/tasks/113-env-arm64-bilibili-reachability-refresh/task.md`, lifecycle protocols, #67 R17 Attempt 17 blocker review, #113 Attempt 1 Final Acceptance, #63 Final Acceptance and #36 site-reachability boundary before claim.
+Before claim read:
 
-R2 trigger authority is only: #67 R17 exact Candidate `80fb081b129f8f664124b84ddcc9698039e2cfd1` had J0/J1 PASS, public direct/no-proxy `2xx`, unchanged frozen sample `4xx`, and J3 NOT RUN. This does not prove or disprove #114 compatibility.
+- `AGENTS.md`;
+- live #113 and relevant comments, especially Attempt 3 BLOCK + R3 Contract Revision;
+- `docs/tasks/113-env-arm64-bilibili-reachability-refresh/task.md`;
+- `.agents/skills/task-worker/SKILL.md` and lifecycle protocols;
+- #128 Final Acceptance and `docs/tasks/128-env-bilibili-reachability-obs-prep/usage.md`;
+- accepted `scripts/reachability_observation_sanitizer.py`;
+- #67 R17 blocker authority and frozen runtime Candidate `80fb081b129f8f664124b84ddcc9698039e2cfd1`.
 
 ## Goal
 
-Only refresh normal-network reachability of the unchanged frozen sample for #113 R2 / Attempt 2:
+Run one bounded ordinary-path reachability refresh of frozen selector `BV14V411W7r5` with privacy-safe same-run endpoint correlation.
 
-```text
-BV14V411W7r5
-https://www.bilibili.com/video/BV14V411W7r5/
-```
+This is reachability verification only. Do not execute yt-dlp, generic-ytdlp, resolver, #67 J3 or #68.
 
-Do not execute yt-dlp, generic-ytdlp, #67 J3 or #68.
+## Exact execution boundary
 
-## Probe contract
+Use the accepted phone / low-privilege `gateway-runner` target and accepted `setpriv ... env -i` boundary.
 
-Use the accepted low-privilege `gateway-runner` target and exact `setpriv ... env -i` boundary.
+Before probe 1, start exactly one #128 sanitizer process and keep it alive for the whole Attempt. All three probe observations, if all are needed, must use that same sanitizer process so `endpoint_alias` values are comparable only inside this Attempt.
 
-For every probe:
-- clear all proxy variables;
-- use `curl --noproxy '*'`;
-- identical ordinary request shape only;
-- no Cookie/Authorization/login/profile;
-- no custom User-Agent/fingerprint/Referer/header rotation;
+Raw endpoint values must flow only through a direct pipe/FD/in-memory path into sanitizer stdin. Do not put them in argv, shell trace, temp files, retained stdout/stderr, Issue comments or artifacts. Do not emit/persist the sanitizer run key.
+
+For each probe:
+
+- clear all proxy variables and use `curl --noproxy '*'`;
+- same frozen URL and same ordinary request shape only;
+- no Cookie/Auth/login/profile;
+- no custom UA/fingerprint/Referer/header variation;
+- no `--resolve`, DNS pinning, endpoint/family/interface forcing or resolver steering;
 - no alternate URL/sample;
-- discard response body and do not retain response headers;
-- record only the status class.
+- discard response body and response headers;
+- pass only passive remote-endpoint / HTTP-version / status / optional timing observation fields directly to the sanitizer;
+- durably retain only the sanitizer's bounded record plus probe index.
 
-Run at most 3 probes. Stop early after two consecutive `2xx` results. Use a small fixed bounded delay between repeats; do not adapt the request to a 4xx.
+Run at most 3 probes in one bounded set. Stop early only after two consecutive `2xx`. Use a fixed bounded delay and never adapt the request to status/alias/family observations.
 
 ## Result
 
@@ -61,22 +68,33 @@ BILIBILI_HOST_ELIGIBLE_FOR_#67_REFRESH=no
 Overall: BLOCKED
 ```
 
-A BLOCKED result must not trigger proxy/fingerprint/Cookie/challenge/bypass behavior.
-
-A PASS returns only fresh reachability authority to the Coordinator for a later #67 Publication Gate; it does not authorize #67 execution from this Worker and does not change runtime Candidate `80fb081b129f8f664124b84ddcc9698039e2cfd1`.
+Alias/family/http-version/timing observations are diagnostic only and cannot change eligibility.
 
 ## Evidence boundary
 
-Report only target class, frozen selector, direct/no-proxy network class, bounded probe status classes, eligibility yes/no, cleanup and Overall.
+Per probe report only:
 
-Never publish body/header content, Cookie/Auth/token/profile state, URL query material, challenge details or media payload.
+```text
+probe_index
+status_class
+family
+endpoint_alias
+http_version_class
+timing_bucket
+```
+
+Plus target class, frozen selector, direct/no-proxy network class, eligibility yes/no, cleanup/safe-output and Overall.
+
+Never publish raw endpoint/DNS values, sanitizer key, raw pre-sanitized curl write-out, response body/header content, request headers, Cookie/Auth/token/profile state or challenge details.
 
 ## Stop boundary
 
+Before every terminal Issue mutation, follow the current fresh terminal-write authority guard.
+
 PASS:
-`[EXECUTION REPORT] → status:review → release owner → STOP`.
+`[EXECUTION REPORT] -> status:review -> release owner -> STOP`.
 
 BLOCKED:
-`[BLOCKER REPORT] → status:blocked → release owner → STOP`.
+`[BLOCKER REPORT] -> status:blocked -> release owner -> STOP`.
 
-Do not merge/close/done, do not execute #67/#68, and do not create another Task.
+Do not run a second bounded set. Do not merge/close/done, execute #67/#68, vary request identity/path, or create another Task.
