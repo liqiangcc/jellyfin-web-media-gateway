@@ -148,7 +148,7 @@ class WrapperTests(unittest.TestCase):
 
     def run_wrapper(self, args, token=None, env=None):
         cp = subprocess.run(
-            [str(WRAPPER), *args],
+            ["bash", str(WRAPPER), *args],
             input=(self.token if token is None else token) + "\n",
             text=True,
             capture_output=True,
@@ -212,7 +212,7 @@ class WrapperTests(unittest.TestCase):
 
     def test_missing_token_rejected(self):
         cp = subprocess.run(
-            [str(WRAPPER), "remove", str(self.config)],
+            ["bash", str(WRAPPER), "remove", str(self.config)],
             input="",
             text=True,
             capture_output=True,
@@ -258,7 +258,7 @@ class WrapperTests(unittest.TestCase):
         env = self.env.copy()
         env["FAKE_SLEEP"] = "0.6"
         proc = subprocess.Popen(
-            [str(WRAPPER), "remove", str(self.config)],
+            ["bash", str(WRAPPER), "remove", str(self.config)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

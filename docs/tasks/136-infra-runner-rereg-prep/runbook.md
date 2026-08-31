@@ -37,7 +37,7 @@ The supported actions/runner interface takes the short-lived secret as `config.s
 - do not include the token in logs, Issues, artifacts, shell history or diagnostic captures;
 - clear/unset token state immediately after the official child returns.
 
-`scripts/runner_rereg_token_wrapper.sh` receives the token only on stdin and suppresses the official child stdout/stderr. The token may exist briefly in that `config.sh` child argv because this is the official interface; durable Evidence records only bounded success/failure classes.
+`bash scripts/runner_rereg_token_wrapper.sh ...` receives the token only on stdin and suppresses the official child stdout/stderr. The token may exist briefly in that `config.sh` child argv because this is the official interface; durable Evidence records only bounded success/failure classes.
 
 If the available control plane can only deliver secrets by visible `write_text`/terminal paste, **BLOCK** rather than exposing the token.
 
@@ -47,7 +47,7 @@ If the available control plane can only deliver secrets by visible `write_text`/
 
 1. Re-run the entry guard immediately before token creation.
 2. Obtain exactly one short-lived repository remove token through the authorized GitHub control plane.
-3. Pipe the token directly into the wrapper's stdin/ephemeral input boundary.
+3. Pipe the token directly into `bash scripts/runner_rereg_token_wrapper.sh ...` stdin/ephemeral input boundary.
 4. Invoke wrapper mode `remove` against the accepted installation `config.sh`.
 5. Require wrapper `SUCCESS`.
 6. Fresh-read GitHub/non-secret local state to establish that the old registration is no longer authoritative.
