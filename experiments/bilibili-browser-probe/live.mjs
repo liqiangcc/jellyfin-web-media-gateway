@@ -70,7 +70,7 @@ function statusClass(status) {
 }
 
 function recordFailure(state, error, phaseHint, status, transportStage) {
-  if (state.failure) return state.failure;
+  if (state.failure || state.transportFinalized) return state.failure;
   const counters = diagnosticCounters(state);
   state.failure = classifyError(error, phaseHint, { ...counters, status, transport_stage: transportStage });
   return state.failure;
@@ -163,6 +163,7 @@ export function brokerServer(state, overrides = {}) {
         client.unpipe(upstream); upstream.unpipe(counted);
         counted.destroy(); upstream.destroy(); client.destroy();
         if (!state.failure) state.transport = classifyTransport({ stage: 'downstream_close', outcome: 'success', ...diagnosticCounters(state) });
+        state.transportFinalized = true;
         onTunnelClosed({ client_destroyed: client.destroyed, upstream_destroyed: upstream.destroyed, counter_destroyed: counted.destroyed });
       };
       const counted = new Transform({ transform(chunk, encoding, callback) {
