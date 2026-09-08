@@ -208,6 +208,40 @@ jobs:
           test -x "$browser_path"
           CANDIDATE_SHA="$CANDIDATE_SHA" CHROME_PATH="$browser_path" node "$bundle/experiments/bilibili-browser-probe/consumer.mjs" "$bundle"
 
+  probe-static-boundary:
+    name: J4 live admission and static boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify live entry and boundary invariants
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { parseSelector, validateLiveInvocation } from './plugins/bilibili/live_selector.mjs';
+          const selector = 'bilibili:BV14V411W7r5:part-2';
+          const admission = validateLiveInvocation({ mode: 'live', selector });
+          if (admission.navigation.host !== 'www.bilibili.com' || !admission.navigation.url.includes('/video/BV14V411W7r5?p=2')) throw new Error('plugin navigation descriptor mismatch');
+          for (const value of ['https://www.bilibili.com/video/BV14V411W7r5', 'bilibili:BV14V411W7r5:part-2?cookie=x']) {
+            try { parseSelector(value); throw new Error('caller authority accepted'); } catch (error) { if (error.message === 'caller authority accepted') throw error; }
+          }
+          const live = fs.readFileSync('experiments/bilibili-browser-probe/live.mjs', 'utf8');
+          for (const marker of ['publicAddressFor', 'MAX_REQUESTS', 'MAX_INDEPENDENT_BYTES', 'serviceWorkers', 'candidates.clear']) {
+            if (!live.includes(marker)) throw new Error(`missing live boundary marker: ${marker}`);
+          }
+          NODE
+          ! rg -n --glob '*.mjs' 'remote-debugging|user-data-dir|process\.env\.(COOKIE|AUTHORIZATION|CDP|PROXY)' experiments/bilibili-browser-probe plugins/bilibili
+          ! rg -n --glob '*.mjs' 'gateway[-_](core|playback)|DisplayAdapter|PlaybackSession' experiments/bilibili-browser-probe plugins/bilibili
+
   probe-integration:
     name: JI1 remote workspace integration and regressions
     runs-on: ubuntu-latest

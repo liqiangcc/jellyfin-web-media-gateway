@@ -1,0 +1,220 @@
+#!/usr/bin/env node
+/*
+ * Opt-in live browser probe. It is intentionally separate from the synthetic
+ * fixture path and is never enabled by the hosted workflow. URLs and response
+ * bodies stay in the process; only the sanitized observation leaves it.
+ */
+import dns from 'node:dns/promises';
+import http from 'node:http';
+import https from 'node:https';
+import net from 'node:net';
+import tls from 'node:tls';
+import { once } from 'node:events';
+import { chromium } from 'playwright-core';
+import { navigationDescriptor, validateLiveInvocation } from '../../plugins/bilibili/live_selector.mjs';
+import { summarizeObservation, SCHEMA_VERSION } from '../../plugins/bilibili/experimental_probe.mjs';
+
+const MAX_REQUESTS = 200;
+const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+const MAX_CANDIDATES = 64;
+const MAX_INDEPENDENT_REQUESTS = 8;
+const MAX_INDEPENDENT_BYTES = 4 * 1024 * 1024;
+const MAX_INDEPENDENT_PER_REQUEST = 1024 * 1024;
+const SECRET_HEADERS = new Set(['cookie', 'authorization', 'proxy-authorization', 'set-cookie']);
+const SAFE_HEADERS = new Set(['accept-ranges', 'content-range', 'content-type', 'content-length', 'etag', 'last-modified']);
+const MEDIA_TYPES = /^(video\/|audio\/|application\/(vnd\.apple\.mpegurl|dash\+xml))/i;
+
+function listen(server) {
+  server.listen(0, '127.0.0.1');
+  return once(server, 'listening').then(() => server.address().port);
+}
+
+function publicIpv4(address) {
+  const octets = address.split('.').map(Number);
+  if (octets.length !== 4 || octets.some((item) => !Number.isInteger(item) || item < 0 || item > 255)) return false;
+  const [a, b] = octets;
+  return !(a === 0 || a === 10 || a === 127 || a >= 224 || (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 0) ||
+    (a === 192 && b === 168) || (a === 192 && b === 2) || (a === 198 && (b === 18 || b === 19 || b === 51)) ||
+    (a === 203 && b === 0));
+}
+
+function publicAddress(address) {
+  if (net.isIPv4(address)) return publicIpv4(address);
+  if (net.isIPv6(address)) {
+    const normalized = address.toLowerCase();
+    if (normalized.startsWith('::ffff:')) return publicIpv4(normalized.slice('::ffff:'.length));
+    return normalized !== '::' && normalized !== '::1' && !normalized.startsWith('ff') && !normalized.startsWith('2001:db8') && !normalized.startsWith('fc') && !normalized.startsWith('fd') &&
+      !normalized.startsWith('fe8') && !normalized.startsWith('fe9') && !normalized.startsWith('fea') && !normalized.startsWith('feb');
+  }
+  return false;
+}
+
+function allowedHost(host) {
+  const value = host.toLowerCase().replace(/\.$/, '');
+  return value === 'bilibili.com' || value.endsWith('.bilibili.com') ||
+    value.endsWith('.bilivideo.com') || value.endsWith('.bilivideo.cn') || value.endsWith('.hdslb.com');
+}
+
+function safeRequestHeaders(headers) {
+  return Object.fromEntries(Object.entries(headers).filter(([name]) => !SECRET_HEADERS.has(name.toLowerCase())));
+}
+
+function statusClass(status) {
+  if (!Number.isInteger(status)) return 'unknown';
+  return `${Math.floor(status / 100)}xx`;
+}
+
+async function publicAddressFor(host, pins) {
+  const answers = await dns.lookup(host, { all: true, verbatim: false });
+  if (!answers.length || answers.some(({ address }) => !publicAddress(address))) throw new Error('non-public DNS answer denied');
+  const addresses = answers.map(({ address }) => address).sort();
+  const previous = pins.get(host);
+  if (previous && previous.join(',') !== addresses.join(',')) throw new Error('DNS pin changed');
+  pins.set(host, addresses);
+  return addresses[0];
+}
+
+function brokerServer(state) {
+  const server = http.createServer(async (req, res) => {
+    if (state.requests++ >= MAX_REQUESTS) { res.writeHead(429); res.end(); return; }
+    let target;
+    try { target = new URL(req.url); } catch { res.writeHead(400); res.end(); return; }
+    const host = target.hostname.toLowerCase();
+    if (target.protocol !== 'https:' || target.port && target.port !== '443' || !allowedHost(host)) {
+      state.denied.push({ kind: 'http', host: host || 'unknown', reason: 'host-or-scheme-policy' });
+      res.writeHead(403); res.end('denied'); return;
+    }
+    let address;
+    try { address = await publicAddressFor(host, state.pins); } catch {
+      state.denied.push({ kind: 'http', host, reason: 'dns-address-policy' });
+      res.writeHead(403); res.end('denied'); return;
+    }
+    const options = {
+      host: address, port: 443, servername: host, path: `${target.pathname}${target.search}`,
+      method: req.method, headers: { ...safeRequestHeaders(req.headers), host, connection: 'close' },
+      rejectUnauthorized: true,
+    };
+    const upstream = https.request(options, (reply) => {
+      res.writeHead(reply.statusCode || 502, reply.headers);
+      reply.on('data', (chunk) => {
+        state.responseBytes += chunk.length;
+        if (state.responseBytes > MAX_RESPONSE_BYTES) {
+          reply.destroy(new Error('response budget exceeded'));
+          if (!res.writableEnded) res.end();
+          return;
+        }
+        if (!res.writableEnded) res.write(chunk);
+      });
+      reply.on('end', () => { if (!res.writableEnded) res.end(); });
+      reply.on('error', () => { if (!res.writableEnded) res.end(); });
+    });
+    upstream.on('error', () => { if (!res.writableEnded) { res.writeHead(502); res.end(); } });
+    req.pipe(upstream);
+  });
+  server.on('connect', async (req, client, head) => {
+    if (state.requests++ >= MAX_REQUESTS) { client.end('HTTP/1.1 429 Too Many Requests\r\n\r\n'); return; }
+    const [host, portText] = String(req.url).split(':');
+    const port = Number(portText || 443);
+    if (!allowedHost(host) || port !== 443) {
+      state.denied.push({ kind: 'connect', host: String(host).toLowerCase(), reason: 'host-or-port-policy' });
+      client.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return;
+    }
+    let address;
+    try { address = await publicAddressFor(host.toLowerCase(), state.pins); } catch {
+      state.denied.push({ kind: 'connect', host: String(host).toLowerCase(), reason: 'dns-address-policy' });
+      client.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return;
+    }
+    const upstream = tls.connect({ host: address, port, servername: host, rejectUnauthorized: true });
+    upstream.once('secureConnect', () => {
+      client.write('HTTP/1.1 200 Connection Established\r\nProxy-agent: bounded-bilibili-probe\r\n\r\n');
+      if (head?.length) upstream.write(head);
+      client.pipe(upstream).pipe(client);
+    });
+    upstream.on('error', () => client.destroy());
+    client.on('error', () => upstream.destroy());
+  });
+  return server;
+}
+
+function requestOne(candidate, pins, signal) {
+  return new Promise((resolve, reject) => {
+    let target;
+    try { target = new URL(candidate.url); } catch { reject(new Error('candidate URL malformed')); return; }
+    if (target.protocol !== 'https:' || !allowedHost(target.hostname)) { reject(new Error('candidate host denied')); return; }
+    publicAddressFor(target.hostname, pins).then((address) => {
+      const req = https.request({ host: address, port: 443, servername: target.hostname, path: `${target.pathname}${target.search}`, method: 'GET', headers: { host: target.hostname, range: 'bytes=0-1048575' }, rejectUnauthorized: true, signal }, (res) => {
+        let bytes = 0;
+        res.on('data', (chunk) => { bytes += chunk.length; if (bytes > MAX_INDEPENDENT_PER_REQUEST) req.destroy(new Error('independent request budget exceeded')); });
+        res.on('end', () => resolve({ status_class: statusClass(res.statusCode), bytes, content_type: String(res.headers['content-type'] || 'unknown').split(';', 1)[0] }));
+      });
+      req.on('error', reject); req.end();
+    }, reject);
+  });
+}
+
+export async function runLive(invocation, browserPath = process.env.CHROME_PATH || '/usr/bin/google-chrome') {
+  const admitted = validateLiveInvocation(invocation);
+  const state = { requests: 0, responseBytes: 0, denied: [], pins: new Map() };
+  const candidates = new Map();
+  const broker = brokerServer(state);
+  const brokerPort = await listen(broker);
+  let browser;
+  let context;
+  try {
+    browser = await chromium.launch({ executablePath: browserPath, headless: true, timeout: admitted.timeout_ms, args: [
+      `--proxy-server=http://127.0.0.1:${brokerPort}`, '--proxy-bypass-list=<-loopback>',
+      '--disable-quic', '--disable-features=WebTransport', '--disable-background-networking',
+      '--no-first-run', '--no-default-browser-check',
+    ] });
+    context = await browser.newContext({ serviceWorkers: 'block' });
+    await context.route('**/*', async (route) => {
+      const headers = safeRequestHeaders(await route.request().allHeaders());
+      await route.continue({ headers });
+    });
+    const page = await context.newPage();
+    page.on('response', async (response) => {
+      if (candidates.size >= MAX_CANDIDATES || response.status() < 200 || response.status() >= 300) return;
+      let url;
+      try { url = new URL(response.url()); } catch { return; }
+      if (!allowedHost(url.hostname)) return;
+      const headers = await response.allHeaders().catch(() => ({}));
+      const contentType = String(headers['content-type'] || '').split(';', 1)[0];
+      if (!MEDIA_TYPES.test(contentType)) return;
+      const id = candidates.size + 1;
+      const mediaPath = `${url.pathname}${url.search}`.toLowerCase();
+      const role = contentType.startsWith('audio/') ? 'audio' : /(^|[/?=&_-])video([/?=&_.-]|$)/.test(mediaPath) ? 'video' : 'muxed';
+      candidates.set(id, { url: url.href, role, codec: 'unknown', container: contentType.split('/')[1] || 'unknown', status_class: statusClass(response.status()), range_supported: 'unknown', header_names: Object.keys(headers).filter((name) => SAFE_HEADERS.has(name.toLowerCase())), egress_allowed: true, expiry_hint: 'unknown' });
+    });
+    await page.goto(admitted.navigation.url, { waitUntil: 'domcontentloaded', timeout: admitted.timeout_ms });
+    await page.waitForTimeout(Math.min(3000, admitted.timeout_ms));
+    const partMatch = new URL(page.url()).pathname.includes(`/video/${admitted.navigation.bvid}`) && new URL(page.url()).searchParams.get('p') === String(admitted.navigation.part);
+    await context.close(); context = undefined;
+    await browser.close(); browser = undefined;
+    const independent = [];
+    let totalBytes = 0;
+    for (const candidate of candidates.values()) {
+      if (independent.length >= MAX_INDEPENDENT_REQUESTS || totalBytes >= MAX_INDEPENDENT_BYTES) break;
+      try {
+        const result = await requestOne(candidate, state.pins);
+        totalBytes += result.bytes;
+        independent.push({ ...result, role: candidate.role });
+      } catch { independent.push({ status_class: 'unknown', bytes: 0, content_type: 'unknown', role: candidate.role }); }
+    }
+    const roles = independent.filter((item) => item.status_class === '2xx').map((item) => item.role);
+    const sourceKind = roles.includes('video') && roles.includes('audio') ? 'av_separated' : roles.length ? 'muxed' : 'unknown';
+    const raw = { schema_version: SCHEMA_VERSION, selector: { site_id: 'bilibili', content_id: admitted.navigation.bvid, part: admitted.navigation.part }, part_match: partMatch, source_kind: sourceKind, events: state.requests, resources: candidates.size, metadata_bytes: JSON.stringify([...candidates.values()].map(({ url, ...item }) => item)).length, independent_after_browser_exit: independent.some((item) => item.status_class === '2xx'), candidates: [...candidates.values()].map(({ url, ...item }) => ({ ...item, independent: undefined })) };
+    const observation = summarizeObservation(raw);
+    observation.budget = { ...observation.budget, request_count: state.requests, response_bytes: state.responseBytes, response_budget: MAX_RESPONSE_BYTES, independent_requests: independent.length, independent_bytes: totalBytes };
+    observation.containment = { broker: 'public-host-pinned', dns_pin: 'public-address-pinned', redirects: 'revalidated-per-hop', connect: 'public-host-only', websocket: 'no-upgrade-export', service_worker: 'disabled-for-observation', quic: 'disabled', secret_headers: 'stripped-and-not-exported' };
+    observation.independent_consumer = { requests: independent.length, bytes: totalBytes, results: independent.map(({ role, status_class, bytes, content_type }) => ({ role, status_class, bytes, content_type })) };
+    observation.cleanup = { browser_exit: 'complete', ephemeral_candidates: 'cleared-in-finally' };
+    process.stdout.write(`${JSON.stringify({ schema_version: SCHEMA_VERSION, observation, denied_count: state.denied.length }, null, 2)}\n`);
+  } finally {
+    candidates.clear();
+    if (context) await context.close().catch(() => {});
+    if (browser) await browser.close().catch(() => {});
+    broker.close();
+    state.pins.clear(); state.denied.length = 0;
+  }
+}

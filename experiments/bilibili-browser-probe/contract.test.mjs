@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { summarizeObservation, rejectSensitiveInput } from '../../plugins/bilibili/experimental_probe.mjs';
+import { parseSelector, navigationDescriptor, validateLiveInvocation } from '../../plugins/bilibili/live_selector.mjs';
 
 const base = {
   schema_version: 1,
@@ -40,4 +41,29 @@ test('unknown optional fields remain explicit and bounded', () => {
   assert.equal(result.source_kind, 'unknown');
   assert.equal(result.candidates[0].codec, 'unknown');
   assert.equal(result.candidates[0].expiry_hint, 'unknown');
+});
+
+test('plugin owns opaque live selector parsing and navigation', () => {
+  const selector = parseSelector('bilibili:BV14V411W7r5:part-2');
+  assert.deepEqual(selector, {
+    site_id: 'bilibili', locator_version: 1, bvid: 'BV14V411W7r5', part: 2,
+    opaque: 'bilibili:BV14V411W7r5:part-2',
+  });
+  assert.deepEqual(navigationDescriptor(selector), {
+    site_id: 'bilibili', locator_version: 1, host: 'www.bilibili.com',
+    url: 'https://www.bilibili.com/video/BV14V411W7r5?p=2', bvid: 'BV14V411W7r5', part: 2,
+  });
+});
+
+test('live admission rejects caller-controlled authority and malformed selectors', () => {
+  assert.equal(validateLiveInvocation({ mode: 'live', selector: 'bilibili:BV14V411W7r5:part-2' }).navigation.host, 'www.bilibili.com');
+  for (const selector of [
+    'https://www.bilibili.com/video/BV14V411W7r5',
+    'bilibili:BV14V411W7r5:part-0',
+    'bilibili:BV14V411W7r5:part-10000',
+    'bilibili:BV14V411W7r5:part-2?cookie=x',
+    'bilibili:BV14V411W7r5:part-2:profile',
+  ]) assert.throws(() => parseSelector(selector));
+  assert.throws(() => validateLiveInvocation({ mode: 'live', selector: 'bilibili:BV14V411W7r5:part-2', url: 'https://evil.invalid' }), /rejected/);
+  assert.throws(() => validateLiveInvocation({ mode: 'live', selector: 'bilibili:BV14V411W7r5:part-2', headers: {} }), /rejected/);
 });

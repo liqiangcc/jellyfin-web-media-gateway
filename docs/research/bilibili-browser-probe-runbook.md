@@ -1,8 +1,9 @@
 # Bilibili browser probe runbook (#166 handoff)
 
-This is a bounded live runbook for the later #166 verification Task. #165 only
-ships the offline harness; do not run this procedure as part of #165 and do not
-use it to claim Bilibili compatibility.
+This is a bounded live runbook for the later #166 verification Task. #165 and
+#169 ship the offline harness plus the explicit live-selector entry; do not run
+this procedure in hosted CI and do not use it alone to claim Bilibili
+compatibility.
 
 ## Admission
 
@@ -35,9 +36,18 @@ acquisition.
 1. Verify the downloaded artifact against its manifest and the Coordinator's
    exact artifact digest. Verify the candidate SHA and browser version before
    starting Chromium.
-2. Start the probe with the selected public content selector and no caller
-   supplied URL, headers, profile, or CDP endpoint. Use the probe's broker and
-   central egress policy. Record only sanitized schema output.
+2. Start the downloaded probe with the selected public content selector and no
+   caller supplied URL, headers, profile, proxy, or CDP endpoint. The Bilibili
+   plugin constructs the page navigation descriptor; use its broker and
+   central egress policy. The explicit entry is:
+
+   ```text
+   BILIBILI_PROBE_ALLOW_LIVE=1 node experiments/bilibili-browser-probe/probe.mjs \
+     --mode live --selector bilibili:BV14V411W7r5:part-2
+   ```
+
+   Record only sanitized schema output. Any unknown option or URL-like
+   selector must terminate before Chromium starts.
 3. Confirm the selected part matches the requested opaque locator. Record
    candidate count, role, codec/container, status class, Range support, safe
    header names, expiry category, request/byte budgets, and denial decisions.
