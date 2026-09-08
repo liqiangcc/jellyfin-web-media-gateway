@@ -6,10 +6,10 @@
 GitHub Issue: #68
 Task ID: BILIBILI-WEB-E2E
 Task kind: implementation + real-source functional E2E verification
-Planning Base: e9e23815150bed39d16fbbde502284672f1eb7fe
-Preferred worker: cloud-codex with Coordinator-routed real-source Evidence as required
+Planning Base: b17a27ca5d8c2f76cddc4c7cf3fdaa239169593a
+Preferred worker: cloud-codex with authenticated SSH tx-node and accepted #146 browser path
 Eligible environment after publication: env:cloud
-Hard publication dependencies: #67 Final Acceptance PASS; #49 Web MVP Final Accepted
+Hard publication dependencies: #67 R18-or-later Final Acceptance PASS; #49 Web MVP Final Accepted; #146 execution authority remains valid
 Accepted authorities: #44 SourceSession; #45 Web Display; #47 Control; #49 hosted Web MVP; #60/#66/#73 generic-ytdlp runtime/security; #71 Navigation authority remains independent
 Freshness policy: dependency-aware
 ```
@@ -20,7 +20,7 @@ Freshness policy: dependency-aware
 
 This Task Package is deliberately materialized early as a planning buffer, but **must remain `status:draft`** until #67 is Final Accepted.
 
-Before publication the Coordinator must freeze all of the following from actual #67 Evidence:
+Before publication the Coordinator must freeze all of the following from actual #67 Evidence and accepted #146 runbook. No phone deployment/readiness/Runner/management task is a dependency for this functional stage:
 
 ```text
 #67 Final Acceptance / exact accepted Candidate
@@ -29,7 +29,7 @@ accepted real-source protocol: http-file | hls
 accepted stream_count / first-playback shape
 accepted offline runtime artifact identity from #79, if still relevant to execution
 exact #68 Execution Candidate / Planning Base after freshness classification
-real-source Evidence routing / environment
+real-source Evidence routing: external-codex/ssh tx-node + identified isolated browser host/access path; #146 accepted runbook SHA/uid/gid; no public listener
 ```
 
 If #67 returns `FAIL`, `BLOCKED`, or a result requiring DASH/separate A/V/remux, **do not publish #68**. Route the evidence-driven generic repair Task first.
@@ -228,7 +228,7 @@ Prove:
 
 ### J2 — Browser journey
 
-Use product `/control` + `/display` routes and the exact accepted media shape.
+Use product `/control` + `/display` routes and the exact accepted media shape. The live ordinary-Linux step uses accepted #146 low-privilege tx-node execution and its isolated browser access path; record SSH/actual browser host separately from hosted Actions. Do not inspect or reuse the user browser profile, disable Chromium sandbox/autoplay policy, or expose Gateway/CDP publicly.
 
 Prove:
 
@@ -313,7 +313,7 @@ Never publish:
 - lease token;
 - arbitrary local filesystem paths.
 
-## Freshness / publication rules
+## Freshness / Integration Contract
 
 Semantic authorities include:
 
@@ -361,3 +361,14 @@ status:draft
 ```
 
 Worker cannot set `status:done`, close #68, start #72, or weaken accepted security/runtime authority.
+
+
+### Non-phone revision and integration selectors
+
+Required capabilities: github-read-write, code-authoring, automated-build/test, authenticated SSH tx-node, accepted isolated browser path (MCP or repository-owned Playwright). Scope remains product composition; Worker produces a new exact Candidate and all real/hosted Evidence targets it. #147 is independent; a missing required navigation run is a concrete verification dependency, not permission to skip it.
+
+Freshness policy: dependency-aware; strict-main reason: n/a. Semantic authorities/domains and B1–B8 mapping: source/session/plugin/runtime → B1/B2/B7/B8; Playback/Control → B5/B6; Display/media → B3/B4/B6/B7; #146 privilege/browser boundary → B4/B7. Integration surfaces: Cargo workspace/dependencies, router, shared workflows/toolchain. Task-owned: minimal real-source registration/composition and relevant product browser harness/tests; no source-specific Core semantics.
+
+JI1: workspace fmt/clippy/tests plus source-session/display/Control/R007 product regression on exact Integration Candidate. JI2: #49 browser composition/reconnect and R001/R008/plugin-boundary checks when router/build overlap. A conflict changing live source/rendering semantics requires affected B1–B8/live journey reruns. Unrelated main/doc changes preserve exact-Candidate evidence; no moving-main rule.
+
+User-visible runbook delivery is required: exact build/start/stop, explicit verification-only plugin enablement, loopback/private browser access, one normal activation if required, source input and clear cleanup. It must permit another Codex to reproduce the journey without raw media injection or the old chat. Cleanup leaves only approved #146 resources; persistent production services and phone deployment remain out of scope.

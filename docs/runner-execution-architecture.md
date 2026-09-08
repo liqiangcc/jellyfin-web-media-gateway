@@ -1,5 +1,9 @@
 # GitHub Actions Runner 执行架构
 
+## 当前非手机功能验证例外（2026-09-08）
+
+#146/#67/#68 可在其 task.md 显式规定的有界 live Jobs 中由 Codex 经 SSH 使用 tx-node；无需先恢复或部署手机 Runner，也不默认在 tx-node 新装 Runner。该路径必须记录 external-codex/ssh，而非 github-actions。required portable build/test Evidence 仍来自 GitHub-hosted Actions；远端只使用明确 Candidate、低权限身份、隔离目录和清理边界。未来手机/TV Evidence 不由本路径替代。
+
 ## 1. 目的
 
 本文件定义 Web Media Gateway 的 Worker / 自动执行 / Verification 后端分工。

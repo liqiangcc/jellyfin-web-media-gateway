@@ -1,5 +1,9 @@
 # 开发环境与多 Agent 协同
 
+## 当前非手机执行路由（2026-09-08）
+
+当前功能主线使用 Codex Worker `env:cloud`，并要求该 Worker 具备既有 authenticated SSH `tx-node` 能力；标签代表 Worker 编排角色，不代表远端 host。普通构建/测试使用 GitHub-hosted；Task 明确列出的 live Jobs 可用 `Execution plane=external-codex/ssh; Executor=tx-node; Target=ordinary Linux x86_64`，不得称 Actions/phone Evidence。#146 建立边界与可复现入口，不默认安装 self-hosted Runner。没有 SSH 能力的 Worker 不领取 live Task。手机部署及其恢复线暂缓。以下旧示例中的 Web-first 路由服从 AGENTS.md 的 Codex-first 规则。
+
 ## 1. 目标
 
 本项目从网页 GPT、GitHub Actions、Cloud、WSL、Windows、Ubuntu ARM64 手机和真实电视等环境开发与验证。

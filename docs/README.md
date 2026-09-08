@@ -1,5 +1,7 @@
 # 文档导航与权威层级
 
+当前推进入口（2026-09-08）：[暂缓手机部署的完整计划](non-phone-web-playback-plan.md)；下一 Coordinator 从 [非手机交付 handoff](tasks/handoffs/non-phone-delivery.md) 恢复。实际执行顺序与 Task 发布情况以 `product-roadmap.md` 和 live GitHub 为准。
+
 本仓库当前仍处于设计与功能闭环阶段。为避免 README、需求、架构、专题设计和 ADR 逐渐漂移，按下面权威层级解释。
 
 ## 1. 权威层级

@@ -1,5 +1,9 @@
 # MVP 实施计划
 
+## 当前实施覆盖说明（2026-09-08）
+
+用户暂缓手机部署；当前具体 Task sequencing 以 `product-roadmap.md` 为准：#146 普通 Linux 执行准备 → #67 真实解析 → #68 Web 播放闭环；#147 修复独立 CI 缺陷。历史手机前置路由不阻塞此功能阶段，本文后续 Phase/完整设备退出条件仍保留。
+
 本计划只描述实施顺序。核心边界以 `architecture.md` 和 `implementation-contracts.md` 为准；风险驱动技术预研、实验方法和 Go / No-Go 标准以 `technical-feasibility-validation.md` 为准。
 
 ## 0. 开工前 Gate：Contract Freeze

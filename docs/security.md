@@ -1,5 +1,9 @@
 # 安全设计
 
+## 普通 Linux 测试实例边界（2026-09-08）
+
+暂缓手机部署期间，tx-node 只作为受信、隔离的功能验证主机。已有 SSH 管理权限不授予测试 runtime root/sudo、生产 Vault、真实浏览器 profile 或长期凭据访问权。Task 可明确授权最小专用用户/目录准备；最终 Gateway、broker、extractor 和测试浏览器必须采用对应低权限/正常 sandbox 边界。初始服务/CDP 仅本机访问，跨主机浏览器使用限定 SSH 隧道或已确认的私有测试路径；不得公网监听、关闭 Origin/CSRF/SSRF 或继承 root 的环境/代理。测试账号不持有 SSH key/GitHub token，凭据留在编排端。部署、清理与持久保留对象必须在 Task 中列明。
+
 ## 1. MVP 信任模型
 
 首个 MVP 面向可信家庭 LAN / 单用户。

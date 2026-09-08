@@ -1,5 +1,9 @@
 # 系统设计
 
+## 当前功能验证部署（2026-09-08）
+
+当前先在普通 Linux 的隔离测试实例组合既有 Gateway、SiteAdapterRegistry、Media Gateway 与 Web Display；暂不部署手机。tx-node 是候选 x86_64 执行主机，不改变业务分层或状态所有权。浏览器与 Gateway 可在不同主机，需明确受控访问路径、Host/Origin 和媒体同源关系；具体准入与验证由 Task Contract 定义。手机/TV 验证留在独立后续验收线。
+
 ## 1. 架构摘要
 
 系统采用独立 Web Media Gateway，不修改 Jellyfin Server 核心。
