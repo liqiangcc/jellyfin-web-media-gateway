@@ -254,4 +254,3 @@ Target evidence is time-sensitive and cannot be reused as a future ready-slot or
 ### Coordinator Gate
 
 Coordinator may accept the research only after reading the live Issue/history, this Task Contract, the sanitized report and all required evidence. `ACCEPT` does not automatically set #188/#191 ready; any downstream slot provisioning or browser diagnostic requires a separately scoped Task and publication gate.
-
