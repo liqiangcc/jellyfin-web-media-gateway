@@ -9,13 +9,15 @@ const evidence = {
   claims: {},
   production_path: [],
   failures: [],
-  requests: { gateway_media: 0, rendering: 0, events: 0 },
+  requests: { gateway_media: 0, gateway_media_responses: [], rendering: 0, events: 0 },
 };
 
 const browser = await chromium.launch({
   executablePath: chrome,
   headless: true,
-  args: ['--autoplay-policy=no-user-gesture-required', '--no-sandbox'],
+  // Keep Chromium's ordinary autoplay policy. The production Display's
+  // activation button below must provide the user-equivalent gesture.
+  args: ['--no-sandbox'],
 });
 
 function safeUrl(value) {
@@ -51,6 +53,11 @@ function attachGuards(page) {
     if (path.includes('/rendering')) evidence.requests.rendering += 1;
     if (path.includes('/events')) evidence.requests.events += 1;
   });
+  page.on('response', response => {
+    const path = safeUrl(response.url());
+    if (!path.startsWith('/stream/')) return;
+    evidence.requests.gateway_media_responses.push({ method: response.request().method(), status: response.status(), path });
+  });
 }
 
 async function json(response) {
@@ -67,6 +74,55 @@ async function postJson(page, path, body) {
     const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     return { status: response.status, payload: await response.json().catch(() => ({})) };
   }, { path, body });
+}
+
+async function mediaState(page) {
+  return page.evaluate(() => {
+    const player = document.querySelector('#player');
+    const error = player?.error;
+    return {
+      readyState: player?.readyState ?? 0,
+      duration: player?.duration ?? Number.NaN,
+      currentTime: player?.currentTime ?? Number.NaN,
+      paused: player?.paused ?? true,
+      ended: player?.ended ?? false,
+      error: error ? { code: error.code, message: error.message || '' } : null,
+    };
+  });
+}
+
+async function assertUsableMedia(page, label) {
+  await page.waitForFunction(() => {
+    const player = document.querySelector('#player');
+    return Boolean(player && player.readyState >= HTMLMediaElement.HAVE_METADATA && Number.isFinite(player.duration) && player.duration > 0 && !player.error);
+  }, null, { timeout: 20000 });
+  const state = await mediaState(page);
+  const responses = evidence.requests.gateway_media_responses;
+  const unsuccessful = responses.filter(response => response.status < 200 || response.status >= 300);
+  if (unsuccessful.length) throw new Error(`${label} Gateway media response was not successful: ${unsuccessful.map(response => response.status).join(',')}`);
+  if (!responses.length) throw new Error(`${label} had no Gateway media response`);
+  if (state.readyState < 2 || !Number.isFinite(state.duration) || state.duration <= 0 || state.error) {
+    throw new Error(`${label} media is not usable: readyState=${state.readyState} duration=${state.duration} error=${state.error?.code || 'none'}`);
+  }
+  return state;
+}
+
+async function activateAndAssertProgression(page) {
+  const before = await mediaState(page);
+  await page.locator('#activate').click();
+  await page.waitForFunction(() => {
+    const player = document.querySelector('#player');
+    return Boolean(player && !player.paused && !player.error);
+  }, null, { timeout: 10000 });
+  await page.waitForFunction(start => {
+    const player = document.querySelector('#player');
+    return Boolean(player && !player.paused && !player.error && player.currentTime > start + 0.25);
+  }, before.currentTime, { timeout: 20000 });
+  const after = await mediaState(page);
+  if (after.paused || after.error || !(after.currentTime > before.currentTime + 0.25)) {
+    throw new Error(`Display activation did not advance media: before=${before.currentTime} after=${after.currentTime} paused=${after.paused} error=${after.error?.code || 'none'}`);
+  }
+  return { before, after };
 }
 
 function assertCleanBrowser(page, label) {
@@ -116,9 +172,19 @@ async function run() {
   if (!mediaPath?.startsWith(new URL(base).origin + '/stream/')) throw new Error('Display did not receive a Gateway media path');
   if (rendering.session_id !== sessionId || rendering.item_revision !== 1) throw new Error('Display rendering view identity mismatch');
   if (evidence.requests.gateway_media < 1) throw new Error('Display did not request Gateway media');
+  const readyMedia = await assertUsableMedia(display, 'Session A');
+  const activation = await activateAndAssertProgression(display);
   evidence.production_path.push('Display rendering view → same-origin Gateway media request');
+  evidence.production_path.push('Display #activate user gesture → media readiness → currentTime progression');
   evidence.claims.C4 = { rendering_session: rendering.session_id, item_revision: rendering.item_revision, safe_gateway_path: true };
-  evidence.claims.C5 = { media_request_count: evidence.requests.gateway_media, browser_media_path: safeUrl(mediaPath) };
+  evidence.claims.C5 = {
+    media_request_count: evidence.requests.gateway_media,
+    media_response_statuses: evidence.requests.gateway_media_responses.map(response => response.status),
+    browser_media_path: safeUrl(mediaPath),
+    ready_state: readyMedia.readyState,
+    duration_seconds: readyMedia.duration,
+    activation: { user_gesture: true, before_current_time: activation.before.currentTime, after_current_time: activation.after.currentTime, progressed: true },
+  };
 
   for (const [command, expectedState] of [['pause', 'paused'], ['play', 'playing'], ['seek', 'playing'], ['stop', 'stopped']]) {
     if (command === 'seek') await control.locator('#seek-position').fill('1200');
@@ -163,7 +229,7 @@ async function run() {
     item_revision: renderingB.item_revision,
     safe_gateway_path: true,
   };
-  evidence.claims.C5 = { media_request_count: evidence.requests.gateway_media, browser_media_path: safeUrl(mediaPathB) };
+  evidence.claims.C5.browser_media_path_after_session_b = safeUrl(mediaPathB);
 
   const preReloadRegistration = await display.evaluate(() => window.__displayPrep.getRegistration());
   await control.reload({ waitUntil: 'domcontentloaded' });
