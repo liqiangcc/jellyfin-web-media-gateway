@@ -35,9 +35,8 @@ function fixtureServer() {
         fetch('http://blocked.test/forbidden').catch(() => {});
         fetch('/redirect').catch(() => {});
         navigator.serviceWorker.register('/sw.js').catch(() => {});
-        const worker = new Worker(URL.createObjectURL(new Blob([
-          "fetch('http://blocked.test/worker').catch(() => {});"
-        ], {type: 'application/javascript'})));
+        const worker = new Worker('/worker.js');
+        worker.onmessage = () => { window.__workerDone = true; };
         const ws = new WebSocket('ws://blocked.test/socket');
         ws.onerror = () => {};
       </script>`);
@@ -46,6 +45,11 @@ function fixtureServer() {
     if (req.url === '/sw.js') {
       res.writeHead(200, { 'content-type': 'application/javascript', 'service-worker-allowed': '/' });
       res.end("self.addEventListener('fetch', event => { if (new URL(event.request.url).pathname === '/sw-probe') event.respondWith(fetch('http://blocked.test/sw')); });");
+      return;
+    }
+    if (req.url === '/worker.js') {
+      res.writeHead(200, { 'content-type': 'application/javascript' });
+      res.end("fetch('http://blocked.test/worker').then(() => postMessage('done')).catch(() => postMessage('done'));");
       return;
     }
     if (req.url === '/metadata') {
@@ -135,6 +139,7 @@ async function main() {
     await page.goto('http://fixture.test/page', { waitUntil: 'domcontentloaded', timeout: TIMEOUT_MS });
     const raw = await page.evaluate(() => window.__probeObservation);
     const observation = summarizeObservation(raw);
+    await page.waitForFunction(() => window.__workerDone === true, undefined, { timeout: TIMEOUT_MS });
     await page.waitForTimeout(500);
     if (requests.length > MAX_REQUESTS) throw new Error('request budget exceeded');
     const denied = requests.filter((item) => !item.allowed);
