@@ -49,7 +49,7 @@ jobs:
       - name: Run synthetic contract and leakage negatives
         env:
           PLAYWRIGHT_RUNTIME_ROOT: ${{ runner.temp }}/probe-runtime
-        run: node --test experiments/bilibili-browser-probe/contract.test.mjs experiments/bilibili-browser-probe/diagnostic.test.mjs experiments/bilibili-browser-probe/artifact.test.mjs
+        run: node --test experiments/bilibili-browser-probe/contract.test.mjs experiments/bilibili-browser-probe/diagnostic.test.mjs experiments/bilibili-browser-probe/transport.test.mjs experiments/bilibili-browser-probe/artifact.test.mjs
 
   probe-containment:
     name: J2 Chromium broker containment and cleanup
@@ -232,9 +232,14 @@ jobs:
             try { parseSelector(value); throw new Error('caller authority accepted'); } catch (error) { if (error.message === 'caller authority accepted') throw error; }
           }
           const live = fs.readFileSync('experiments/bilibili-browser-probe/live.mjs', 'utf8');
-          for (const marker of ['publicAddressFor', 'MAX_REQUESTS', 'MAX_INDEPENDENT_BYTES', 'serviceWorkers', 'launchPersistentContext', 'mkdtemp', 'pendingObservations', 'onTunnelClosed', 'candidates.clear']) {
+          for (const marker of ['publicAddressFor', 'MAX_REQUESTS', 'MAX_INDEPENDENT_BYTES', 'serviceWorkers', 'launchPersistentContext', 'mkdtemp', 'pendingObservations', 'onTunnelClosed', 'transportFinalized', 'candidates.clear']) {
             if (!live.includes(marker)) throw new Error(`missing live boundary marker: ${marker}`);
           }
+          const preflight = fs.readFileSync('experiments/bilibili-browser-probe/transport-preflight.mjs', 'utf8');
+          for (const marker of ['PREFLIGHT_AUTHORITY', 'method: \'CONNECT\'', 'page_navigation: false', 'media_request: false', 'selector: false', 'consumer: false']) {
+            if (!preflight.includes(marker)) throw new Error(`missing transport preflight boundary marker: ${marker}`);
+          }
+          if (/process\.argv\[(?:2|3)\]|process\.env\.(URL|HOST|PORT|PROXY|COOKIE|AUTHORIZATION)/i.test(preflight)) throw new Error('caller-controlled transport authority found');
           NODE
           node --input-type=module <<'NODE'
           import fs from 'node:fs';

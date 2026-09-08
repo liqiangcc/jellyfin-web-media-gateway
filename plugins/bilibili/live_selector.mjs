@@ -5,6 +5,9 @@
  */
 
 export const SELECTOR_VERSION = 1;
+// The transport preflight may use only this plugin-owned public authority.
+// Callers cannot provide a URL, host, port, proxy, or headers.
+export const PREFLIGHT_AUTHORITY = Object.freeze({ host: 'www.bilibili.com', port: 443 });
 const BVID = /^BV[0-9A-Za-z]{10}$/;
 const SELECTOR = /^bilibili:(BV[0-9A-Za-z]{10}):part-([1-9][0-9]{0,3})$/;
 

@@ -15,7 +15,7 @@ import { once } from 'node:events';
 import { chromium } from 'playwright-core';
 import { navigationDescriptor, validateLiveInvocation } from '../../plugins/bilibili/live_selector.mjs';
 import { summarizeObservation, SCHEMA_VERSION } from '../../plugins/bilibili/experimental_probe.mjs';
-import { classifyError, diagnosticCounters } from './diagnostic.mjs';
+import { classifyError, classifyTransport, diagnosticCounters } from './diagnostic.mjs';
 
 const MAX_REQUESTS = 200;
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
@@ -69,11 +69,17 @@ function statusClass(status) {
   return `${Math.floor(status / 100)}xx`;
 }
 
-function recordFailure(state, error, phaseHint, status) {
-  if (state.failure) return state.failure;
+function recordFailure(state, error, phaseHint, status, transportStage) {
+  if (state.failure || state.transportFinalized) return state.failure;
   const counters = diagnosticCounters(state);
-  state.failure = classifyError(error, phaseHint, { ...counters, status });
+  state.failure = classifyError(error, phaseHint, { ...counters, status, transport_stage: transportStage });
   return state.failure;
+}
+
+function recordTransportSuccess(state, stage, status) {
+  if (state.failure || state.transport) return state.transport;
+  state.transport = classifyTransport({ stage, outcome: 'success', status, ...diagnosticCounters(state) });
+  return state.transport;
 }
 
 async function publicAddressFor(host, pins) {
@@ -102,7 +108,7 @@ export function brokerServer(state, overrides = {}) {
     }
     let address;
     try { address = await resolveAddress(host, state.pins); } catch {
-      recordFailure(state, { code: 'ERR_DNS_ADDRESS_POLICY' }, 'dns_address_policy');
+      recordFailure(state, { code: 'ERR_DNS_ADDRESS_POLICY' }, 'dns_address_policy', undefined, 'resolve_policy');
       state.denied.push({ kind: 'http', host, reason: 'dns-address-policy' });
       res.writeHead(403); res.end('denied'); return;
     }
@@ -141,13 +147,14 @@ export function brokerServer(state, overrides = {}) {
     }
     let address;
     try { address = await resolveAddress(host.toLowerCase(), state.pins); } catch {
-      recordFailure(state, { code: 'ERR_DNS_ADDRESS_POLICY' }, 'dns_address_policy');
+      recordFailure(state, { code: 'ERR_DNS_ADDRESS_POLICY' }, 'dns_address_policy', undefined, 'resolve_policy');
       state.denied.push({ kind: 'connect', host: String(host).toLowerCase(), reason: 'dns-address-policy' });
       client.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return;
     }
     const upstream = makeConnect({ host: address, port, servername: host, rejectUnauthorized: true });
     upstream.once('secureConnect', () => {
       client.write('HTTP/1.1 200 Connection Established\r\nProxy-agent: bounded-bilibili-probe\r\n\r\n');
+      recordTransportSuccess(state, 'proxy_response', 200);
       if (head?.length) upstream.write(head);
       let closed = false;
       const closeTunnel = () => {
@@ -155,11 +162,17 @@ export function brokerServer(state, overrides = {}) {
         closed = true;
         client.unpipe(upstream); upstream.unpipe(counted);
         counted.destroy(); upstream.destroy(); client.destroy();
+        if (!state.failure) state.transport = classifyTransport({ stage: 'downstream_close', outcome: 'success', ...diagnosticCounters(state) });
+        state.transportFinalized = true;
         onTunnelClosed({ client_destroyed: client.destroyed, upstream_destroyed: upstream.destroyed, counter_destroyed: counted.destroyed });
       };
       const counted = new Transform({ transform(chunk, encoding, callback) {
         state.responseBytes += chunk.length;
-        if (state.responseBytes > (state.responseLimit || MAX_RESPONSE_BYTES)) { state.responseLimitTriggered = true; closeTunnel(); callback(new Error('response budget exceeded')); return; }
+        if (state.responseBytes > (state.responseLimit || MAX_RESPONSE_BYTES)) {
+          state.responseLimitTriggered = true;
+          recordFailure(state, { code: 'BROKER_CONNECT' }, 'broker_connect', undefined, 'downstream_close');
+          closeTunnel(); callback(new Error('response budget exceeded')); return;
+        }
         callback(null, chunk, encoding);
       } });
       counted.on('error', () => {

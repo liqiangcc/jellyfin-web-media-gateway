@@ -98,6 +98,11 @@ test('CONNECT uses the same broker byte budget and denies private DNS', async (t
   assert.ok(state.responseBytes > state.responseLimit);
   assert.equal(upstream.destroyed, true);
   assert.deepEqual(tunnelInfo, { client_destroyed: true, upstream_destroyed: true, counter_destroyed: true });
+  // A late socket callback must not replace the finalized budget failure.
+  upstream.emit('error', Object.assign(new Error('late https://secret.invalid token=sentinel'), { code: 'ERR_SSL_PROTOCOL_ERROR' }));
+  assert.equal(state.failure.transport_stage, 'downstream_close');
+  assert.equal(state.failure.transport_outcome, 'failure');
+  assert.doesNotMatch(JSON.stringify(state.failure), /https?:\/\/|secret|sentinel/i);
   assert.equal((await proxyGet(port, 'https://private.bilibili.com/final')).status, 403);
   client.destroy();
 });
