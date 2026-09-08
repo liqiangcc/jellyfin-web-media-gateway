@@ -54,7 +54,7 @@ test('the live broker enforces host, DNS, redirect and upgrade policy through on
   const port = await listen(broker);
   t.after(() => { broker.closeAllConnections?.(); return broker.close(); });
 
-  assert.deepEqual(await proxyGet(port, 'https://www.bilibili.com/media'), { status: 200, body: '/media' });
+  assert.deepEqual(await proxyGet(port, 'https://www.bilibili.com/media'), { status: 200, body: 'allowed' });
   assert.equal((await proxyGet(port, 'https://private.bilibili.com/media')).status, 403);
   assert.equal((await proxyGet(port, 'https://www.bilibili.com/redirect')).status, 302);
   assert.equal((await proxyGet(port, 'https://private.bilibili.com/final')).status, 403);
