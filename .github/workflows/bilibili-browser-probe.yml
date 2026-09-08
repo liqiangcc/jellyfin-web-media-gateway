@@ -49,7 +49,7 @@ jobs:
       - name: Run synthetic contract and leakage negatives
         env:
           PLAYWRIGHT_RUNTIME_ROOT: ${{ runner.temp }}/probe-runtime
-        run: node --test experiments/bilibili-browser-probe/contract.test.mjs experiments/bilibili-browser-probe/artifact.test.mjs
+        run: node --test experiments/bilibili-browser-probe/contract.test.mjs experiments/bilibili-browser-probe/diagnostic.test.mjs experiments/bilibili-browser-probe/artifact.test.mjs
 
   probe-containment:
     name: J2 Chromium broker containment and cleanup
