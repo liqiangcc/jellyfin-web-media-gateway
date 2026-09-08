@@ -1,0 +1,26 @@
+name: non-phone-execution
+on:
+  push:
+    branches: ['worker/issue-146-*']
+  pull_request:
+    paths:
+      - 'scripts/non-phone-execution/**'
+      - 'scripts/tests/test_non_phone_*.py'
+      - '.github/workflows/non-phone-execution.yml'
+permissions:
+  contents: read
+jobs:
+  helpers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Assert exact Candidate
+        env:
+          CANDIDATE: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE"
+      - name: Test preparation helpers and existing offline tooling
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
