@@ -1,102 +1,165 @@
 # Bilibili browser probe runbook (#166 handoff)
 
-This is a bounded live runbook for the later #166 verification Task. #165 and
-#169 ship the offline harness plus the explicit live-selector entry; do not run
-this procedure in hosted CI and do not use it alone to claim Bilibili
-compatibility.
+This is the bounded live runbook for verification Task #166. It is only a
+research procedure for clean anonymous source portability. It does not prove
+Gateway playback, TV playback, ARM64 phone behavior or production `EgressPolicy`
+integration. Do not run it in hosted CI and do not use a personal browser,
+profile, VNC session or existing Gateway process.
 
-## Admission
+## Admission gate
 
-The Coordinator must first accept #169, then freeze its exact Candidate SHA,
-GitHub artifact ID/digest, workflow run and job IDs, artifact manifest,
-low-privilege Linux user, browser executable/version, and command before
-publishing #166. The #165 artifact is an offline prerequisite only; it is not
-the live artifact. The run must be on a disposable ordinary Linux process with
-a fresh temporary Chromium profile. It must not reuse a personal profile,
-cookies, Authorization headers, Vault data, an existing browser, or an
-existing Gateway service.
+The Coordinator has accepted the live-capable implementation (#169) and the
+self-contained target runtime package (#172). Before any live request, the
+Worker must verify the exact provenance below from GitHub and verify the
+manifest/digest of the downloaded bundle. If any field differs, stop with
+`BLOCKED` and do not enable live mode.
 
-The run is permitted only when #169 C1–C4 and its hosted evidence are accepted.
-If the #169 artifact manifest, exact Candidate/run/job provenance, browser
-admission, or egress policy cannot be verified, stop with `BLOCKED`; do not
-enable a live mode.
-
-The accepted bundle carries its own exact `playwright-core@1.55.0` Node runtime
-and must be copied to a clean directory without `npm install` or a workspace
-`node_modules` link. The target supplies an external system Chrome executable;
-Chrome/Chromium is not packaged. Verify the manifest and package inventory
-before invoking the downloaded entry.
-
-## Frozen provenance
-
-At #166 publication, record the accepted #169 values in the Task contract and
-evidence record:
+### Accepted #169 live probe
 
 ```text
-Candidate SHA: <accepted #169 Candidate>
-Workflow run: <#169 hosted run>
-Required jobs: <#169 J1/J2/J3a/J3/J4/JI1 job IDs>
-Bundle artifact: <#169 manifest-addressed artifact ID and digest>
-Sanitized evidence: <#169 evidence artifact ID and digest>
+Candidate SHA: eb6598d473768f544744431c5af792d6de86d59f
+Merged main: f9a48dbef6535c4bb38188b050384ac4156187af
+Workflow run: 34218848612
+J1: 102036943379
+J2: 102036943625
+J3a: 102036943040
+J3: 102037252460
+J4: 102036943488
+JI1: 102036943403
+Bundle artifact: 10052918296
+Bundle digest: sha256:c565934ea092f54c67e902c6e3615cb035e7f37c6ec78448e176c925b1ad3a37
+Broker evidence: 10052975493 / sha256:75a51e8d05507c82f84670190d33b1f4ad5d0391323d5f78bc39a9ba8b6b8ae4
+Sanitized evidence: 10052975884 / sha256:d92d8ec65bafbd91880b4610046ce0416a9a02155553ac4a38eaa6a2f7b66051
 ```
 
-These fields are admission data, not live-site results. #166 must verify that
-the downloaded bundle matches all of them before starting Chromium.
+### Accepted #172 target runtime
 
-## Frozen budgets
+```text
+Candidate SHA: 989bacdbf7e0fcde053005a45a1ad41b219b8b46
+Merged main: 3a2a5fe8900b0ecf728e12461420ca043bdd2702
+Workflow run: 34223368033
+J1: 102051511536
+J2: 102051511433
+J3a: 102051511227
+J3: 102051889697
+J4: 102051511455
+JI1: 102051511612
+Bundle artifact: 10054697137
+Bundle zip digest: sha256:66cae21de2eecb6a7166a703f9679e961a4556a93050d0e5733627fe06dacbc1
+Bundle archive SHA: a236f10085ea73c9c783b11335fb81bf979cba805d1f69064ad4f5aca15ed11d
+J2 probe evidence: 10054718111 / sha256:f728f264946b3d6cc31133dacaa35415ae4016e124066b5da19a56778b61cd2d
+J2 broker evidence: 10054717444 / sha256:0a5f088a140a1c2b5f864ea7029e0648bfcbaccaad8f495d829d8fb9da60260b
+Runtime: playwright-core@1.55.0, regular-file package tree, no browser binary and no bin/ installer files
+```
 
-Use at most two clean sessions. Each session has a 120 second navigation
-deadline, at most 200 observed network requests, at most 32 MiB of actual
-response bytes, and at most 1 MiB of retained metadata. Redirects count as
-requests. Once a byte or request limit is touched, stop the session.
+The #172 bundle is the runnable derivative of the accepted #169 probe. It must
+be copied to a clean directory on the target. Do not run `npm install`, use a
+workspace `node_modules` link, use an npm cache, or install a browser package on
+tx-node. The target supplies only its external system Chrome.
 
-The independent server-side consumer may make at most eight requests total,
-one MiB per request and four MiB total. Count actual bytes, including error
-responses. Stop on the first over-budget response. Do not click play or cause
-the site to preload the complete video; the experiment is about bounded source
-acquisition.
+## Target admission
 
-## Procedure
+The accepted read-only preflight recorded in [Issue #166 comment](https://github.com/liqiangcc/jellyfin-web-media-gateway/issues/166#issuecomment-5583242133)
+showed:
 
-1. Verify the downloaded artifact against its manifest and the Coordinator's
-   exact artifact digest. Verify the candidate SHA and browser version before
-   starting Chromium.
-2. Start the downloaded probe with the selected public content selector and no
-   caller supplied URL, headers, profile, proxy, or CDP endpoint. The Bilibili
-   plugin constructs the page navigation descriptor; use the experimental
-   fail-closed broker. This experiment does not prove production `EgressPolicy`
-   integration. The explicit entry is:
+```text
+Host: VM-0-11-ubuntu (tx-node)
+OS/kernel: Ubuntu 26.04 / Linux 7.0.0-14-generic
+Architecture: x86_64
+User: gateway-verify / UID 1001 / GID 1001
+Node/npm: v22.22.1 / 9.2.0
+Chrome: /usr/bin/google-chrome-stable / Google Chrome 152.0.7977.82
+Proxy variables: unset
+```
 
-   ```text
-   BILIBILI_PROBE_ALLOW_LIVE=1 node experiments/bilibili-browser-probe/probe.mjs \
-     --mode live --selector bilibili:BV14V411W7r5:part-2
-   ```
+Repeat these checks read-only immediately before the run. Execute as
+`gateway-verify`, use the downloaded bundle's manifest-verified files, and let
+the probe create a fresh mode-700 temporary profile. Do not attach to an
+existing Chrome, CDP endpoint, source-runtime profile, Gateway process or VNC
+session. Do not pass `--no-sandbox`, `--user-data-dir`, `--proxy-server`,
+`--remote-debugging-port`, cookies, Authorization or arbitrary headers. The
+probe's own fail-closed broker is the only egress path; explicitly remove
+`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and lowercase variants from the
+process environment.
 
-   Record only sanitized schema output. Any unknown option or URL-like
-   selector must terminate before Chromium starts.
-3. Confirm the selected part matches the requested opaque locator. Record
-   candidate count, role, codec/container, status class, Range support, safe
-   header names, expiry category, request/byte budgets, and denial decisions.
-4. Close the browser and temporary profile. In a separate process, retrieve
-   only the bounded media bytes using the server-side descriptor. A browser
-   `blob:` URL, a browser-only token, a Cookie/Authorization requirement, a
-   private redirect, or a 4xx/5xx response is a failed portability result.
-5. Repeat once with a fresh profile if the first session is a clean, bounded
-   run. Do not rotate proxies, copy cookies, retry indefinitely, or change the
-   selector to manufacture success.
-6. Store the sanitized evidence with Task/Claim/Attempt, exact Candidate SHA,
-   workflow/job/artifact identity, execution plane, runner/target, browser and
-   OS version, network path, actual budget use, and cleanup result. Never store
-   raw DOM, playinfo, HAR, signed URLs, cookies, authorization values, or full
-   response bodies.
+## Fixed selector and command
 
-## Result interpretation
+The only admitted locator is the plugin-owned opaque selector below. The page
+URL is constructed by the plugin; the caller supplies no URL or authority.
 
-`PASS` requires both clean sessions (or an explicitly documented single-run
-acceptance by the Coordinator), correct part identity, an independent read
-after browser exit, and no secret or boundary violation. `FAIL` records a
-reproducible protocol/site incompatibility such as blob-only media, separate
-streams that are not independently readable, wrong part, expiry, or denied
-responses. `BLOCKED` is reserved for missing artifact/browser/egress capability
-or a required design change. A negative run is useful evidence and must remain
-append-only; it does not justify weakening the budgets or security boundary.
+```text
+bilibili:BV14V411W7r5:part-2
+```
+
+After downloading and verifying the artifact and changing into its clean root,
+run as `gateway-verify` (the shell wrapping may use the target's existing
+privilege handoff):
+
+```sh
+env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+  -u http_proxy -u https_proxy -u all_proxy \
+  -u NO_PROXY -u no_proxy \
+  BILIBILI_PROBE_ALLOW_LIVE=1 \
+  CHROME_PATH=/usr/bin/google-chrome-stable \
+  CANDIDATE_SHA=989bacdbf7e0fcde053005a45a1ad41b219b8b46 \
+  node experiments/bilibili-browser-probe/artifact.mjs verify .
+
+env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+  -u http_proxy -u https_proxy -u all_proxy \
+  -u NO_PROXY -u no_proxy \
+  BILIBILI_PROBE_ALLOW_LIVE=1 \
+  CHROME_PATH=/usr/bin/google-chrome-stable \
+  CANDIDATE_SHA=989bacdbf7e0fcde053005a45a1ad41b219b8b46 \
+  node experiments/bilibili-browser-probe/probe.mjs \
+    --mode live --selector bilibili:BV14V411W7r5:part-2
+```
+
+`artifact.mjs verify` must pass before `probe.mjs` starts. The verification and
+probe commands must run from the bundle root so `playwright-core` resolves
+inside `node_modules/playwright-core`. The Worker may use an equivalent
+structured SSH/runuser wrapper that preserves these arguments and the same
+low-privilege process; it must record the exact command shape without secrets.
+
+Do not click play or trigger full-video preload. The probe observes bounded
+response metadata, keeps short-lived candidate descriptors server-side, closes
+the browser, and then performs only the independent bounded reads allowed by
+the contract.
+
+## Budgets and repetition
+
+Use no more than two clean sessions, each with a fresh profile:
+
+- navigation deadline: 120 seconds;
+- observed requests: at most 200 per session;
+- actual response bytes: at most 32 MiB per session;
+- retained metadata: at most 1 MiB per session;
+- independent consumer: at most 8 requests total, 1 MiB per request and 4 MiB total actual bytes, including error responses.
+
+Redirects count as requests. Stop as soon as a limit is touched. Do not rotate
+proxies, copy credentials, retry indefinitely or change the selector to
+manufacture success.
+
+## Sanitized evidence and result rules
+
+Record only schema-safe fields: requested selector/part-match boolean,
+candidate count, role, codec/container when known, status class, Range support,
+safe header names, expiry category, request/byte counts, denial decisions,
+consumer result and cleanup. Keep candidate URLs, query strings, signed
+values, cookies, Authorization, raw DOM/playinfo/HAR and full bodies out of
+logs, files, Issue comments and artifacts.
+
+`PASS` requires C0 admission, correct part identity, and an independent
+post-browser read. For AV-separated media both video and audio must be
+independently readable. A muxed candidate must be independently readable as a
+single source. `FAIL` records a bounded reproducible incompatibility such as
+blob-only media, browser-only token, wrong part, expiry, 4xx/5xx, private
+redirect or non-readable stream. `BLOCKED` is only for missing capability,
+artifact/browser/provenance mismatch or a required design change. Unknown
+codec/expiry fields remain `unknown`.
+
+Every result must include Task/Claim/Attempt, exact #169/#172 provenance,
+runbook/task base, Worker/orchestrator, execution plane/target, OS and version,
+network path, command shape, budgets, actual counts and cleanup. Store evidence
+only in the designated sanitized report. Clean the browser, broker, child
+processes, profile, staging directory and any ephemeral candidate map in a
+re-entrant finalizer.
