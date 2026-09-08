@@ -1,5 +1,7 @@
 # Task — BILIBILI-WEB-E2E
 
+> Coordinator planning note (2026-09-08): #165/#166 is an independent browser-source research branch. This existing unpublished generic-ytdlp contract is retained and must not consume browser-derived media. After accepted source portability and any required generic media/plugin implementation, formally revise this contract and repeat Publication Gate. See `docs/research/bilibili-browser-acquisition.md`. No current Claim/dependency is silently relaxed.
+
 ## Metadata
 
 ```text

@@ -2,6 +2,8 @@
 
 计划日期：2026-09-08。
 
+> 路由更新：本文保留此前 generic-ytdlp 计划作为背景。当前优先执行 #165 → #166 Browser 取源研究分支，见 [最新预研](research/bilibili-browser-acquisition.md) 与 [product-roadmap](product-roadmap.md)。#67 保留失败/阻塞历史；#68 旧执行契约不自动改为 Browser 路线，必须正式修订后发布。
+
 用户目标：暂不部署手机，先完成普通 Linux 上的真实 B 站 Web 播放与控制闭环。
 
 本文是完整推进方案；具体执行以链接的 Task Contract 为准，实时发布/状态以 GitHub 为准。计划编制时 GitHub main 为 `b17a27ca5d8c2f76cddc4c7cf3fdaa239169593a`；执行前重新检查 main、Issue history、Candidate 和 ownership。本文完成不代表下述 Task 已执行或发布。
