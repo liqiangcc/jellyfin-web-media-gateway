@@ -26,9 +26,23 @@ Accepted chain: #79 frozen offline runtime; #83 x86_64/AArch64 sandbox authority
 
 R18 is recoverable at `88d302c8673817eb15093bf053886dbbf28f105a`; R17/earlier contract is recoverable at `b17a27ca5d8c2f76cddc4c7cf3fdaa239169593a:docs/tasks/67-generic-ytdlp-bilibili-real/task.md`. No old mobile PASS/FAIL is relabelled as x86_64 Evidence. #113/#142/#131 are not publication dependencies for R20.
 
-## Publication completion required
+## Publication dependency freeze
 
-Keep draft until #146 Final Accepted. Coordinator must then add to this contract the actual accepted #146 runbook Candidate, Final Acceptance URL, verified uid/gid and source/runtime preparation reference. These values are intentionally not fabricated now. If #146 changes the runtime semantic implementation rather than preparation only, review freshness and formally freeze the new exact runtime before publication.
+#146 is Final Accepted and its ordinary-Linux preparation authority is now frozen
+for this Task:
+
+- Accepted #146 runbook Candidate: `89ea37ade718c88bb5be4c43b856c1518184ea8a`
+- #146 Final Acceptance: https://github.com/liqiangcc/jellyfin-web-media-gateway/issues/146#issuecomment-5577853765
+- Accepted #146 evidence: `66f14bbe5a4e0fde68328d96ee453ee3be7473c0`
+- Target: `tx-node`, Ubuntu 26.04, x86_64, glibc 2.43; dedicated runtime uid/gid `1001:1001`, primary group only, zero capability sets, `no_new_privs=1`, locked-password non-login account `gateway-verify`
+- Fixed runtime layout: `/home/gateway-verify/non-phone/runtime-80fb081b129f8f664124b84ddcc9698039e2cfd1`; compiled source root is its `source/` child and the frozen worker is `source/plugins/generic-ytdlp/worker/worker.py`
+- Hosted preparation: run `34176767478`, build job `101907606484`, consumer job `101907994978`, artifact `10037555844`, archive digest `sha256:9706c027e7460ec26e6d158bca99c121593b57ec63f348d48f9c3b8acbd9514f`, manifest digest `93fe78f9f41c778a75faaa0214355eeb9cc35dcb5c2547544590070ec82303d0`
+- Target interpreter/browser: `/usr/bin/python3` 3.14.4 with receipt SHA256 `fa9796cd3a30878e11a2f40372f773d3fcd913fff35e5bee8dd9a036e22e93ab`; Google Chrome 152.0.7977.82
+
+The accepted preparation is an execution dependency, not a site compatibility
+result. If #146 later changes runtime semantics rather than preparation only,
+Coordinator must review freshness and freeze a new exact runtime before this
+Task can execute.
 
 No required phone readiness gate is inherited. #147 is independent; if its repair is needed for a required workflow, classify that concrete verification dependency rather than inventing a phone blocker.
 
@@ -72,7 +86,34 @@ No product/core/plugin implementation changes in this verification Task. Host pr
 
 J2: use ordinary curl, clear upper/lower HTTP_PROXY/HTTPS_PROXY/ALL_PROXY and use `--noproxy '*'`; no custom identity headers, forced address family or destination. At most 3 requests, 5 seconds between completed requests, connect timeout 5 seconds, total timeout 15 seconds per request, normal TLS validation. Do not follow unreviewed redirects: any non-2xx is not a successful sample. Stop early when two consecutive 2xx occur; otherwise after request 3 classify BLOCKED and stop before J3. Only status class/transport class is retained, stderr/body/headers discarded. Optional accepted #128 passive sanitizer must not change requests. No automatic rerun/second set without a new Coordinator-authorized Attempt and changed external condition or approved bounded diagnosis.
 
-J3 uses only the compile-free launcher and verified binary pair accepted in #146 R3. Before publication, Coordinator must freeze the actual launcher path/arguments, wrapper Candidate, binary runtime source SHA, hosted build Candidate/run/job/artifact/manifest hashes and #146 target identity here. Also freeze the compiled worker source-root/layout, worker hash, interpreter/ABI compatibility and fresh-consumer proof from #146 R3. Confirm actual test counts rather than zero-test success. These are unresolved dependency outputs, so this Task remains draft until they exist.
+J3 uses only the compile-free launcher and verified binary pair accepted in #146 R3.
+The exact target invocation is:
+
+```sh
+setpriv --reuid=1001 --regid=1001 --init-groups \
+  --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs \
+  env -i HOME=/home/gateway-verify PATH=/usr/bin:/bin \
+  PYTHONDONTWRITEBYTECODE=1 \
+  /usr/bin/python3 /home/gateway-verify/artifact.py smoke \
+  --expected /home/gateway-verify/expected.json \
+  --source https://www.bilibili.com/video/BV14V411W7r5/
+```
+
+`artifact.py` verifies the authenticated expected identity and all 1067
+packaged files before launch. Its fixed runtime root contains the smoke binary,
+the sibling `ytdlp-sandbox`, the runtime test executable, the frozen worker and
+the offline cache. The wrapper Candidate is `89ea37ade718c88bb5be4c43b856c1518184ea8a`;
+the frozen runtime source is `80fb081b129f8f664124b84ddcc9699e2cfd1`;
+the frozen worker SHA256 is
+`31fd56eaadbe2636c929e12e63c536ebcb71b92e75f8b1eb8724a1a4732715ec`;
+the admission helper SHA256 is
+`865537f22573abd98d5096f07024471ded0b6c9f2e7ce85a58fd4245c87dea0d`;
+and the hosted
+fresh-consumer proof is run `34176767478` consumer job `101907994978`.
+The launcher binds `PYTHON=/usr/bin/python3`, `YTDLP_SOURCE` and
+`GENERIC_YTDLP_TEST_WORKER_PATH` internally through the admitted manifest; it
+does not invoke Cargo, pip, a compiler or a target build hook. Test selectors
+must report actual nonzero counts, not a zero-test exit.
 
 The original scripts/generic-ytdlp-real-smoke.sh and cargo build/run/test/check/clippy are forbidden on tx-node and Codex workspace because they compile. All clean-build/provenance/test-binary generation occurs on remote GitHub-hosted Actions; target-side work only verifies and executes those artifacts with the accepted offline runtime. ABI/artifact failure returns BLOCKED, never local toolchain installation. Runtime maximum 35 minutes; no retry loop, long soak, extra extract calls or raw diagnostic expansion. J4 runs even if J2/J3 fails.
 

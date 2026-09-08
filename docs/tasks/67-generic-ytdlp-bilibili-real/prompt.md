@@ -2,6 +2,10 @@
 
 Read the latest live package revision before claim: it now includes verified artifact/layout admission and fresh-consumer execution requirements. Older package links are historical.
 
+#146 is now Final Accepted. Read its accepted runbook/evidence and the exact
+dependency freeze in the current `task.md` before using the tx-node command;
+the real-site result is still owned exclusively by this Task.
+
 Before following any older Issue entry, read current AGENTS.md §4.1 and the latest task.md linked from the live Issue. All builds require GitHub-hosted Actions; target/workspace compile paths in earlier package revisions are superseded.
 
 GitHub Issue: https://github.com/liqiangcc/jellyfin-web-media-gateway/issues/67
