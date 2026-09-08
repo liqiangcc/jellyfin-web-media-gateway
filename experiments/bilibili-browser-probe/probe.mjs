@@ -139,7 +139,6 @@ async function main() {
     await page.goto('http://fixture.test/page', { waitUntil: 'domcontentloaded', timeout: TIMEOUT_MS });
     const raw = await page.evaluate(() => window.__probeObservation);
     const observation = summarizeObservation(raw);
-    await page.waitForFunction(() => window.__workerDone === true, undefined, { timeout: TIMEOUT_MS });
     await page.waitForTimeout(1000);
     if (requests.length > MAX_REQUESTS) throw new Error('request budget exceeded');
     const denied = requests.filter((item) => !item.allowed);
