@@ -5,14 +5,16 @@
 ## 当前可交付里程碑
 
 ```text
-#146 普通 Linux 执行准备
-  → #67 真实 B 站受控解析
-    → #68 Control → Gateway → Web Display 播放/控制/重连
+当前优先预研：#165 离线 Browser 取源探针
+  → #166 clean anonymous 实站媒体可移植性（依赖冻结后发布）
+    → 按真实 shape 评审/实现最小通用媒体能力与 Bilibili 插件
+      → 正式修订并发布 #68 Control → Gateway → Web Display
 
-#147 已知 navigation workflow 修复（独立 portable CI）
+保留旧路径：#146 → #67 generic-ytdlp（BLOCK，待具体外部/契约变化）
+已接受的通用 Web/Display 基础可复用；不是 B 站产品 PASS。
 ```
 
-完整工作拆分、风险、工作日估算和 Job/验收矩阵见 [推进计划](non-phone-web-playback-plan.md)。恢复整个路线的 Coordinator 入口见 [non-phone-delivery handoff](tasks/handoffs/non-phone-delivery.md)。
+当前证据、替代路线、任务边界和下一阶段条件见 [Bilibili Browser 预研](research/bilibili-browser-acquisition.md)。此前 generic-ytdlp 路线的工作拆分见 [推进计划](non-phone-web-playback-plan.md)，其顺序已由本次研究分支更新。恢复整个路线的 Coordinator 入口见 [non-phone-delivery handoff](tasks/handoffs/non-phone-delivery.md)。
 
 ## 已接受基础
 
@@ -33,11 +35,17 @@
 
 硬发布依赖：#146 Final Acceptance。正式发布时绑定其实际 host/runbook Evidence；保持精确 runtime Candidate，真实匿名 direct/no-proxy 前检与解析在新 Attempt 中独立运行。样本不可用则 BLOCKED，不从浏览器缓存/账号/抓包 URL 构造 PASS。换样本或改 runtime 必须先正式修订。
 
-只有完整路径返回当前支持的 muxed http-file/HLS 并 Final Accepted PASS，才能发布 #68。DASH/分离音视频等真实缺口只触发最小格式能力评审。
+在 #68 现有 generic-ytdlp Contract 下，只有 #67 返回受支持 muxed http-file/HLS 并 Final Accepted PASS 才能发布 #68。这个条件不阻止独立 #165/#166 探索不同取源路径。4xx 本身不是 DASH 根因证据；新路线不能改写 #67 的结论，也不能未经修订直接用于 #68。
+
+## Browser 取源研究分支
+
+#165 是离线探针 combined Task，无 #67 硬依赖；portable build/test 在 GitHub-hosted Actions。#166 是独立实站 verification Task，依赖 #165 被接受的边界、artifact/runbook 和普通 Linux 准入，不依赖手机或 Native Panel。具体 task.md 是执行契约，Issue 是发布/owner authority。
+
+#166 只有完整独立消费者 Claim PASS 后才允许据实拆分媒体能力/站点集成任务；不是现在承诺 remux 必需或可行。新 schema/API 改动先按设计变更流程评审。当前只提升服务端匿名取源研究优先级，不恢复 #27 Native Panel/Auth/phone capacity。
 
 ## #68：首个真实 Web 产品闭环
 
-硬发布依赖：#67 Final Acceptance PASS + 有效 #49 authority。复用产品 URL 输入、Registry、Session、媒体 capability、Display、Control 命令与重连，不允许 seed/store/ResolvedMedia 注入作为成功路径。
+现有尚未发布 Contract 的硬依赖仍是 #67 Final Acceptance PASS + 有效 #49 authority。若采用 Browser 路线，Coordinator 必须先根据 #166 接受证据与媒体/插件实现正式替换 #68 Contract 的 source route、hard dependencies、shape、artifacts、Jobs 与 Freshness；完成 GitHub 读回/队列校验前保持 draft。复用产品 URL 输入、Registry、Session、媒体 capability、Display、Control 命令与重连，不允许 seed/store/ResolvedMedia 注入作为成功路径。
 
 Source shape、#67 runtime、#68 Candidate 和 live browser/Gateway 拓扑在发布前冻结。无需物理手机或 TV，但不能因此宣称 TV audible autoplay 或生产就绪。默认生产 generic-ytdlp DisabledRunner 保留，测试组合显式启用。
 
