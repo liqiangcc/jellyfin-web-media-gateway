@@ -124,7 +124,7 @@ async function main() {
     browser = await chromium.launch({ executablePath: browserPath, headless: true, timeout: TIMEOUT_MS, args: [
       `--proxy-server=http://127.0.0.1:${brokerPort}`, '--proxy-bypass-list=<-loopback>',
       '--disable-quic', '--disable-features=WebTransport', '--disable-background-networking',
-      '--no-first-run', '--no-default-browser-check', `--user-data-dir=${profile}`,
+      '--no-first-run', '--no-default-browser-check',
     ] });
     const context = await browser.newContext({ serviceWorkers: 'block' });
     const page = await context.newPage();
