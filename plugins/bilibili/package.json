@@ -1,0 +1,5 @@
+{
+  "name": "bilibili-experimental-probe",
+  "private": true,
+  "type": "module"
+}
