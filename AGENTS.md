@@ -73,6 +73,18 @@ R004 Jellyfin 可并行但不是 Core blocker；R005 验证真实 Site Plugin Co
 - 实验代码和正式代码边界清晰。
 - 具体站点主要 diff 在 `plugins/<site>/`；若要向 Core/Playback/Display/Control 加站点业务分支，先评审。
 
+### 4.1 编译与构建必须使用远程 GitHub Actions
+
+本地与目标主机资源有限，**禁止在 Codex workspace、本机、WSL、Windows、手机或 SSH 连接的 `tx-node` 等主机上编译/构建项目及其依赖；所有编译与构建必须在远程 GitHub Actions 的 GitHub-hosted Runner 上执行。**
+
+- x64 构建使用 GitHub-hosted x64；ARM64 构建使用 GitHub-hosted ARM64 或在 GitHub-hosted Runner 上交叉编译。
+- 禁止在上述受限主机运行 `cargo build`、`cargo check`、`cargo clippy`、`cargo test`、`cargo run`、`rustc`、前端 build/bundle、包含编译步骤的 Docker build，以及任何会直接或间接触发编译的脚本、安装命令或测试命令。缓存命中、增量编译、限制线程数、“仅诊断”均不构成例外。
+- 不得通过 SSH、容器、后台进程或在受限主机安装 self-hosted Runner 绕过此限制。
+- 本地允许编辑、只读检查、不会触发编译的轻量格式/语法检查、读取 Actions 日志，以及在当前 Task 授权范围内运行已验证的预编译产物。运行产物不得隐式重新构建。
+- 标准闭环：提交精确 Candidate SHA → 触发 GitHub Actions build/test → 读取 run/job/log/artifact → 修复并重新提交/验证。下载产物后验证 Candidate、来源、摘要及目标平台兼容性，再用于授权的 runtime 验证。
+- Actions 不可用、产物缺失或不兼容时，报告具体 blocker，修复远程 workflow/产物交付路径；不得退回本地编译，也不得把未运行的验证写成 PASS。
+- 旧 Task、runbook、skill 中的本地编译或目标机安装编译工具链路径不构成授权；执行前按本规则修订冲突的执行契约。除非用户后续明确修改本限制，不得自行添加例外。
+
 ## 5. Playback 并发测试最低集
 
 实现/修改 Playback 至少覆盖：
@@ -176,7 +188,7 @@ Codex Worker
 
 已有 Candidate/PR 时，下一 Attempt 优先续用并 rebase/integrate；不要因为 Worker 切换而复制业务 Task。
 
-GitHub Actions 仍是真实 runtime Evidence 的默认执行面。Codex 本地命令可以用于开发/诊断，但 required Verification Evidence 仍以 `task.md` 为准。
+GitHub Actions 仍是真实 runtime Evidence 的默认执行面；所有编译/构建强制遵守 §4.1 的远程 GitHub-hosted 执行规则。Codex 本地命令仅可用于不触发编译的开发/诊断，required Verification Evidence 仍以 `task.md` 为准。
 
 ### 9.3 GitHub Actions 是统一自动执行总线
 

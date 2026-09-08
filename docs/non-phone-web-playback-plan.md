@@ -51,7 +51,7 @@ Control URL 输入
 | 真实 Web 旅程 | Codex + Chrome MCP 或仓库浏览器脚本 | 已确认的浏览器主机 + tx-node 测试 Gateway | 同一 Candidate 的播放/控制/重连事实 |
 | Review / 发布 / 关闭 | Coordinator | GitHub | append-only Review、状态、Acceptance |
 
-优先复用仓库已有构建、离线运行时与 harness。可在 hosted x64 构建后以精确来源/摘要验证的非 Secret 产物传至 tx-node；若 ABI 或运行时不匹配，再选择用户目录工具链。不要为缺少 Cargo 自动扩成系统级工具链部署。首播不依赖 FFmpeg，除非真实媒体形状证明需要 remux。
+所有编译/构建强制使用远程 GitHub Actions 的 GitHub-hosted Runner。复用已有离线运行时与 harness，在兼容目标 ABI 的 hosted 构建环境生成二进制和必要测试产物，以精确 Candidate、run/job、manifest/摘要绑定后传至 tx-node。ABI 不匹配时修复远程构建环境，不安装目标机工具链或回退本地编译。目标仅运行无编译步骤的已验证产物；现有会调用 cargo 的 smoke 脚本不能直接用于目标机。首播不依赖 FFmpeg，除非真实媒体形状证明需要 remux。
 
 本轮不默认在 tx-node 安装 self-hosted Runner。通用必需验证继续走 Actions；真实网络步骤经 SSH 执行须在修订后的 task.md 中明确允许，不能伪装成 Actions Evidence。若之后确需自动化桥接，其凭据传输和受信任务边界必须单独明确。
 
@@ -225,7 +225,7 @@ CI 修复与当前文档整理不依赖实时站点，可在主线等待外部�
 
 - #146：`docs/tasks/146-non-phone-execution-prep/prompt.md`，第一执行优先级。
 - #147：`docs/tasks/147-ci-navigation-workflow-repair/prompt.md`，独立 CI 修复。
-- #67 R18：`docs/tasks/67-generic-ytdlp-bilibili-real/prompt.md`，等 #146 验收后发布。
+- #67 R19：`docs/tasks/67-generic-ytdlp-bilibili-real/prompt.md`，等 #146 验收后发布。
 - #68：`docs/tasks/68-bilibili-web-e2e/prompt.md`，等 #67 PASS 后发布。
 - 全路线 Coordinator 恢复：`docs/tasks/handoffs/non-phone-delivery.md`。
 

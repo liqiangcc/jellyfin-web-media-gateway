@@ -1,5 +1,7 @@
 # 开发环境与多 Agent 协同
 
+资源限制：所有编译/构建必须在远程 GitHub-hosted Actions 执行，详见 AGENTS.md §4.1。本地/SSH/容器调试权限不包括编译；目标仅运行已验证的预编译产物。本文历史路由示例不授予本地编译例外。
+
 ## 当前非手机执行路由（2026-09-08）
 
 当前功能主线使用 Codex Worker `env:cloud`，并要求该 Worker 具备既有 authenticated SSH `tx-node` 能力；标签代表 Worker 编排角色，不代表远端 host。普通构建/测试使用 GitHub-hosted；Task 明确列出的 live Jobs 可用 `Execution plane=external-codex/ssh; Executor=tx-node; Target=ordinary Linux x86_64`，不得称 Actions/phone Evidence。#146 建立边界与可复现入口，不默认安装 self-hosted Runner。没有 SSH 能力的 Worker 不领取 live Task。手机部署及其恢复线暂缓。以下旧示例中的 Web-first 路由服从 AGENTS.md 的 Codex-first 规则。
