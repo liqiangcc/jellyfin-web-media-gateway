@@ -137,10 +137,13 @@ export function brokerServer(state, overrides = {}) {
       if (head?.length) upstream.write(head);
       const counted = new Transform({ transform(chunk, encoding, callback) {
         state.responseBytes += chunk.length;
-        if (state.responseBytes > (state.responseLimit || MAX_RESPONSE_BYTES)) { callback(new Error('response budget exceeded')); return; }
+        if (state.responseBytes > (state.responseLimit || MAX_RESPONSE_BYTES)) { state.responseLimitTriggered = true; callback(new Error('response budget exceeded')); return; }
         callback(null, chunk, encoding);
       } });
-      counted.on('error', () => { client.destroy(); upstream.destroy(); });
+      counted.on('error', () => {
+        client.unpipe(upstream); upstream.unpipe(counted);
+        counted.destroy(); upstream.destroy(); client.destroy();
+      });
       client.pipe(upstream);
       upstream.pipe(counted).pipe(client);
     });

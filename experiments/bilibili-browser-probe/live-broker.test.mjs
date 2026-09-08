@@ -39,10 +39,10 @@ function proxyGet(port, target) {
 }
 
 function waitForEvent(emitter, event, label, timeout = 3000) {
-  return Promise.race([
-    once(emitter, event),
-    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timeout`)), timeout)),
-  ]);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timeout`)), timeout);
+    once(emitter, event).then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
+  });
 }
 
 test('the live broker enforces host, DNS, redirect and upgrade policy through one seam', async (t) => {
@@ -82,8 +82,12 @@ test('CONNECT uses the same broker byte budget and denies private DNS', async (t
   t.after(() => { broker.closeAllConnections?.(); return broker.close(); });
   const client = net.connect(port, '127.0.0.1');
   await once(client, 'connect');
+  const closed = waitForEvent(client, 'close', 'CONNECT close');
   client.write('CONNECT www.bilibili.com:443 HTTP/1.1\r\nHost: www.bilibili.com:443\r\n\r\n');
-  await waitForEvent(client, 'close', 'CONNECT close').finally(() => client.destroy());
+  await closed;
+  assert.equal(state.responseLimitTriggered, true);
+  assert.ok(state.responseBytes > state.responseLimit);
+  client.destroy();
   assert.ok(state.responseBytes > state.responseLimit);
   assert.equal((await proxyGet(port, 'https://private.bilibili.com/final')).status, 403);
   client.destroy();
