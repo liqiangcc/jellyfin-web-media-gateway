@@ -26,7 +26,7 @@ concurrency:
 
 env:
   CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
-  E2E_SOURCE: https://example.test/deterministic-generic-direct.mp4
+  E2E_SOURCE: https://media.w3.org/2010/05/sintel/trailer.mp4
 
 jobs:
   j1-hosted-baseline:
