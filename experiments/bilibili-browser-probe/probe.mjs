@@ -90,11 +90,15 @@ function brokerServer(fixturePort) {
       const chunks = [];
       reply.on('data', (chunk) => chunks.push(chunk));
       reply.on('end', () => {
-        res.writeHead(reply.statusCode || 502, reply.headers);
-        res.end(Buffer.concat(chunks));
+        if (!res.headersSent && !res.writableEnded) {
+          res.writeHead(reply.statusCode || 502, reply.headers);
+          res.end(Buffer.concat(chunks));
+        }
       });
     });
-    forwarded.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
+    forwarded.on('error', () => {
+      if (!res.headersSent && !res.writableEnded) { res.writeHead(502); res.end(); }
+    });
     req.pipe(forwarded);
   });
   server.on('connect', (req, socket) => {
