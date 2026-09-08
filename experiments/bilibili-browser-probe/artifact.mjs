@@ -17,7 +17,7 @@ const staticFiles = [
   'plugins/bilibili/experimental_probe.mjs',
   'plugins/bilibili/live_selector.mjs', 'plugins/bilibili/package.json', 'docs/research/bilibili-browser-probe-runbook.md',
 ];
-const packageTopLevel = new Set(['LICENSE', 'NOTICE', 'README.md', 'ThirdPartyNotices.txt', 'browsers.json', 'cli.js', 'index.d.ts', 'index.js', 'index.mjs', 'lib', 'package.json']);
+const packageTopLevel = new Set(['LICENSE', 'NOTICE', 'README.md', 'ThirdPartyNotices.txt', 'browsers.json', 'cli.js', 'index.d.ts', 'index.js', 'index.mjs', 'lib', 'package.json', 'types']);
 // Playwright's bin/ tree contains browser installer helpers; the target uses
 // external system Chrome, so none of those scripts belong in the runtime.
 const excludedPackagePrefixes = ['bin/'];
