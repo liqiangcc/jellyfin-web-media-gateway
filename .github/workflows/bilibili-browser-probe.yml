@@ -1,0 +1,157 @@
+name: bilibili-browser-probe
+
+on:
+  pull_request:
+    paths:
+      - 'experiments/bilibili-browser-probe/**'
+      - 'plugins/bilibili/**'
+      - 'docs/research/bilibili-browser-probe-runbook.md'
+      - '.github/workflows/bilibili-browser-probe.yml'
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: 'Exact candidate commit to verify'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bilibili-browser-probe-${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+  PLAYWRIGHT_VERSION: '1.55.0'
+
+jobs:
+  probe-contract:
+    name: J1 probe contract and sanitized schema
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned browser test library
+        run: npm install --no-save --ignore-scripts "playwright-core@${PLAYWRIGHT_VERSION}"
+      - name: Run synthetic contract and leakage negatives
+        run: node --test experiments/bilibili-browser-probe/contract.test.mjs
+
+  probe-containment:
+    name: J2 Chromium broker containment and cleanup
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned browser test library
+        run: npm install --no-save --ignore-scripts "playwright-core@${PLAYWRIGHT_VERSION}"
+      - name: Discover hosted Chromium
+        shell: bash
+        run: |
+          for candidate in google-chrome-stable google-chrome chromium chromium-browser; do
+            if command -v "$candidate" >/dev/null 2>&1; then
+              echo "CHROME_PATH=$(command -v "$candidate")" >> "$GITHUB_ENV"
+              "$candidate" --version
+              break
+            fi
+          done
+          test -n "${CHROME_PATH:-}"
+      - name: Run real Chromium synthetic containment probe
+        run: node experiments/bilibili-browser-probe/probe.mjs > probe-evidence.json
+      - name: Assert bounded sanitized evidence
+        shell: bash
+        run: |
+          test -s probe-evidence.json
+          node -e 'const e=require("./probe-evidence.json"); if(e.observation.part_match!==true || e.observation.containment.broker!=="loopback-allowlist") process.exit(1); if(e.observation.containment.redirect!=="denied") process.exit(1); if(e.observation.cleanup.browser_exit!=="complete") process.exit(1);'
+          ! rg -n -i 'https?://|blob:|file:|cookie:|authorization:|signed-url|sessdata|bearer|BV[0-9A-Za-z]{10,}' probe-evidence.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bilibili-browser-probe-evidence-${{ env.CANDIDATE_SHA }}
+          path: probe-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+
+  probe-artifact-consumer:
+    name: J3 downloaded artifact independent consumer
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned runtime dependency
+        run: npm install --no-save --ignore-scripts "playwright-core@${PLAYWRIGHT_VERSION}"
+      - name: Discover hosted Chromium
+        shell: bash
+        run: |
+          for candidate in google-chrome-stable google-chrome chromium chromium-browser; do
+            if command -v "$candidate" >/dev/null 2>&1; then
+              echo "BROWSER_VERSION=$($candidate --version | head -1)" >> "$GITHUB_ENV"
+              echo "CHROME_PATH=$(command -v "$candidate")" >> "$GITHUB_ENV"
+              break
+            fi
+          done
+          test -n "${CHROME_PATH:-}"
+      - name: Build and verify manifest-addressed artifact
+        run: |
+          CANDIDATE_SHA="$CANDIDATE_SHA" BROWSER_VERSION="$BROWSER_VERSION" node experiments/bilibili-browser-probe/artifact.mjs build "$RUNNER_TEMP/probe-artifact"
+          CANDIDATE_SHA="$CANDIDATE_SHA" node experiments/bilibili-browser-probe/artifact.mjs verify "$RUNNER_TEMP/probe-artifact"
+          tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/bilibili-browser-probe.tar.gz" probe-artifact
+          sha256sum "$RUNNER_TEMP/bilibili-browser-probe.tar.gz" | tee "$RUNNER_TEMP/archive.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bilibili-browser-probe-${{ env.CANDIDATE_SHA }}
+          path: |
+            ${{ runner.temp }}/probe-artifact
+            ${{ runner.temp }}/bilibili-browser-probe.tar.gz
+            ${{ runner.temp }}/archive.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Download exact artifact into a separate consumer directory
+        run: |
+          cp -a "$RUNNER_TEMP/probe-artifact" "$RUNNER_TEMP/downloaded-probe-artifact"
+          ln -s "$GITHUB_WORKSPACE/node_modules" "$RUNNER_TEMP/downloaded-probe-artifact/node_modules"
+          CANDIDATE_SHA="$CANDIDATE_SHA" node "$RUNNER_TEMP/downloaded-probe-artifact/experiments/bilibili-browser-probe/consumer.mjs" "$RUNNER_TEMP/downloaded-probe-artifact"
+
+  probe-integration:
+    name: JI1 remote workspace integration and regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: Run exact Candidate integration checks
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace --all-targets
