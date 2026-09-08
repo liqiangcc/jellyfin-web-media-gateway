@@ -80,6 +80,7 @@ jobs:
             fi
             echo "resolved_browser_path=${browser_path:-none}"
             find "$HOME/.cache/ms-playwright" -maxdepth 4 -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) -print | head -20 || true
+            chmod +x "$browser_path"
             test -x "$browser_path"
             echo "CHROME_PATH=$browser_path" >> "$GITHUB_ENV"
             "$browser_path" --version
@@ -135,6 +136,7 @@ jobs:
             fi
             echo "resolved_browser_path=${browser_path:-none}"
             find "$HOME/.cache/ms-playwright" -maxdepth 4 -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) -print | head -20 || true
+            chmod +x "$browser_path"
             test -x "$browser_path"
             echo "BROWSER_VERSION=$($browser_path --version | head -1)" >> "$GITHUB_ENV"
             echo "CHROME_PATH=$browser_path" >> "$GITHUB_ENV"
@@ -192,6 +194,7 @@ jobs:
           fi
           echo "resolved_browser_path=${browser_path:-none}"
           find "$HOME/.cache/ms-playwright" -maxdepth 4 -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) -print | head -20 || true
+          chmod +x "$browser_path"
           test -x "$browser_path"
           CANDIDATE_SHA="$CANDIDATE_SHA" CHROME_PATH="$browser_path" node "$bundle/experiments/bilibili-browser-probe/consumer.mjs" "$bundle"
 
