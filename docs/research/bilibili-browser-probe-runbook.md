@@ -1,21 +1,41 @@
 # Bilibili browser probe runbook (#166 handoff)
 
-This is a bounded live runbook for the later #166 verification Task. #165 only
-ships the offline harness; do not run this procedure as part of #165 and do not
-use it to claim Bilibili compatibility.
+This is a bounded live runbook for the later #166 verification Task. #165 and
+#169 ship the offline harness plus the explicit live-selector entry; do not run
+this procedure in hosted CI and do not use it alone to claim Bilibili
+compatibility.
 
 ## Admission
 
-The Coordinator must freeze the exact accepted #165 Candidate SHA, GitHub
-artifact ID/digest, workflow run, artifact manifest, low-privilege Linux user,
-browser executable/version, and command before publishing #166. The run must
-be on a disposable ordinary Linux process with a fresh temporary Chromium
-profile. It must not reuse a personal profile, cookies, Authorization headers,
-Vault data, an existing browser, or an existing Gateway service.
+The Coordinator must first accept #169, then freeze its exact Candidate SHA,
+GitHub artifact ID/digest, workflow run and job IDs, artifact manifest,
+low-privilege Linux user, browser executable/version, and command before
+publishing #166. The #165 artifact is an offline prerequisite only; it is not
+the live artifact. The run must be on a disposable ordinary Linux process with
+a fresh temporary Chromium profile. It must not reuse a personal profile,
+cookies, Authorization headers, Vault data, an existing browser, or an
+existing Gateway service.
 
-The run is permitted only when the offline containment Claim C2 is accepted.
-If the artifact manifest, browser admission, or egress policy cannot be
-verified, stop with `BLOCKED`; do not enable a live mode.
+The run is permitted only when #169 C1–C4 and its hosted evidence are accepted.
+If the #169 artifact manifest, exact Candidate/run/job provenance, browser
+admission, or egress policy cannot be verified, stop with `BLOCKED`; do not
+enable a live mode.
+
+## Frozen provenance
+
+At #166 publication, record the accepted #169 values in the Task contract and
+evidence record:
+
+```text
+Candidate SHA: <accepted #169 Candidate>
+Workflow run: <#169 hosted run>
+Required jobs: <#169 J1/J2/J3a/J3/J4/JI1 job IDs>
+Bundle artifact: <#169 manifest-addressed artifact ID and digest>
+Sanitized evidence: <#169 evidence artifact ID and digest>
+```
+
+These fields are admission data, not live-site results. #166 must verify that
+the downloaded bundle matches all of them before starting Chromium.
 
 ## Frozen budgets
 
@@ -35,9 +55,19 @@ acquisition.
 1. Verify the downloaded artifact against its manifest and the Coordinator's
    exact artifact digest. Verify the candidate SHA and browser version before
    starting Chromium.
-2. Start the probe with the selected public content selector and no caller
-   supplied URL, headers, profile, or CDP endpoint. Use the probe's broker and
-   central egress policy. Record only sanitized schema output.
+2. Start the downloaded probe with the selected public content selector and no
+   caller supplied URL, headers, profile, proxy, or CDP endpoint. The Bilibili
+   plugin constructs the page navigation descriptor; use the experimental
+   fail-closed broker. This experiment does not prove production `EgressPolicy`
+   integration. The explicit entry is:
+
+   ```text
+   BILIBILI_PROBE_ALLOW_LIVE=1 node experiments/bilibili-browser-probe/probe.mjs \
+     --mode live --selector bilibili:BV14V411W7r5:part-2
+   ```
+
+   Record only sanitized schema output. Any unknown option or URL-like
+   selector must terminate before Chromium starts.
 3. Confirm the selected part matches the requested opaque locator. Record
    candidate count, role, codec/container, status class, Range support, safe
    header names, expiry category, request/byte budgets, and denial decisions.

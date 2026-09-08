@@ -90,12 +90,24 @@ jobs:
           test -n "${CHROME_PATH:-}"
       - name: Run real Chromium synthetic containment probe
         run: node experiments/bilibili-browser-probe/probe.mjs > probe-evidence.json
+      - name: Run deterministic live broker and consumer harness
+        run: set -o pipefail; node --test experiments/bilibili-browser-probe/live-broker.test.mjs | tee live-broker-evidence.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bilibili-browser-live-broker-evidence-${{ env.CANDIDATE_SHA }}
+          path: live-broker-evidence.txt
+          if-no-files-found: error
+          retention-days: 14
       - name: Assert bounded sanitized evidence
         shell: bash
         run: |
           test -s probe-evidence.json
           node -e 'const e=require("./probe-evidence.json"); const c=e.observation.containment; if(e.observation.part_match!==true || c.broker!=="loopback-allowlist") process.exit(1); if(c.redirect!=="denied" || c.worker!=="denied" || !c.websocket.startsWith("denied")) process.exit(1); if(e.observation.cleanup.browser_exit!=="complete") process.exit(1);'
-          ! rg -n -i 'https?://|blob:|file:|cookie:|authorization:|signed-url|sessdata|bearer|BV[0-9A-Za-z]{10,}' probe-evidence.json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const evidence = fs.readFileSync('probe-evidence.json', 'utf8');
+          if (/https?:\/\/|blob:|file:|cookie:|authorization:|signed-url|sessdata|bearer|BV[0-9A-Za-z]{10,}/i.test(evidence)) throw new Error('sanitized evidence leaked a URL, selector, or secret marker');
+          NODE
       - uses: actions/upload-artifact@v4
         with:
           name: bilibili-browser-probe-evidence-${{ env.CANDIDATE_SHA }}
@@ -207,6 +219,49 @@ jobs:
           if [ ! -x "$browser_path" ]; then chmod +x "$browser_path"; fi
           test -x "$browser_path"
           CANDIDATE_SHA="$CANDIDATE_SHA" CHROME_PATH="$browser_path" node "$bundle/experiments/bilibili-browser-probe/consumer.mjs" "$bundle"
+
+  probe-static-boundary:
+    name: J4 live admission and static boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify live entry and boundary invariants
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { parseSelector, validateLiveInvocation } from './plugins/bilibili/live_selector.mjs';
+          const selector = 'bilibili:BV14V411W7r5:part-2';
+          const admission = validateLiveInvocation({ mode: 'live', selector });
+          if (admission.navigation.host !== 'www.bilibili.com' || !admission.navigation.url.includes('/video/BV14V411W7r5?p=2')) throw new Error('plugin navigation descriptor mismatch');
+          for (const value of ['https://www.bilibili.com/video/BV14V411W7r5', 'bilibili:BV14V411W7r5:part-2?cookie=x']) {
+            try { parseSelector(value); throw new Error('caller authority accepted'); } catch (error) { if (error.message === 'caller authority accepted') throw error; }
+          }
+          const live = fs.readFileSync('experiments/bilibili-browser-probe/live.mjs', 'utf8');
+          for (const marker of ['publicAddressFor', 'MAX_REQUESTS', 'MAX_INDEPENDENT_BYTES', 'serviceWorkers', 'launchPersistentContext', 'mkdtemp', 'pendingObservations', 'onTunnelClosed', 'candidates.clear']) {
+            if (!live.includes(marker)) throw new Error(`missing live boundary marker: ${marker}`);
+          }
+          NODE
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          const roots = ['experiments/bilibili-browser-probe', 'plugins/bilibili'];
+          const files = [];
+          const visit = (root) => { for (const name of fs.readdirSync(root)) { const file = path.join(root, name); const stat = fs.statSync(file); if (stat.isDirectory()) visit(file); else if (file.endsWith('.mjs')) files.push(file); } };
+          roots.forEach(visit);
+          const text = files.map((file) => fs.readFileSync(file, 'utf8')).join('\n');
+          if (/remote-debugging|user-data-dir|process\.env\.(COOKIE|AUTHORIZATION|CDP|PROXY)/i.test(text)) throw new Error('caller-controlled browser authority found');
+          if (/gateway[-_](core|playback)|DisplayAdapter|PlaybackSession/.test(text)) throw new Error('production playback coupling found');
+          NODE
 
   probe-integration:
     name: JI1 remote workspace integration and regressions

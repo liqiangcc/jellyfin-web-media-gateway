@@ -1,11 +1,22 @@
-# Offline Bilibili browser acquisition probe
+# Bilibili browser acquisition probe
 
-This directory is an experiment for Issue #165. It uses only a synthetic page
-and a loopback allowlist broker. It does not accept a URL, CDP endpoint, browser
-profile, cookies, authorization headers, or a short-lived media URL from a
-caller. It is not a production SiteAdapter and is not enabled by Gateway.
+This directory is an experiment for Issues #165 and #169. Synthetic mode is
+the default and uses a loopback allowlist broker. An explicit live mode is
+available only to a target runbook with a plugin-owned opaque selector:
 
-The hosted workflow installs the pinned `playwright-core` package, discovers an
-allowlisted preinstalled Chromium, runs the contract and containment tests, then
-builds a manifest-addressed artifact. The artifact consumer starts from the
-downloaded artifact and reads the synthetic media after the browser exits.
+```text
+BILIBILI_PROBE_ALLOW_LIVE=1 node probe.mjs --mode live --selector bilibili:BV14V411W7r5:part-2
+```
+
+The caller cannot provide a URL, CDP endpoint, browser profile, cookies,
+authorization headers, proxy, or short-lived media URL. Live navigation is
+constructed by `plugins/bilibili/live_selector.mjs`; its broker owns DNS,
+public-address checks, redirects and CONNECT. Candidate URLs remain ephemeral
+server-side and only bounded sanitized metadata is emitted. This is not a
+production SiteAdapter and is not enabled by Gateway.
+
+The hosted workflow installs pinned Playwright packages, discovers Chromium,
+runs contract, containment and static-boundary tests, then builds a
+manifest-addressed artifact. The artifact consumer starts from the downloaded
+artifact and reads muxed plus audio/video-separated synthetic media after the
+browser exits. Hosted CI never enables live mode.

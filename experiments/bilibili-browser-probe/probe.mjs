@@ -5,6 +5,7 @@ import net from 'node:net';
 import { once } from 'node:events';
 import { chromium } from 'playwright-core';
 import { summarizeObservation, rejectSensitiveInput, SCHEMA_VERSION } from '../../plugins/bilibili/experimental_probe.mjs';
+import { runLive } from './live.mjs';
 
 const TIMEOUT_MS = 15_000;
 const MAX_REQUESTS = 200;
@@ -68,6 +69,18 @@ function fixtureServer() {
       res.end(data);
       return;
     }
+    if (req.url === '/video') {
+      const data = Buffer.from('synthetic-video-payload-169');
+      res.writeHead(200, { 'content-type': 'video/mp4', 'content-length': data.length, 'accept-ranges': 'bytes' });
+      res.end(data);
+      return;
+    }
+    if (req.url === '/audio') {
+      const data = Buffer.from('synthetic-audio-payload-169');
+      res.writeHead(200, { 'content-type': 'audio/mp4', 'content-length': data.length, 'accept-ranges': 'bytes' });
+      res.end(data);
+      return;
+    }
     res.writeHead(404); res.end();
   });
   return server;
@@ -114,13 +127,20 @@ function brokerServer(fixturePort) {
 }
 
 async function fetchIndependent(port) {
-  const response = await fetch(`http://127.0.0.1:${port}/media`);
-  const bytes = Buffer.from(await response.arrayBuffer());
-  if (!response.ok || bytes.length === 0 || bytes.length > 1024 * 1024) throw new Error('independent consumer failed');
-  return { status_class: '2xx', bytes: bytes.length, content_type: response.headers.get('content-type') };
+  const results = [];
+  let total = 0;
+  for (const [role, path] of [['muxed', '/media'], ['video', '/video'], ['audio', '/audio']]) {
+    const response = await fetch(`http://127.0.0.1:${port}${path}`);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    if (!response.ok || bytes.length === 0 || bytes.length > 1024 * 1024) throw new Error('independent consumer failed');
+    total += bytes.length;
+    if (total > 4 * 1024 * 1024) throw new Error('independent consumer budget exceeded');
+    results.push({ role, status_class: '2xx', bytes: bytes.length, content_type: response.headers.get('content-type') });
+  }
+  return { status_class: '2xx', bytes: total, content_type: 'multiple', requests: results.length, results };
 }
 
-async function main() {
+async function runSynthetic() {
   rejectSensitiveInput({ selector: 'bilibili:BV-synthetic-165:part-2' });
   const fixtures = fixtureServer();
   const fixturePort = await listen(fixtures);
@@ -181,6 +201,31 @@ async function main() {
     const { rm } = await import('node:fs/promises');
     await rm(profile, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+function parseArgs(argv) {
+  const args = { mode: 'synthetic' };
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index];
+    if (value === '--mode') args.mode = argv[++index];
+    else if (value === '--selector') args.selector = argv[++index];
+    else if (value === '--timeout-ms') args.timeout_ms = Number(argv[++index]);
+    else throw new Error('unknown option; only --mode and plugin-owned --selector are accepted');
+  }
+  if (!['synthetic', 'live'].includes(args.mode)) throw new Error('mode must be synthetic or live');
+  if (args.mode === 'synthetic' && args.selector !== undefined) throw new Error('selector is only valid in live mode');
+  if (args.mode === 'live' && typeof args.selector !== 'string') throw new Error('live mode requires an opaque selector');
+  return args;
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  if (args.mode === 'live') {
+    if (process.env.BILIBILI_PROBE_ALLOW_LIVE !== '1') throw new Error('live mode is disabled unless explicitly enabled by the target runbook');
+    await runLive(args);
+    return;
+  }
+  await runSynthetic();
 }
 
 main().catch((error) => { process.stderr.write(`probe failed: ${error.message}\n`); process.exitCode = 1; });

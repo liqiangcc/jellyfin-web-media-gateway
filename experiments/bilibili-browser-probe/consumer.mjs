@@ -17,5 +17,8 @@ const result = await new Promise((resolve, reject) => {
 });
 const evidence = JSON.parse(result.stdout);
 if (evidence.observation.independent_consumer?.status_class !== '2xx') throw new Error('browser-exit independent consumer did not read media');
-if (evidence.observation.containment?.broker !== 'loopback-allowlist') throw new Error('containment evidence missing');
-console.log(JSON.stringify({ result: 'PASS', candidate_sha: manifest.candidate_sha, browser_exit: true, independent_consumer: evidence.observation.independent_consumer, request_count: evidence.observation.budget.request_count, denied_exits: evidence.broker_requests.filter((item) => !item.allowed).length }, null, 2));
+const independentResults = evidence.observation.independent_consumer?.results || [];
+if (!independentResults.some((item) => item.role === 'muxed' && item.status_class === '2xx')) throw new Error('muxed fixture was not independently readable');
+if (!independentResults.some((item) => item.role === 'video' && item.status_class === '2xx') || !independentResults.some((item) => item.role === 'audio' && item.status_class === '2xx')) throw new Error('AV-separated fixtures were not independently readable');
+if (!['loopback-allowlist', 'public-host-pinned'].includes(evidence.observation.containment?.broker)) throw new Error('containment evidence missing');
+console.log(JSON.stringify({ result: 'PASS', candidate_sha: manifest.candidate_sha, browser_exit: true, independent_consumer: evidence.observation.independent_consumer, request_count: evidence.observation.budget.request_count, denied_exits: evidence.broker_requests?.filter((item) => !item.allowed).length ?? evidence.denied_count ?? 0 }, null, 2));
