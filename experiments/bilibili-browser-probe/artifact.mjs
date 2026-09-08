@@ -8,6 +8,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const files = [
   'experiments/bilibili-browser-probe/probe.mjs',
   'experiments/bilibili-browser-probe/contract.test.mjs',
+  'experiments/bilibili-browser-probe/artifact.mjs',
+  'experiments/bilibili-browser-probe/consumer.mjs',
   'plugins/bilibili/experimental_probe.mjs',
   'plugins/bilibili/package.json',
   'docs/research/bilibili-browser-probe-runbook.md',

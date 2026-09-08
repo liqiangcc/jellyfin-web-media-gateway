@@ -86,7 +86,7 @@ jobs:
         shell: bash
         run: |
           test -s probe-evidence.json
-          node -e 'const e=require("./probe-evidence.json"); if(e.observation.part_match!==true || e.observation.containment.broker!=="loopback-allowlist") process.exit(1); if(e.observation.containment.redirect!=="denied") process.exit(1); if(e.observation.cleanup.browser_exit!=="complete") process.exit(1);'
+          node -e 'const e=require("./probe-evidence.json"); const c=e.observation.containment; if(e.observation.part_match!==true || c.broker!=="loopback-allowlist") process.exit(1); if(c.redirect!=="denied" || c.worker!=="denied" || !c.websocket.startsWith("denied")) process.exit(1); if(e.observation.cleanup.browser_exit!=="complete") process.exit(1);'
           ! rg -n -i 'https?://|blob:|file:|cookie:|authorization:|signed-url|sessdata|bearer|BV[0-9A-Za-z]{10,}' probe-evidence.json
       - uses: actions/upload-artifact@v4
         with:
@@ -95,8 +95,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  probe-artifact-consumer:
-    name: J3 downloaded artifact independent consumer
+  probe-artifact-build:
+    name: J3a build manifest-addressed artifact
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -145,11 +145,38 @@ jobs:
             ${{ runner.temp }}/archive.sha256
           if-no-files-found: error
           retention-days: 14
-      - name: Download exact artifact into a separate consumer directory
+  probe-artifact-consumer:
+    name: J3 downloaded artifact independent consumer
+    needs: probe-artifact-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned browser and runtime dependency
         run: |
-          cp -a "$RUNNER_TEMP/probe-artifact" "$RUNNER_TEMP/downloaded-probe-artifact"
-          ln -s "$GITHUB_WORKSPACE/node_modules" "$RUNNER_TEMP/downloaded-probe-artifact/node_modules"
-          CANDIDATE_SHA="$CANDIDATE_SHA" node "$RUNNER_TEMP/downloaded-probe-artifact/experiments/bilibili-browser-probe/consumer.mjs" "$RUNNER_TEMP/downloaded-probe-artifact"
+          npm install --no-save "playwright@${PLAYWRIGHT_VERSION}"
+          npx playwright install chromium
+      - name: Download artifact produced by J3a
+        uses: actions/download-artifact@v4
+        with:
+          name: bilibili-browser-probe-${{ env.CANDIDATE_SHA }}
+          path: ${{ runner.temp }}/downloaded
+      - name: Verify downloaded manifest and run independent consumer
+        shell: bash
+        run: |
+          bundle="$RUNNER_TEMP/downloaded/probe-artifact"
+          test -f "$bundle/manifest.json"
+          CANDIDATE_SHA="$CANDIDATE_SHA" node "$bundle/experiments/bilibili-browser-probe/artifact.mjs" verify "$bundle"
+          ln -s "$GITHUB_WORKSPACE/node_modules" "$bundle/node_modules"
+          CANDIDATE_SHA="$CANDIDATE_SHA" CHROME_PATH="$(find "$HOME/.cache/ms-playwright" -type f -path '*/chrome-linux64/chrome' -perm -111 | head -1)" node "$bundle/experiments/bilibili-browser-probe/consumer.mjs" "$bundle"
 
   probe-integration:
     name: JI1 remote workspace integration and regressions

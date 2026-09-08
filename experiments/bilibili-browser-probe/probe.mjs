@@ -76,7 +76,7 @@ function brokerServer(fixturePort) {
     try { target = new URL(req.url); } catch { res.writeHead(400); res.end(); return; }
     const host = target.hostname.toLowerCase();
     const allowed = host === 'fixture.test';
-    requests.push({ host, method: req.method, allowed, redirected: target.pathname === '/final' });
+    requests.push({ host, path: target.pathname, method: req.method, allowed, redirected: target.pathname === '/final' });
     if (!allowed) {
       res.writeHead(403, { 'content-type': 'text/plain', 'x-probe-deny': 'policy' });
       res.end('denied');
@@ -99,7 +99,7 @@ function brokerServer(fixturePort) {
   });
   server.on('connect', (req, socket) => {
     const host = String(req.url).split(':')[0].toLowerCase();
-    requests.push({ host, method: 'CONNECT', allowed: false, redirected: false });
+    requests.push({ host, path: String(req.url), method: 'CONNECT', allowed: false, redirected: false });
     socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
   });
   return { server, requests };
@@ -136,6 +136,9 @@ async function main() {
     const denied = requests.filter((item) => !item.allowed);
     if (!requests.some((item) => item.allowed && item.host === 'fixture.test')) throw new Error('broker did not mediate allowed fixture');
     if (denied.length < 3) throw new Error('redirect/worker/websocket denial coverage missing');
+    if (!denied.some((item) => item.path === '/final')) throw new Error('redirect denial missing');
+    if (!denied.some((item) => item.path === '/worker')) throw new Error('dedicated worker denial missing');
+    if (!denied.some((item) => item.method === 'CONNECT' || item.path === '/socket')) throw new Error('websocket denial missing');
     if (requests.some((item) => item.allowed && item.host !== 'fixture.test')) throw new Error('unexpected broker allow');
     observation.budget = { ...observation.budget, request_count: requests.length, response_bytes: 0, response_budget: MAX_RESPONSE_BYTES };
     observation.containment = {
@@ -144,7 +147,7 @@ async function main() {
       redirect: denied.some((item) => item.redirected) ? 'denied' : 'not-observed',
       worker: denied.some((item) => item.host === 'blocked.test') ? 'denied' : 'not-observed',
       service_worker: 'disabled-for-observation',
-      websocket: denied.some((item) => item.method === 'CONNECT') ? 'denied' : 'denied-by-http-proxy',
+      websocket: denied.some((item) => item.method === 'CONNECT') ? 'denied-by-connect-policy' : 'denied-by-http-proxy',
       quic: 'disabled',
       secret_headers: 'not-exported',
     };
@@ -153,7 +156,7 @@ async function main() {
     const independent = await fetchIndependent(fixturePort);
     observation.independent_consumer = independent;
     observation.cleanup = { browser_exit: 'complete', temporary_profile: 'removed-by-finalizer' };
-    process.stdout.write(`${JSON.stringify({ schema_version: SCHEMA_VERSION, observation, broker_requests: requests.map(({ host, method, allowed, redirected }) => ({ host, method, allowed, redirected })) }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ schema_version: SCHEMA_VERSION, observation, broker_requests: requests.map(({ host, path, method, allowed, redirected }) => ({ host, path, method, allowed, redirected })) }, null, 2)}\n`);
   } finally {
     if (browser) await browser.close().catch(() => {});
     fixtures.close(); broker.close();
