@@ -5,10 +5,11 @@
 ## 当前可交付里程碑
 
 ```text
-当前优先预研：#165 离线 Browser 取源探针
-  → #166 clean anonymous 实站媒体可移植性（依赖冻结后发布）
-    → 按真实 shape 评审/实现最小通用媒体能力与 Bilibili 插件
-      → 正式修订并发布 #68 Control → Gateway → Web Display
+当前优先预研：#165 离线 Browser 取源探针（已接受）
+  → #169 显式 live-selector Browser 取源能力（hosted artifact，待 Worker）
+    → #166 clean anonymous 实站媒体可移植性（#169 接受后冻结并发布）
+      → 按真实 shape 评审/实现最小通用媒体能力与 Bilibili 插件
+        → 正式修订并发布 #68 Control → Gateway → Web Display
 
 保留旧路径：#146 → #67 generic-ytdlp（BLOCK，待具体外部/契约变化）
 已接受的通用 Web/Display 基础可复用；不是 B 站产品 PASS。
@@ -39,7 +40,7 @@
 
 ## Browser 取源研究分支
 
-#165 是离线探针 combined Task，无 #67 硬依赖；portable build/test 在 GitHub-hosted Actions。#166 是独立实站 verification Task，依赖 #165 被接受的边界、artifact/runbook 和普通 Linux 准入，不依赖手机或 Native Panel。具体 task.md 是执行契约，Issue 是发布/owner authority。
+#165 是离线探针 combined Task，已在 hosted Actions 接受；它不提供 live entry。#169 负责补齐显式 live-selector 入口和 artifact，仍不注册生产插件或声称实站兼容。#166 是独立实站 verification Task，只有 #169 Final Acceptance 后，才冻结 artifact/runbook、普通 Linux 准入和 tx-node 命令并发布；不依赖手机或 Native Panel。具体 task.md 是执行契约，Issue 是发布/owner authority。
 
 #166 只有完整独立消费者 Claim PASS 后才允许据实拆分媒体能力/站点集成任务；不是现在承诺 remux 必需或可行。新 schema/API 改动先按设计变更流程评审。当前只提升服务端匿名取源研究优先级，不恢复 #27 Native Panel/Auth/phone capacity。
 

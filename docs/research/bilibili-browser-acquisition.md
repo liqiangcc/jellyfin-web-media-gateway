@@ -6,6 +6,12 @@
 
 预研决策：**CONDITIONAL PASS**，允许推进独立离线探针 #165。真实浏览器取源到 Gateway/TV 产品闭环：**BLOCKED**，尚无该链路证据。
 
+## #165 Review 后的执行结论（2026-09-08）
+
+#165 已在 `3511e70c73686d90ec65ca530a5f48be07023586` 合并并完成 Final Acceptance。其 hosted artifact（run `34211420463`、bundle artifact `10049995177`）的入口仍是明确的 **offline-only synthetic probe**：它不接收实站 selector，也不发起 Bilibili 请求。该结果证明了观察 DTO、隔离 fixture 和下载后独立消费者的实验边界，不能直接作为 #166 的 live entry。
+
+因此 #166 继续保持 `status:draft`，不发布一个无法执行的 handoff。新增 #169 [Bilibili Browser Live Probe](../tasks/169-bilibili-browser-live-probe/task.md) 负责交付显式 live-selector 入口、插件拥有的导航解析、fail-closed 浏览器 broker 和可消费 artifact；只有 #169 Final Acceptance 后，Coordinator 才能冻结 #166 的 artifact/runbook/tx-node admission 并发布实站验证。这个调整是任务契约治理，不改变 #67 的 generic-ytdlp FAIL，也不把任何 live 结果写成 PASS。
+
 | 观察/来源 | 已知事实 | 不能推导的结论 |
 | --- | --- | --- |
 | [#67 最新 Review](https://github.com/liqiangcc/jellyfin-web-media-gateway/issues/67#issuecomment-5577995984)，runtime `80fb081b129f8f664124b84ddcc9698039e2cfd1` | ordinary Linux direct 匿名前检两次 2xx；实际 brokered generic-ytdlp：`UNSUPPORTED_FORMAT`、`FALLBACK_WEBPAGE`、`RESPONSE_STATUS`、4xx、4 requests、0 streams | 不能断言根因是 DASH、登录、DRM 或风控；也不能推广为所有浏览器/插件路线不可能 |
