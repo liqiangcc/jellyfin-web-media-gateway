@@ -90,6 +90,14 @@ jobs:
           test -n "${CHROME_PATH:-}"
       - name: Run real Chromium synthetic containment probe
         run: node experiments/bilibili-browser-probe/probe.mjs > probe-evidence.json
+      - name: Run deterministic live broker and consumer harness
+        run: set -o pipefail; node --test experiments/bilibili-browser-probe/live-broker.test.mjs | tee live-broker-evidence.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bilibili-browser-live-broker-evidence-${{ env.CANDIDATE_SHA }}
+          path: live-broker-evidence.txt
+          if-no-files-found: error
+          retention-days: 14
       - name: Assert bounded sanitized evidence
         shell: bash
         run: |

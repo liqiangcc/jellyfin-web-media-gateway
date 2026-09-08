@@ -25,6 +25,7 @@ const MAX_INDEPENDENT_PER_REQUEST = 1024 * 1024;
 const SECRET_HEADERS = new Set(['cookie', 'authorization', 'proxy-authorization', 'set-cookie']);
 const SAFE_HEADERS = new Set(['accept-ranges', 'content-range', 'content-type', 'content-length', 'etag', 'last-modified']);
 const MEDIA_TYPES = /^(video\/|audio\/|application\/(vnd\.apple\.mpegurl|dash\+xml))/i;
+export const LIVE_BROWSER_ARGS = Object.freeze(['--disable-quic', '--disable-features=WebTransport', '--disable-background-networking']);
 
 function listen(server) {
   server.listen(0, '127.0.0.1');
@@ -77,7 +78,10 @@ async function publicAddressFor(host, pins) {
   return addresses[0];
 }
 
-function brokerServer(state) {
+export function brokerServer(state, overrides = {}) {
+  const resolveAddress = overrides.resolveAddress || publicAddressFor;
+  const makeRequest = overrides.request || https.request;
+  const makeConnect = overrides.connect || tls.connect;
   const server = http.createServer(async (req, res) => {
     if (state.requests++ >= MAX_REQUESTS) { res.writeHead(429); res.end(); return; }
     let target;
@@ -88,7 +92,7 @@ function brokerServer(state) {
       res.writeHead(403); res.end('denied'); return;
     }
     let address;
-    try { address = await publicAddressFor(host, state.pins); } catch {
+    try { address = await resolveAddress(host, state.pins); } catch {
       state.denied.push({ kind: 'http', host, reason: 'dns-address-policy' });
       res.writeHead(403); res.end('denied'); return;
     }
@@ -97,11 +101,11 @@ function brokerServer(state) {
       method: req.method, headers: { ...safeRequestHeaders(req.headers), host, connection: 'close' },
       rejectUnauthorized: true,
     };
-    const upstream = https.request(options, (reply) => {
+    const upstream = makeRequest(options, (reply) => {
       res.writeHead(reply.statusCode || 502, reply.headers);
       reply.on('data', (chunk) => {
         state.responseBytes += chunk.length;
-        if (state.responseBytes > MAX_RESPONSE_BYTES) {
+        if (state.responseBytes > (state.responseLimit || MAX_RESPONSE_BYTES)) {
           reply.destroy(new Error('response budget exceeded'));
           if (!res.writableEnded) res.end();
           return;
@@ -123,11 +127,11 @@ function brokerServer(state) {
       client.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return;
     }
     let address;
-    try { address = await publicAddressFor(host.toLowerCase(), state.pins); } catch {
+    try { address = await resolveAddress(host.toLowerCase(), state.pins); } catch {
       state.denied.push({ kind: 'connect', host: String(host).toLowerCase(), reason: 'dns-address-policy' });
       client.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return;
     }
-    const upstream = tls.connect({ host: address, port, servername: host, rejectUnauthorized: true });
+    const upstream = makeConnect({ host: address, port, servername: host, rejectUnauthorized: true });
     upstream.once('secureConnect', () => {
       client.write('HTTP/1.1 200 Connection Established\r\nProxy-agent: bounded-bilibili-probe\r\n\r\n');
       if (head?.length) upstream.write(head);
@@ -143,10 +147,37 @@ function brokerServer(state) {
     upstream.on('error', () => client.destroy());
     client.on('error', () => upstream.destroy());
   });
+  server.on('upgrade', (req, socket) => {
+    state.requests += 1;
+    state.denied.push({ kind: 'upgrade', host: String(req.headers.host || 'unknown').toLowerCase(), reason: 'upgrade-disabled' });
+    socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+  });
   return server;
 }
 
-function requestOne(candidate, pins, maxBytes, signal) {
+export function consumeResponseBody(response, maxBytes, signal) {
+  return new Promise((resolve, reject) => {
+    let bytes = 0;
+    let settled = false;
+    const fail = (error) => { if (!settled) { settled = true; response.destroy?.(); reject(error); } };
+    const onAbort = () => fail(new Error('independent consumer cancelled'));
+    if (signal?.aborted) { onAbort(); return; }
+    signal?.addEventListener('abort', onAbort, { once: true });
+    response.on('data', (chunk) => {
+      bytes += chunk.length;
+      if (bytes > maxBytes) { fail(new Error('independent request budget exceeded')); }
+    });
+    response.on('error', fail);
+    response.on('end', () => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      resolve({ status_class: statusClass(response.statusCode), bytes, content_type: String(response.headers?.['content-type'] || 'unknown').split(';', 1)[0] });
+    });
+  });
+}
+
+export function requestOne(candidate, pins, maxBytes, signal) {
   return new Promise((resolve, reject) => {
     let target;
     try { target = new URL(candidate.url); } catch { reject(new Error('candidate URL malformed')); return; }
@@ -154,13 +185,21 @@ function requestOne(candidate, pins, maxBytes, signal) {
     publicAddressFor(target.hostname, pins).then((address) => {
       const rangeEnd = Math.max(0, maxBytes - 1);
       const req = https.request({ host: address, port: 443, servername: target.hostname, path: `${target.pathname}${target.search}`, method: 'GET', headers: { host: target.hostname, range: `bytes=0-${rangeEnd}`, 'user-agent': 'bilibili-browser-probe/1', referer: 'https://www.bilibili.com/' }, rejectUnauthorized: true, signal }, (res) => {
-        let bytes = 0;
-        res.on('data', (chunk) => { bytes += chunk.length; if (bytes > maxBytes) req.destroy(new Error('independent request budget exceeded')); });
-        res.on('end', () => resolve({ status_class: statusClass(res.statusCode), bytes, content_type: String(res.headers['content-type'] || 'unknown').split(';', 1)[0] }));
+        consumeResponseBody(res, maxBytes, signal).then(resolve, reject);
       });
       req.on('error', reject); req.end();
     }, reject).catch(reject);
   });
+}
+
+export async function createDisposableProfile() {
+  const profile = await mkdtemp('/tmp/bilibili-live-probe-');
+  await chmod(profile, 0o700);
+  return profile;
+}
+
+export function removeDisposableProfile(profile) {
+  return rm(profile, { recursive: true, force: true });
 }
 
 export async function runLive(invocation, browserPath = process.env.CHROME_PATH || '/usr/bin/google-chrome') {
@@ -173,11 +212,10 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
   let context;
   let profile;
   try {
-    profile = await mkdtemp('/tmp/bilibili-live-probe-');
-    await chmod(profile, 0o700);
+    profile = await createDisposableProfile();
     context = await chromium.launchPersistentContext(profile, { executablePath: browserPath, headless: true, timeout: admitted.timeout_ms, args: [
       `--proxy-server=http://127.0.0.1:${brokerPort}`, '--proxy-bypass-list=<-loopback>',
-      '--disable-quic', '--disable-features=WebTransport', '--disable-background-networking',
+      ...LIVE_BROWSER_ARGS,
       '--no-first-run', '--no-default-browser-check',
     ], serviceWorkers: 'block' });
     browser = context.browser();
@@ -235,7 +273,7 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
     candidates.clear();
     if (context) await context.close().catch(() => {});
     if (browser) await browser.close().catch(() => {});
-    if (profile) await rm(profile, { recursive: true, force: true }).catch(() => {});
+    if (profile) await removeDisposableProfile(profile).catch(() => {});
     broker.close();
     state.pins.clear(); state.denied.length = 0;
   }

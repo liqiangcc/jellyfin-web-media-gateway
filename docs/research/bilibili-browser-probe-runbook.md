@@ -7,16 +7,35 @@ compatibility.
 
 ## Admission
 
-The Coordinator must freeze the exact accepted #165 Candidate SHA, GitHub
-artifact ID/digest, workflow run, artifact manifest, low-privilege Linux user,
-browser executable/version, and command before publishing #166. The run must
-be on a disposable ordinary Linux process with a fresh temporary Chromium
-profile. It must not reuse a personal profile, cookies, Authorization headers,
-Vault data, an existing browser, or an existing Gateway service.
+The Coordinator must first accept #169, then freeze its exact Candidate SHA,
+GitHub artifact ID/digest, workflow run and job IDs, artifact manifest,
+low-privilege Linux user, browser executable/version, and command before
+publishing #166. The #165 artifact is an offline prerequisite only; it is not
+the live artifact. The run must be on a disposable ordinary Linux process with
+a fresh temporary Chromium profile. It must not reuse a personal profile,
+cookies, Authorization headers, Vault data, an existing browser, or an
+existing Gateway service.
 
-The run is permitted only when the offline containment Claim C2 is accepted.
-If the artifact manifest, browser admission, or egress policy cannot be
-verified, stop with `BLOCKED`; do not enable a live mode.
+The run is permitted only when #169 C1–C4 and its hosted evidence are accepted.
+If the #169 artifact manifest, exact Candidate/run/job provenance, browser
+admission, or egress policy cannot be verified, stop with `BLOCKED`; do not
+enable a live mode.
+
+## Frozen provenance
+
+At #166 publication, record the accepted #169 values in the Task contract and
+evidence record:
+
+```text
+Candidate SHA: <accepted #169 Candidate>
+Workflow run: <#169 hosted run>
+Required jobs: <#169 J1/J2/J3a/J3/J4/JI1 job IDs>
+Bundle artifact: <#169 manifest-addressed artifact ID and digest>
+Sanitized evidence: <#169 evidence artifact ID and digest>
+```
+
+These fields are admission data, not live-site results. #166 must verify that
+the downloaded bundle matches all of them before starting Chromium.
 
 ## Frozen budgets
 
