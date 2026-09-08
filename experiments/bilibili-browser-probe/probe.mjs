@@ -6,6 +6,8 @@ import { once } from 'node:events';
 import { chromium } from 'playwright-core';
 import { summarizeObservation, rejectSensitiveInput, SCHEMA_VERSION } from '../../plugins/bilibili/experimental_probe.mjs';
 import { runLive } from './live.mjs';
+import { classifyError } from './diagnostic.mjs';
+import { finalizeResult, terminationClass } from './finalizer.mjs';
 
 const TIMEOUT_MS = 15_000;
 const MAX_REQUESTS = 200;
@@ -193,7 +195,7 @@ async function runSynthetic() {
     const independent = await fetchIndependent(fixturePort);
     observation.independent_consumer = independent;
     observation.cleanup = { browser_exit: 'complete', temporary_profile: 'removed-by-finalizer' };
-    process.stdout.write(`${JSON.stringify({ schema_version: SCHEMA_VERSION, observation, broker_requests: requests.map(({ host, path, method, allowed, redirected }) => ({ host, path, method, allowed, redirected })) }, null, 2)}\n`);
+    return { schema_version: SCHEMA_VERSION, observation, broker_requests: requests.map(({ host, path, method, allowed, redirected }) => ({ host, path, method, allowed, redirected })) };
   } finally {
     if (browser) await browser.close().catch(() => {});
     fixtures.close(); broker.close();
@@ -222,10 +224,60 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.mode === 'live') {
     if (process.env.BILIBILI_PROBE_ALLOW_LIVE !== '1') throw new Error('live mode is disabled unless explicitly enabled by the target runbook');
-    await runLive(args);
-    return;
+    return runLive(args);
   }
-  await runSynthetic();
+  return runSynthetic();
 }
 
-main().catch((error) => { process.stderr.write(`probe failed: ${error.message}\n`); process.exitCode = 1; });
+let resultPublished = false;
+const writeStdout = process.stdout.write.bind(process.stdout);
+
+function publishResult(result, exitCode = 0) {
+  if (resultPublished) return false;
+  resultPublished = true;
+  const payload = `${JSON.stringify(result, null, 2)}\n`;
+  if (exitCode === 0) {
+    writeStdout(payload);
+    return true;
+  }
+  // A process-level failure may leave browser/broker handles in an
+  // unobservable state. Emit the bounded result, then force a bounded exit so
+  // those handles cannot keep the diagnostic process alive indefinitely.
+  let exited = false;
+  const forceExit = setTimeout(() => {
+    if (!exited) { exited = true; process.exit(exitCode); }
+  }, 2_000);
+  writeStdout(payload, () => {
+    if (exited) return;
+    exited = true;
+    clearTimeout(forceExit);
+    process.exit(exitCode);
+  });
+  return true;
+}
+
+function publishProcessFailure(reason, termination = 'error') {
+  if (resultPublished) return;
+  const error = reason instanceof Error ? reason : undefined;
+  // Process-level failures can bypass the promise returned by main(). Keep
+  // their evidence finite and make cleanup uncertainty explicit.
+  const result = finalizeResult({ result: 'failure', termination: terminationClass(error, termination), diagnostic: classifyError(error, 'unknown'), activity: { page_navigation: false }, cleanup: {
+    browser_exit: 'unknown', broker_close: 'unknown', temporary_profile: 'unknown', ephemeral_candidates: 'unknown', dns_pins: 'unknown', staging: 'unknown',
+  } });
+  publishResult(result, 1);
+}
+
+// These handlers cover errors/rejections and observable signals raised after
+// the normal promise path has been lost. They intentionally publish only the
+// same bounded result shape and never copy the process error text.
+process.once('uncaughtException', (error) => publishProcessFailure(error, 'error'));
+process.once('unhandledRejection', (reason) => publishProcessFailure(reason, 'error'));
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, () => publishProcessFailure(undefined, 'signal'));
+}
+
+main().then((result) => {
+  if (result) publishResult(result);
+}, (error) => {
+  publishProcessFailure(error, terminationClass(error));
+});

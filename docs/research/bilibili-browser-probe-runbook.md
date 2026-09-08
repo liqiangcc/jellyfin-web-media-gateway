@@ -178,6 +178,15 @@ single `gateway-verify` tx-node preflight is allowed. An observed stage is
 diagnostic evidence only; it does not authorize an egress relay or unlock
 Issue #166.
 
+The #188 navigation diagnostic adds a re-entrant finalizer around the probe
+entry point. Normal completion, navigation errors, timeout/abort, process
+error or rejection, and SIGINT/SIGTERM converge on one finite result shape.
+The finalizer publishes at most once; late callbacks are ignored. Process-level
+termination evidence uses `unknown` cleanup states because the interrupted
+process cannot prove browser, broker, profile, candidate, DNS-pin, or staging
+cleanup. The result contains only finite classes, bounded counters, activity
+booleans, and cleanup states; it never copies an error string.
+
 The accepted #182 no-page preflight reached `transport_stage=proxy_response`
 with `transport_outcome=success`, `status_class=2xx`, one request, zero
 response/metadata bytes and no page navigation, media request, selector or

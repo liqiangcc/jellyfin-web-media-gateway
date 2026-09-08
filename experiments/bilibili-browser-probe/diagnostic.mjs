@@ -34,6 +34,9 @@ const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 const MAX_METADATA_BYTES = 1024 * 1024;
 
 const ERROR_CODES = Object.freeze([
+  ['ERR_HTTP2_PROTOCOL_ERROR', 'chromium_navigation', 'http2_protocol_error', 'downstream_close'],
+  ['ERR_HTTP2_STREAM_ERROR', 'chromium_navigation', 'http2_stream_error', 'downstream_close'],
+  ['ERR_HTTP2_GOAWAY_SESSION', 'chromium_navigation', 'http2_session_closed', 'downstream_close'],
   ['ERR_SSL_PROTOCOL_ERROR', 'tls_handshake', 'tls_protocol_error', 'tls_handshake'],
   ['ERR_TLS_CERT_ALTNAME_INVALID', 'tls_handshake', 'tls_certificate_error', 'tls_handshake'],
   ['CERT_HAS_EXPIRED', 'tls_handshake', 'tls_certificate_error', 'tls_handshake'],
@@ -45,6 +48,11 @@ const ERROR_CODES = Object.freeze([
   ['EAI_NONAME', 'dns_address_policy', 'dns_lookup_failed', 'resolve_policy'],
   ['ENOTFOUND', 'dns_address_policy', 'dns_lookup_failed', 'resolve_policy'],
   ['BROKER_CONNECT', 'broker_connect', 'broker_connect_failed', 'unknown'],
+  ['ERR_CONNECTION_CLOSED', 'chromium_navigation', 'connection_closed', 'downstream_close'],
+  ['ERR_CONNECTION_ABORTED', 'chromium_navigation', 'connection_aborted', 'downstream_close'],
+  ['ERR_CONNECTION_RESET', 'chromium_navigation', 'connection_reset', 'tcp_connect'],
+  ['ERR_CONNECTION_REFUSED', 'chromium_navigation', 'connection_refused', 'tcp_connect'],
+  ['ERR_CONNECTION_TIMED_OUT', 'chromium_navigation', 'connection_timeout', 'tcp_connect'],
   ['ECONNREFUSED', 'broker_connect', 'connection_refused', 'tcp_connect'],
   ['ECONNRESET', 'broker_connect', 'connection_reset', 'tcp_connect'],
   ['ETIMEDOUT', 'broker_connect', 'connection_timeout', 'tcp_connect'],
@@ -55,6 +63,19 @@ const ERROR_CODES = Object.freeze([
   ['NAVIGATION_TIMEOUT', 'chromium_navigation', 'navigation_timeout', 'downstream_close'],
   ['ERR_ABORTED', 'chromium_navigation', 'navigation_aborted', 'downstream_close'],
 ]);
+
+// Durable diagnostic reasons are a closed vocabulary.  This is exported so
+// the finalizer can reject caller-supplied labels instead of treating a
+// merely lexical string as trusted evidence.
+export const DIAGNOSTIC_REASONS = Object.freeze([
+  ...new Set([
+    ...ERROR_CODES.map(([, , reason]) => reason),
+    ...DIAGNOSTIC_PHASES.filter((phase) => phase !== 'unknown').map((phase) => `${phase}_failed`),
+    'unclassified_failure',
+    'status_1xx', 'status_2xx', 'status_3xx', 'status_4xx', 'status_5xx',
+  ]),
+]);
+const DIAGNOSTIC_REASON_SET = new Set(DIAGNOSTIC_REASONS);
 
 const PHASE_HINTS = new Set(DIAGNOSTIC_PHASES);
 const TRANSPORT_STAGE_SET = new Set(TRANSPORT_STAGES);
@@ -72,7 +93,14 @@ function statusClass(status) {
 function codeMatch(value) {
   if (typeof value !== 'string' || value.length === 0 || value.length > 128) return undefined;
   const normalized = value.toUpperCase();
-  return ERROR_CODES.find(([marker]) => normalized.includes(marker));
+  return ERROR_CODES.find(([marker]) => {
+    if (normalized === marker) return true;
+    // Chromium emits markers as `net::ERR_*`; Node emits them after a
+    // whitespace boundary.  Avoid matching arbitrary query/header text or
+    // identifiers such as NOT_ERR_* supplied by an untrusted caller.
+    const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?:^|NET::|\\s)${escaped}(?:$|\\s|[^A-Z0-9_])`).test(normalized);
+  });
 }
 
 function hintMatch(value) {
@@ -159,4 +187,8 @@ export function diagnosticCounters(state = {}) {
     response_bytes: boundedCounter(state.responseBytes, MAX_RESPONSE_BYTES),
     metadata_bytes: boundedCounter(state.metadataBytes, MAX_METADATA_BYTES),
   };
+}
+
+export function isDiagnosticReason(value) {
+  return typeof value === 'string' && DIAGNOSTIC_REASON_SET.has(value);
 }

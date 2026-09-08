@@ -107,6 +107,30 @@ test('CONNECT uses the same broker byte budget and denies private DNS', async (t
   client.destroy();
 });
 
+test('late upstream errors cannot replace a finalized successful CONNECT outcome', async (t) => {
+  const state = { requests: 0, responseBytes: 0, denied: [], pins: new Map() };
+  let upstream;
+  const broker = brokerServer(state, {
+    resolveAddress: async () => '127.0.0.1',
+    connect: () => {
+      upstream = new PassThrough();
+      setImmediate(() => upstream.emit('secureConnect'));
+      return upstream;
+    },
+  });
+  const port = await listen(broker);
+  t.after(() => { broker.closeAllConnections?.(); return broker.close(); });
+  const client = net.connect(port, '127.0.0.1');
+  await once(client, 'connect');
+  client.write('CONNECT www.bilibili.com:443 HTTP/1.1\r\nHost: www.bilibili.com:443\r\n\r\n');
+  await waitForEvent(client, 'data', 'connect response');
+  assert.equal(state.transport.transport_stage, 'proxy_response');
+  upstream.emit('error', Object.assign(new Error('late https://secret.invalid?token=x'), { code: 'ERR_SSL_PROTOCOL_ERROR' }));
+  assert.equal(state.failure, undefined);
+  assert.equal(state.transport.transport_outcome, 'success');
+  client.destroy();
+});
+
 test('independent body reader counts success/error/over-budget bytes and cancellation', async () => {
   const success = Readable.from([Buffer.from('ok')]);
   success.statusCode = 200; success.headers = { 'content-type': 'video/mp4' };
