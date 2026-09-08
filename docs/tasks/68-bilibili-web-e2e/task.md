@@ -9,7 +9,7 @@ Task kind: implementation + real-source functional E2E verification
 Planning Base: b17a27ca5d8c2f76cddc4c7cf3fdaa239169593a
 Preferred worker: cloud-codex with authenticated SSH tx-node and accepted #146 browser path
 Eligible environment after publication: env:cloud
-Hard publication dependencies: #67 R18-or-later Final Acceptance PASS; #49 Web MVP Final Accepted; #146 execution authority remains valid
+Hard publication dependencies: #67 R20-or-later Final Acceptance PASS; #49 Web MVP Final Accepted; #146 R3-or-later execution authority remains valid
 Accepted authorities: #44 SourceSession; #45 Web Display; #47 Control; #49 hosted Web MVP; #60/#66/#73 generic-ytdlp runtime/security; #71 Navigation authority remains independent
 Freshness policy: dependency-aware
 ```
@@ -372,3 +372,9 @@ Freshness policy: dependency-aware; strict-main reason: n/a. Semantic authoritie
 JI1: workspace fmt/clippy/tests plus source-session/display/Control/R007 product regression on exact Integration Candidate. JI2: #49 browser composition/reconnect and R001/R008/plugin-boundary checks when router/build overlap. A conflict changing live source/rendering semantics requires affected B1–B8/live journey reruns. Unrelated main/doc changes preserve exact-Candidate evidence; no moving-main rule.
 
 User-visible runbook delivery is required: exact build/start/stop, explicit verification-only plugin enablement, loopback/private browser access, one normal activation if required, source input and clear cleanup. It must permit another Codex to reproduce the journey without raw media injection or the old chat. Cleanup leaves only approved #146 resources; persistent production services and phone deployment remain out of scope.
+
+### Artifact admission for the new product Candidate
+
+All #68 binaries and test executables are built on GitHub-hosted Actions and transferred as verified artifacts; tx-node only runs compile-free commands. Reuse #146 R3's accepted packaging/admission mechanism, but regenerate its manifests and binaries for the exact #68 product Candidate. The old #67 runtime artifact is a source-compatibility baseline, not the #68 product executable.
+
+Inspect the actual product binary/assets for compile-time paths (including CARGO_MANIFEST_DIR or embedded fixture/worker paths), package required runtime assets, and prove a fresh consumer without the original Actions build tree can start the same product used by the real browser journey. Bind Candidate/run/artifact/ABI/worker/helper hashes and target layout before launch. Missing, tampered or wrong-Candidate assets fail without execution. No fallback to cargo/source compilation or fixture injection on the target.

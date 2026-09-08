@@ -225,7 +225,7 @@ CI 修复与当前文档整理不依赖实时站点，可在主线等待外部�
 
 - #146：`docs/tasks/146-non-phone-execution-prep/prompt.md`，第一执行优先级。
 - #147：`docs/tasks/147-ci-navigation-workflow-repair/prompt.md`，独立 CI 修复。
-- #67 R19：`docs/tasks/67-generic-ytdlp-bilibili-real/prompt.md`，等 #146 验收后发布。
+- #67 R20：`docs/tasks/67-generic-ytdlp-bilibili-real/prompt.md`，等 #146 验收后发布。
 - #68：`docs/tasks/68-bilibili-web-e2e/prompt.md`，等 #67 PASS 后发布。
 - 全路线 Coordinator 恢复：`docs/tasks/handoffs/non-phone-delivery.md`。
 
