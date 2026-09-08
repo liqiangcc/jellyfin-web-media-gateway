@@ -204,7 +204,7 @@ jobs:
           fi
           echo "resolved_browser_path=${browser_path:-none}"
           find "$HOME/.cache/ms-playwright" -maxdepth 4 -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) -print | head -20 || true
-          chmod +x "$browser_path"
+          if [ ! -x "$browser_path" ]; then chmod +x "$browser_path"; fi
           test -x "$browser_path"
           CANDIDATE_SHA="$CANDIDATE_SHA" CHROME_PATH="$browser_path" node "$bundle/experiments/bilibili-browser-probe/consumer.mjs" "$bundle"
 
