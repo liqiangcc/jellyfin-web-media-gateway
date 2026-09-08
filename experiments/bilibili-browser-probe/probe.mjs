@@ -49,7 +49,7 @@ function fixtureServer() {
     }
     if (req.url === '/worker.js') {
       res.writeHead(200, { 'content-type': 'application/javascript' });
-      res.end("fetch('http://blocked.test/worker').catch(() => {}); postMessage('started');");
+      res.end("fetch('http://blocked.test/worker').catch(() => {}); setTimeout(() => postMessage('started'), 100);");
       return;
     }
     if (req.url === '/metadata') {
