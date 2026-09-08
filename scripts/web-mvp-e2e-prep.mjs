@@ -101,7 +101,10 @@ async function assertUsableMedia(page, label) {
   const unsuccessful = responses.filter(response => response.status < 200 || response.status >= 300);
   if (unsuccessful.length) throw new Error(`${label} Gateway media response was not successful: ${unsuccessful.map(response => response.status).join(',')}`);
   if (!responses.length) throw new Error(`${label} had no Gateway media response`);
-  if (state.readyState < 2 || !Number.isFinite(state.duration) || state.duration <= 0 || state.error) {
+  // HAVE_METADATA is the minimum usable readiness for a bounded VOD source;
+  // the activation/progression check below proves that Chromium can actually
+  // start and advance playback rather than merely exposing metadata.
+  if (state.readyState < 1 || !Number.isFinite(state.duration) || state.duration <= 0 || state.error) {
     throw new Error(`${label} media is not usable: readyState=${state.readyState} duration=${state.duration} error=${state.error?.code || 'none'}`);
   }
   return state;
