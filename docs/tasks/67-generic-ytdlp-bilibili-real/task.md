@@ -3,7 +3,7 @@
 ## Metadata
 
 - GitHub Issue: #67; Task kind: verification / real public network
-- Contract Revision: R19 (GitHub-hosted build artifacts only; preserves R18 ordinary-Linux Claims and all historical Attempts)
+- Contract Revision: R20 (verified runnable artifact/layout contract; retains R19 remote-only builds and historical Claims)
 - Planning Base: `b17a27ca5d8c2f76cddc4c7cf3fdaa239169593a`
 - Exact runtime Candidate: `80fb081b129f8f664124b84ddcc9698039e2cfd1`
 - Preferred Worker: Codex Cloud; eligible environment after publication: env:cloud
@@ -24,13 +24,15 @@ The user's temporary pause on phone deployment changes execution routing and the
 
 Accepted chain: #79 frozen offline runtime; #83 x86_64/AArch64 sandbox authority; #85 fd isolation; #95 anonymous response Secret containment; #97 broker framing; #99 clean-build/sibling binding; #101 outcome taxonomy; #103 normalization; #105 narrow normal-extract-first continuation; #107 stage; #109 stage/reason; #111 response encoding; #114 bounded webpage marker scan. #90 remains historical accepted source transport; #146 owns the ordinary-Linux preparation/handoff.
 
-R18 is recoverable at `88d302c8673817eb15093bf053886dbbf28f105a`; R17/earlier contract is recoverable at `b17a27ca5d8c2f76cddc4c7cf3fdaa239169593a:docs/tasks/67-generic-ytdlp-bilibili-real/task.md`. No old mobile PASS/FAIL is relabelled as x86_64 Evidence. #113/#142/#131 are not publication dependencies for R19.
+R18 is recoverable at `88d302c8673817eb15093bf053886dbbf28f105a`; R17/earlier contract is recoverable at `b17a27ca5d8c2f76cddc4c7cf3fdaa239169593a:docs/tasks/67-generic-ytdlp-bilibili-real/task.md`. No old mobile PASS/FAIL is relabelled as x86_64 Evidence. #113/#142/#131 are not publication dependencies for R20.
 
 ## Publication completion required
 
 Keep draft until #146 Final Accepted. Coordinator must then add to this contract the actual accepted #146 runbook Candidate, Final Acceptance URL, verified uid/gid and source/runtime preparation reference. These values are intentionally not fabricated now. If #146 changes the runtime semantic implementation rather than preparation only, review freshness and formally freeze the new exact runtime before publication.
 
 No required phone readiness gate is inherited. #147 is independent; if its repair is needed for a required workflow, classify that concrete verification dependency rather than inventing a phone blocker.
+
+Artifact admission from #146 R3 is mandatory before J3: validate trusted GitHub run/artifact identity, compiled worker assets and fixed sibling hashes; missing or tampered content blocks execution. A same-package checksum alone or a successful build-host run is insufficient. No change to the frozen source is authorized by this metadata requirement.
 
 ## Goal / scope
 
@@ -70,7 +72,7 @@ No product/core/plugin implementation changes in this verification Task. Host pr
 
 J2: use ordinary curl, clear upper/lower HTTP_PROXY/HTTPS_PROXY/ALL_PROXY and use `--noproxy '*'`; no custom identity headers, forced address family or destination. At most 3 requests, 5 seconds between completed requests, connect timeout 5 seconds, total timeout 15 seconds per request, normal TLS validation. Do not follow unreviewed redirects: any non-2xx is not a successful sample. Stop early when two consecutive 2xx occur; otherwise after request 3 classify BLOCKED and stop before J3. Only status class/transport class is retained, stderr/body/headers discarded. Optional accepted #128 passive sanitizer must not change requests. No automatic rerun/second set without a new Coordinator-authorized Attempt and changed external condition or approved bounded diagnosis.
 
-J3 uses only the compile-free launcher and verified binary pair accepted in #146 R2. Before publication, Coordinator must freeze the actual launcher path/arguments, wrapper Candidate, binary runtime source SHA, hosted build Candidate/run/job/artifact/manifest hashes and #146 target identity here. These are unresolved dependency outputs, so this Task remains draft until they exist.
+J3 uses only the compile-free launcher and verified binary pair accepted in #146 R3. Before publication, Coordinator must freeze the actual launcher path/arguments, wrapper Candidate, binary runtime source SHA, hosted build Candidate/run/job/artifact/manifest hashes and #146 target identity here. Also freeze the compiled worker source-root/layout, worker hash, interpreter/ABI compatibility and fresh-consumer proof from #146 R3. Confirm actual test counts rather than zero-test success. These are unresolved dependency outputs, so this Task remains draft until they exist.
 
 The original scripts/generic-ytdlp-real-smoke.sh and cargo build/run/test/check/clippy are forbidden on tx-node and Codex workspace because they compile. All clean-build/provenance/test-binary generation occurs on remote GitHub-hosted Actions; target-side work only verifies and executes those artifacts with the accepted offline runtime. ABI/artifact failure returns BLOCKED, never local toolchain installation. Runtime maximum 35 minutes; no retry loop, long soak, extra extract calls or raw diagnostic expansion. J4 runs even if J2/J3 fails.
 

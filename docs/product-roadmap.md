@@ -29,7 +29,7 @@
 
 ## #67：真实来源兼容性
 
-保留同一 Issue 与全部历史。旧 R17 在手机上因 4xx 阻塞、未执行解析，旧 R16 FAIL 保留。R18 改变 target/Evidence 路由，R19 强制消费 GitHub-hosted 预编译产物，不改写历史结果。
+保留同一 Issue 与全部历史。旧 R17 在手机上因 4xx 阻塞、未执行解析，旧 R16 FAIL 保留。R18 改变 target/Evidence 路由，R19 强制消费 GitHub-hosted 预编译产物，R20 要求验证编译路径/运行资产与独立消费者可执行性，不改写历史结果。
 
 硬发布依赖：#146 Final Acceptance。正式发布时绑定其实际 host/runbook Evidence；保持精确 runtime Candidate，真实匿名 direct/no-proxy 前检与解析在新 Attempt 中独立运行。样本不可用则 BLOCKED，不从浏览器缓存/账号/抓包 URL 构造 PASS。换样本或改 runtime 必须先正式修订。
 

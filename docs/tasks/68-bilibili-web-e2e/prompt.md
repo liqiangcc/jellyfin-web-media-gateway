@@ -1,5 +1,7 @@
 # Session Bootstrap — Issue #68
 
+Read the latest live package revision before claim: it now includes verified artifact/layout admission and fresh-consumer execution requirements. Older package links are historical.
+
 GitHub Issue: https://github.com/liqiangcc/jellyfin-web-media-gateway/issues/68
 Task Contract: `docs/tasks/68-bilibili-web-e2e/task.md`
 Expected Worker: Codex Cloud with capabilities required by task.md

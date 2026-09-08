@@ -1,6 +1,6 @@
 # Task — NON-PHONE-EXECUTION-PREP
 
-Contract Revision: R2 — GitHub-hosted Actions build-only. This supersedes all R1 target-toolchain/build alternatives; no runtime Claim or previous result is relabelled.
+Contract Revision: R3 — executable remote-artifact contract. This retains R2 GitHub-hosted-only builds and adds required fixed-source paths, direct-test execution and artifact admission. No runtime Claim or previous result is relabelled.
 
 ## Metadata
 
@@ -36,7 +36,39 @@ This is an independent execution-environment/runbook deliverable. It does not re
 7. Reproduce the existing smoke launcher semantics: both smoke binary and fixed sibling ytdlp-sandbox derive from the exact runtime source. A prebuilt route needs source/Candidate/artifact hash/ABI binding and safe extraction; do not weaken #99 clean-build or sibling discovery. Provide a compile-free launcher under scripts/non-phone-execution/ that preserves environment, frozen offline runtime, fixed sibling sandbox and bounded output semantics. It must execute the verified binary pair directly, never call the existing cargo-building smoke script on tx-node. Prove the wrapper does not invoke a compiler/package build hook; bind both binaries to the same frozen runtime source and record separate wrapper/build Candidate when different.
 8. Verify existing no_new_privs/fd/socket denial/broker IPC contracts on x86_64 using deterministic tests; no live Bilibili request. Repository guards must have a real exercise; finding a binary is insufficient.
 9. Determine where the chosen browser runs. Use an isolated anonymous test browser/context with normal sandbox/autoplay settings. Do not inspect, copy or depend on the user's existing Chrome profile. Demonstrate bounded local fixture access to a non-root loopback test server through same-host access or a dedicated loopback SSH tunnel. Confirm matching Host/Origin and no public Gateway/CDP listener. A Playwright browser may substitute for MCP if MCP topology cannot be proven; record the actual choice.
-10. Deliver restart/re-entry/cleanup commands and prove cleanup. Temporary server/browser/tunnel/processes exit; keep only the explicitly documented dedicated user and verified artifacts/cache/source manifests needed by downstream Tasks. No always-on production instance or daemon is created.
+10. Deliver restart/re-entry/cleanup commands and prove cleanup. Temporary server/browser/tunnel/processes exit; keep only the explicitly documented dedicated user and verified runtime assets/artifacts/cache/source manifests needed by downstream Tasks. No always-on production instance or daemon is created.
+
+## Executable artifact contract
+
+Static review of the frozen source exposes two mandatory packaging constraints:
+
+- `plugins/generic-ytdlp/src/bin/generic-ytdlp-real-smoke.rs` uses `env!("CARGO_MANIFEST_DIR")/worker/worker.py`. Copying only the executable pair, changing cwd, or setting CARGO_MANIFEST_DIR at runtime does not relocate this compiled path.
+- `plugins/generic-ytdlp/tests/runtime.rs` reads `CARGO_BIN_EXE_ytdlp-sandbox` at runtime and uses `YTDLP_SOURCE`, optional `GENERIC_YTDLP_TEST_WORKER_PATH` and `PYTHON`. Directly starting its executable without the declared environment fails before the intended proof.
+
+### Fixed source layout without changing frozen runtime
+
+During pre-build readiness inspection, freeze a source root beneath the verified dedicated user's home, using a fixed repository directory plus the exact runtime SHA. Build that untouched runtime source at the same absolute root in the hosted build container/host. The build workflow must validate the path is within that fixed home/layout (no `..`, shell input interpolation or arbitrary destination) and assert the checked-out runtime SHA before compilation.
+
+On tx-node materialize only the verified runtime assets required at the compiled paths, including `plugins/generic-ytdlp/worker/worker.py` and any test fixture files actually used. Keep the absolute source-root identity in the local trusted runbook/manifest; public Evidence may record the layout ID and verification result without unrelated host paths. Do not recreate hosted `/home/runner` paths on tx-node, patch the frozen Rust entrypoint, binary-rewrite paths, or relax sandbox/worker checks to make the artifact run. If the shared dedicated layout cannot be established, BLOCK with that exact incompatibility.
+
+J1 must test the artifact in a fresh consumer context without the original Actions checkout or build tree. Only explicitly packaged assets at the declared source root are available. Prove worker lookup, offline runtime lookup and fixed-sibling sandbox startup there; a test inside the original build checkout is insufficient. Negative missing/mutated worker and missing/mutated sandbox cases must fail before executing unverified content. Admission verifies these assets before every launch; the smoke binary itself is not claimed to authenticate its worker file.
+
+### Direct execution of test artifacts
+
+Use hosted `cargo test --no-run --message-format=json` or equivalent structured Cargo output to enumerate the exact required executable artifacts; never guess hashed filenames. Build the required sandbox binary as well. For the deterministic runtime probe, the admitted launcher supplies a minimal environment with:
+
+- `CARGO_BIN_EXE_ytdlp-sandbox`: exact verified sandbox from the same runtime source;
+- `YTDLP_SOURCE`: verified frozen offline site-packages;
+- `GENERIC_YTDLP_TEST_WORKER_PATH`: verified packaged worker path when using that existing test seam;
+- `PYTHON`: a verified fixed interpreter path selected during readiness, never caller-supplied executable code.
+
+These are test-only bindings; production smoke keeps its fixed interpreter/compiled worker/sibling sandbox discovery. Inspect individual selectors for extra fixtures/dependencies and package them explicitly. Report expected and observed nonzero test counts and selected names; `exit 0` with zero matching tests is not PASS. Target commands execute the prebuilt test binary directly, never cargo. Normalized reporter output must not retain raw failure dumps; a failing test remains FAIL/BLOCKED even when diagnostics are redacted.
+
+### Provenance and safe admission
+
+Record distinct immutable identities: Task/wrapper Candidate, workflow definition ref/SHA, frozen runtime source SHA, build run/attempt/job, artifact ID/digest, target triple/ABI/toolchain and each executable/worker/helper/lock/fixture hash. A manifest that merely states a Candidate is not proof that source was built: hosted checkout assertions and run/job records must agree. Fetch expected archive digest/identity through the authenticated GitHub control plane; do not trust a checksum sidecar solely because it arrived with the archive. Verify the frozen wheel using the existing repository trust anchor as well.
+
+Before target execution, reject wrong Candidate/runtime/ABI, tampered files, absolute/traversing archive entries, symlink/hardlink/device entries, unexpected executables and `.git`/credential/profile material. Bound archive file count and expanded size in the implementation before tests, extract non-root into an owned empty staging directory, verify all declared assets, then publish the owned runtime directory. Fail without execution on mismatch; clean staging. Prove mutation/traversal/missing-asset rejection in hosted negative tests. Preserve the same source/assets/manifest boundary for target J2 and the #67 launcher.
 
 ## Implementation boundaries / files
 
@@ -57,7 +89,7 @@ If helpers change, required hosted commands include their focused tests plus exi
 
 ## Success Criteria
 
-All C1–C7 PASS; all compiler/build invocations are bound to remote GitHub-hosted Actions, and live launchers/probes require no compiler or build-capable package installation; exact frozen runtime can be prepared safely on actual tx-node; final runtime non-root/no-sudo/no extra capabilities; existing sandbox and broker tests truly run; local fixture browser access is proved with actual topology; downstream runbook specifies identities, source/cache/bootstrap command/cleanup and artifact regeneration; required Actions pass; no live site/phone operation; changes and sanitized Evidence are durable Candidate/PR.
+All C1–C7 PASS; all compiler/build invocations are bound to remote GitHub-hosted Actions, and live launchers/probes require no compiler or build-capable package installation; exact frozen runtime can be prepared safely on actual tx-node; final runtime non-root/no-sudo/no extra capabilities; existing sandbox and broker tests truly run; local fixture browser access is proved with actual topology; downstream runbook specifies identities, source/cache/bootstrap command/cleanup and artifact regeneration; fresh-consumer path/worker tests, direct test counts and safe-admission negatives PASS; required Actions pass; no live site/phone operation; changes and sanitized Evidence are durable Candidate/PR.
 
 A missing browser/access/runtime requirement is BLOCKED, not CONDITIONAL PASS. Host setup success alone is not #67/#68 success. No known unsupported ABI may be hidden by recording build-only PASS.
 
@@ -69,7 +101,7 @@ Record Task/Attempt, Planning Base, Task Candidate, frozen runtime SHA, Orchestr
 
 Runtime incompatibility or missing capabilities: bounded BLOCKER REPORT with the failed layer and reusable Candidate/PR; no package/host/restart loops or security relaxation. SSH unavailable: no alternate host/phone substitution. Ordinary in-scope helper/test bugs can be fixed in the same Attempt; independent semantic blocker requires Coordinator.
 
-After Final Acceptance, Coordinator publishes #67 R19 using the actual accepted runbook/host Evidence. #67 will run its own current site preflight; #146 does not certify reachability. Worker reports → review/blocked → release owner → STOP; never publishes #67 itself.
+After Final Acceptance, Coordinator publishes #67 R20 using the actual accepted runbook/host Evidence. #67 will run its own current site preflight; #146 does not certify reachability. Worker reports → review/blocked → release owner → STOP; never publishes #67 itself.
 
 ## Freshness / Integration Contract
 
@@ -78,7 +110,7 @@ Semantic authorities: R008/#79/#83/#85/#95/#97/#99/#114 and non-phone security b
 Semantic freshness domains: scripts/generic-ytdlp-real-smoke.sh; offline runtime helper/lock; plugins/generic-ytdlp runtime/smoke/sandbox; gateway-egress; relevant security docs.
 Integration surfaces: Cargo.toml/Cargo.lock and existing runtime workflow/toolchain.
 Task-owned surfaces: scripts/non-phone-execution/ and focused tests/workflow if needed; this runbook/Evidence.
-Authority/domain → Claim mapping: provenance/build C1/C2/C4; privilege/sandbox C3/C4/C6; browser topology C5/C6; runbook C7.
-JI1: focused new helper tests + existing offline runtime/cache tests on exact Integration Candidate.
+Authority/domain → Claim mapping: provenance/build/layout/admission C1/C2/C4/C6; privilege/sandbox C3/C4/C6; browser topology C5/C6; runbook C7.
+JI1: hosted focused helper/admission/fresh-consumer tests + existing offline runtime/cache tests on exact Integration Candidate.
 JI2: deterministic runtime/clean-build tests on GitHub-hosted Actions only when shared runtime build surfaces overlap; rerun live J2/J3 only when host/runtime/browser semantics changed.
 Unrelated main changes preserve exact-Candidate Evidence. Integration overlap composes with Coordinator-frozen base and runs JI; semantic change reruns mapped Claims; contract-invalidating change returns to draft/publication. No blanket latest-main/full rerun rule.
