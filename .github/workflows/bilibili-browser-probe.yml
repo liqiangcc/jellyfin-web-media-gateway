@@ -68,8 +68,10 @@ jobs:
         run: |
           for candidate in google-chrome-stable google-chrome chromium chromium-browser; do
             if command -v "$candidate" >/dev/null 2>&1; then
-              echo "CHROME_PATH=$(command -v "$candidate")" >> "$GITHUB_ENV"
-              "$candidate" --version
+              browser_path="$(command -v "$candidate")"
+              CHROME_PATH="$browser_path"
+              echo "CHROME_PATH=$CHROME_PATH" >> "$GITHUB_ENV"
+              "$CHROME_PATH" --version
               break
             fi
           done
@@ -124,8 +126,10 @@ jobs:
         run: |
           for candidate in google-chrome-stable google-chrome chromium chromium-browser; do
             if command -v "$candidate" >/dev/null 2>&1; then
-              echo "BROWSER_VERSION=$($candidate --version | head -1)" >> "$GITHUB_ENV"
-              echo "CHROME_PATH=$(command -v "$candidate")" >> "$GITHUB_ENV"
+              browser_path="$(command -v "$candidate")"
+              CHROME_PATH="$browser_path"
+              echo "BROWSER_VERSION=$($CHROME_PATH --version | head -1)" >> "$GITHUB_ENV"
+              echo "CHROME_PATH=$CHROME_PATH" >> "$GITHUB_ENV"
               break
             fi
           done
