@@ -5,7 +5,7 @@
  * returns an Error message, URL, host, address, header, certificate, or body.
  */
 
-export const DIAGNOSTIC_SCHEMA_VERSION = 1;
+export const DIAGNOSTIC_SCHEMA_VERSION = 2;
 export const DIAGNOSTIC_PHASES = Object.freeze([
   'dns_address_policy',
   'broker_connect',
@@ -16,34 +16,49 @@ export const DIAGNOSTIC_PHASES = Object.freeze([
   'unknown',
 ]);
 
+// Transport stages are deliberately finite.  They describe the first
+// boundary at which the broker can make a bounded observation; they never
+// expose an address, certificate, URL, or network error text.
+export const TRANSPORT_STAGES = Object.freeze([
+  'resolve_policy',
+  'tcp_connect',
+  'tls_handshake',
+  'proxy_response',
+  'downstream_close',
+  'unknown',
+]);
+export const TRANSPORT_OUTCOMES = Object.freeze(['success', 'failure', 'unknown']);
+
 const MAX_REQUESTS = 200;
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 const MAX_METADATA_BYTES = 1024 * 1024;
 
 const ERROR_CODES = Object.freeze([
-  ['ERR_SSL_PROTOCOL_ERROR', 'tls_handshake', 'tls_protocol_error'],
-  ['ERR_TLS_CERT_ALTNAME_INVALID', 'tls_handshake', 'tls_certificate_error'],
-  ['CERT_HAS_EXPIRED', 'tls_handshake', 'tls_certificate_error'],
-  ['UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'tls_handshake', 'tls_certificate_error'],
-  ['ERR_TLS_HANDSHAKE_TIMEOUT', 'tls_handshake', 'tls_timeout'],
-  ['ERR_DNS_ADDRESS_POLICY', 'dns_address_policy', 'address_policy_denied'],
-  ['ERR_DNS_PIN_CHANGED', 'dns_address_policy', 'address_pin_changed'],
-  ['EAI_AGAIN', 'dns_address_policy', 'dns_lookup_failed'],
-  ['EAI_NONAME', 'dns_address_policy', 'dns_lookup_failed'],
-  ['ENOTFOUND', 'dns_address_policy', 'dns_lookup_failed'],
-  ['BROKER_CONNECT', 'broker_connect', 'broker_connect_failed'],
-  ['ECONNREFUSED', 'broker_connect', 'connection_refused'],
-  ['ECONNRESET', 'broker_connect', 'connection_reset'],
-  ['ETIMEDOUT', 'broker_connect', 'connection_timeout'],
-  ['ERR_PROXY_CONNECTION_FAILED', 'proxy_response', 'proxy_connection_failed'],
-  ['ERR_TUNNEL_CONNECTION_FAILED', 'proxy_response', 'proxy_tunnel_failed'],
-  ['PROXY_RESPONSE', 'proxy_response', 'proxy_response_invalid'],
-  ['ERR_HTTP_RESPONSE_CODE_FAILURE', 'http_status', 'http_status_error'],
-  ['NAVIGATION_TIMEOUT', 'chromium_navigation', 'navigation_timeout'],
-  ['ERR_ABORTED', 'chromium_navigation', 'navigation_aborted'],
+  ['ERR_SSL_PROTOCOL_ERROR', 'tls_handshake', 'tls_protocol_error', 'tls_handshake'],
+  ['ERR_TLS_CERT_ALTNAME_INVALID', 'tls_handshake', 'tls_certificate_error', 'tls_handshake'],
+  ['CERT_HAS_EXPIRED', 'tls_handshake', 'tls_certificate_error', 'tls_handshake'],
+  ['UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'tls_handshake', 'tls_certificate_error', 'tls_handshake'],
+  ['ERR_TLS_HANDSHAKE_TIMEOUT', 'tls_handshake', 'tls_timeout', 'tls_handshake'],
+  ['ERR_DNS_ADDRESS_POLICY', 'dns_address_policy', 'address_policy_denied', 'resolve_policy'],
+  ['ERR_DNS_PIN_CHANGED', 'dns_address_policy', 'address_pin_changed', 'resolve_policy'],
+  ['EAI_AGAIN', 'dns_address_policy', 'dns_lookup_failed', 'resolve_policy'],
+  ['EAI_NONAME', 'dns_address_policy', 'dns_lookup_failed', 'resolve_policy'],
+  ['ENOTFOUND', 'dns_address_policy', 'dns_lookup_failed', 'resolve_policy'],
+  ['BROKER_CONNECT', 'broker_connect', 'broker_connect_failed', 'unknown'],
+  ['ECONNREFUSED', 'broker_connect', 'connection_refused', 'tcp_connect'],
+  ['ECONNRESET', 'broker_connect', 'connection_reset', 'tcp_connect'],
+  ['ETIMEDOUT', 'broker_connect', 'connection_timeout', 'tcp_connect'],
+  ['ERR_PROXY_CONNECTION_FAILED', 'proxy_response', 'proxy_connection_failed', 'proxy_response'],
+  ['ERR_TUNNEL_CONNECTION_FAILED', 'proxy_response', 'proxy_tunnel_failed', 'proxy_response'],
+  ['PROXY_RESPONSE', 'proxy_response', 'proxy_response_invalid', 'proxy_response'],
+  ['ERR_HTTP_RESPONSE_CODE_FAILURE', 'http_status', 'http_status_error', 'downstream_close'],
+  ['NAVIGATION_TIMEOUT', 'chromium_navigation', 'navigation_timeout', 'downstream_close'],
+  ['ERR_ABORTED', 'chromium_navigation', 'navigation_aborted', 'downstream_close'],
 ]);
 
 const PHASE_HINTS = new Set(DIAGNOSTIC_PHASES);
+const TRANSPORT_STAGE_SET = new Set(TRANSPORT_STAGES);
+const TRANSPORT_OUTCOME_SET = new Set(TRANSPORT_OUTCOMES);
 
 function boundedCounter(value, maximum) {
   return Number.isSafeInteger(value) && value >= 0 && value <= maximum ? value : 0;
@@ -64,6 +79,24 @@ function hintMatch(value) {
   return typeof value === 'string' && PHASE_HINTS.has(value) ? value : undefined;
 }
 
+function transportStage(value) {
+  return typeof value === 'string' && TRANSPORT_STAGE_SET.has(value) ? value : undefined;
+}
+
+function transportOutcome(value) {
+  return typeof value === 'string' && TRANSPORT_OUTCOME_SET.has(value) ? value : undefined;
+}
+
+function stageFor(phase, match, explicit) {
+  return transportStage(explicit) || match?.[3] || ({
+    dns_address_policy: 'resolve_policy',
+    tls_handshake: 'tls_handshake',
+    proxy_response: 'proxy_response',
+    chromium_navigation: 'downstream_close',
+    http_status: 'downstream_close',
+  }[phase] || 'unknown');
+}
+
 /**
  * Classify a coarse failure DTO.  Unknown fields are ignored and only
  * allowlisted codes become output, so passing an Error message cannot leak it.
@@ -78,6 +111,8 @@ export function classifyFailure(input = {}) {
     phase,
     reason,
     status_class: statusClass(value.status),
+    transport_stage: stageFor(phase, match, value.transport_stage),
+    transport_outcome: transportOutcome(value.transport_outcome) || 'failure',
     request_count: boundedCounter(value.request_count, MAX_REQUESTS),
     response_bytes: boundedCounter(value.response_bytes, MAX_RESPONSE_BYTES),
     metadata_bytes: boundedCounter(value.metadata_bytes, MAX_METADATA_BYTES),
@@ -98,6 +133,23 @@ export function classifyError(error, phaseHint, counters = {}) {
     response_bytes: counters.response_bytes,
     metadata_bytes: counters.metadata_bytes,
     status: counters.status,
+    transport_stage: counters.transport_stage,
+  });
+}
+
+/** Create a monotonic, idempotent transport observation for the broker. */
+export function classifyTransport(input = {}) {
+  const value = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const stage = transportStage(value.stage) || 'unknown';
+  const outcome = transportOutcome(value.outcome) || 'unknown';
+  return Object.freeze({
+    schema_version: DIAGNOSTIC_SCHEMA_VERSION,
+    transport_stage: stage,
+    transport_outcome: outcome,
+    status_class: statusClass(value.status),
+    request_count: boundedCounter(value.request_count, MAX_REQUESTS),
+    response_bytes: boundedCounter(value.response_bytes, MAX_RESPONSE_BYTES),
+    metadata_bytes: boundedCounter(value.metadata_bytes, MAX_METADATA_BYTES),
   });
 }
 

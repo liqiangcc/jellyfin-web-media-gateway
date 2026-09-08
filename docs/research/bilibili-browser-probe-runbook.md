@@ -134,6 +134,24 @@ certificate, header, body, profile, cookie, authorization, and candidate data.
 Treat a phase result as an explanation of the blocked layer only. It does not
 produce a media candidate or change #166's source-portability result.
 
+## Transport preflight (#182)
+
+The transport diagnostic adds schema version 2 fields `transport_stage` and
+`transport_outcome`. The finite stages are `resolve_policy`, `tcp_connect`,
+`tls_handshake`, `proxy_response`, `downstream_close`, and `unknown`; outcomes
+are `success`, `failure`, and `unknown`. A generic `broker_connect` failure is
+therefore retained as `unknown` until a bounded transport boundary is known.
+
+The target-only preflight entry point is
+`experiments/bilibili-browser-probe/transport-preflight.mjs`. It performs one
+broker CONNECT to the Bilibili plugin-owned public authority and immediately
+closes the socket. It accepts no URL, host, selector, proxy, profile, header,
+or credential input, and it never opens a page or requests media. Hosted
+Actions must build and manifest-verify the exact Candidate artifact before a
+single `gateway-verify` tx-node preflight is allowed. An observed stage is
+diagnostic evidence only; it does not authorize an egress relay or unlock
+Issue #166.
+
 Do not click play or trigger full-video preload. The probe observes bounded
 response metadata, keeps short-lived candidate descriptors server-side, closes
 the browser, and then performs only the independent bounded reads allowed by
