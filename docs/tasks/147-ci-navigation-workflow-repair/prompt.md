@@ -1,7 +1,7 @@
-# Session Bootstrap — Issue #67
+# Session Bootstrap — Issue #147
 
-GitHub Issue: https://github.com/liqiangcc/jellyfin-web-media-gateway/issues/67
-Task Contract: `docs/tasks/67-generic-ytdlp-bilibili-real/task.md`
+GitHub Issue: https://github.com/liqiangcc/jellyfin-web-media-gateway/issues/147
+Task Contract: `docs/tasks/147-ci-navigation-workflow-repair/task.md`
 Expected Worker: Codex Cloud with capabilities required by task.md
 Eligible environment after publication: `env:cloud`
 Handoff profile: `docs/tasks/handoffs/cloud.md`

@@ -1,5 +1,9 @@
 # Implementation Contracts
 
+## 普通 Linux 功能阶段的组合边界
+
+暂缓手机部署不改变本文任何 SourceLocator、ResolvedMedia、Playback、SiteAccess 或 Egress 契约。#67 证明受控真实解析，#68 通过产品 API 组合实际播放；测试运行时显式装配仍与默认生产 DisabledRunner 分开。不得直接注入媒体 URL/ResolvedMedia、读取已有浏览器 Cookie/profile 或在 Core 添加 B 站分支来替代插件路径。
+
 本文件定义开始写 Core 代码前必须稳定的最小可编码契约。它不要求最终 Rust 类型、HTTP JSON 字段逐字一致，但实现不得破坏这里定义的状态所有权、版本语义和安全边界。
 
 ## 1. 依赖方向
