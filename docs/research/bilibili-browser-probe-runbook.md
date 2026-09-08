@@ -21,6 +21,12 @@ If the #169 artifact manifest, exact Candidate/run/job provenance, browser
 admission, or egress policy cannot be verified, stop with `BLOCKED`; do not
 enable a live mode.
 
+The accepted bundle carries its own exact `playwright-core@1.55.0` Node runtime
+and must be copied to a clean directory without `npm install` or a workspace
+`node_modules` link. The target supplies an external system Chrome executable;
+Chrome/Chromium is not packaged. Verify the manifest and package inventory
+before invoking the downloaded entry.
+
 ## Frozen provenance
 
 At #166 publication, record the accepted #169 values in the Task contract and

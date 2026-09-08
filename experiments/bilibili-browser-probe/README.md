@@ -15,8 +15,10 @@ public-address checks, redirects and CONNECT. Candidate URLs remain ephemeral
 server-side and only bounded sanitized metadata is emitted. This is not a
 production SiteAdapter and is not enabled by Gateway.
 
-The hosted workflow installs pinned Playwright packages, discovers Chromium,
-runs contract, containment and static-boundary tests, then builds a
-manifest-addressed artifact. The artifact consumer starts from the downloaded
-artifact and reads muxed plus audio/video-separated synthetic media after the
-browser exits. Hosted CI never enables live mode.
+The hosted workflow installs the exact locked `playwright-core@1.55.0` package
+with lifecycle scripts disabled, copies its regular runtime files into the
+manifest-addressed artifact, and discovers an external system Chrome. The
+artifact contains no browser binary and a clean target directory needs no
+`npm install`, workspace `node_modules`, profile, proxy, or secret. Verify the
+downloaded manifest before running the bundle's no-install command. Hosted CI
+never enables live mode.

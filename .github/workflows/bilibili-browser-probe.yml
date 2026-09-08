@@ -23,7 +23,6 @@ concurrency:
 
 env:
   CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
-  PLAYWRIGHT_VERSION: '1.55.0'
 
 jobs:
   probe-contract:
@@ -40,10 +39,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install pinned browser test library
-        run: npm install --no-save --ignore-scripts "playwright-core@${PLAYWRIGHT_VERSION}"
+      - name: Install locked runtime with scripts disabled
+        run: |
+          runtime="$RUNNER_TEMP/probe-runtime"
+          mkdir -p "$runtime"
+          cp experiments/bilibili-browser-probe/package.json experiments/bilibili-browser-probe/package-lock.json "$runtime/"
+          npm ci --ignore-scripts --no-audit --no-fund --prefix "$runtime"
+          test "$(node -p "require('$runtime/node_modules/playwright-core/package.json').version")" = 1.55.0
       - name: Run synthetic contract and leakage negatives
-        run: node --test experiments/bilibili-browser-probe/contract.test.mjs
+        env:
+          PLAYWRIGHT_RUNTIME_ROOT: ${{ runner.temp }}/probe-runtime
+        run: node --test experiments/bilibili-browser-probe/contract.test.mjs experiments/bilibili-browser-probe/artifact.test.mjs
 
   probe-containment:
     name: J2 Chromium broker containment and cleanup
@@ -59,10 +65,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install pinned browser and test library
+      - name: Install locked runtime with scripts disabled
         run: |
-          npm install --no-save "playwright@${PLAYWRIGHT_VERSION}"
-          npx playwright install chromium
+          runtime="$RUNNER_TEMP/probe-runtime"
+          mkdir -p "$runtime"
+          cp experiments/bilibili-browser-probe/package.json experiments/bilibili-browser-probe/package-lock.json "$runtime/"
+          npm ci --ignore-scripts --no-audit --no-fund --prefix "$runtime"
+          cp -a "$runtime/node_modules" "$GITHUB_WORKSPACE/node_modules"
+      - uses: browser-actions/setup-chrome@v2
       - name: Discover hosted Chromium
         shell: bash
         run: |
@@ -76,16 +86,8 @@ jobs:
             fi
           done
           if [ -z "${CHROME_PATH:-}" ]; then
-            browser_path="$(node -e "const {chromium}=require('playwright'); process.stdout.write(chromium.executablePath())" 2>/dev/null || true)"
-            if [ ! -x "$browser_path" ]; then
-              browser_path="$(find "$HOME/.cache/ms-playwright" -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) | head -1)"
-            fi
-            echo "resolved_browser_path=${browser_path:-none}"
-            find "$HOME/.cache/ms-playwright" -maxdepth 4 -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) -print | head -20 || true
-            chmod +x "$browser_path"
-            test -x "$browser_path"
-            echo "CHROME_PATH=$browser_path" >> "$GITHUB_ENV"
-            "$browser_path" --version
+            echo "no external system Chrome found" >&2
+            exit 1
           fi
           test -n "${CHROME_PATH:-}"
       - name: Run real Chromium synthetic containment probe
@@ -129,10 +131,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install pinned browser and runtime dependency
+      - name: Install locked runtime with scripts disabled
         run: |
-          npm install --no-save "playwright@${PLAYWRIGHT_VERSION}"
-          npx playwright install chromium
+          runtime="$RUNNER_TEMP/probe-runtime"
+          mkdir -p "$runtime"
+          cp experiments/bilibili-browser-probe/package.json experiments/bilibili-browser-probe/package-lock.json "$runtime/"
+          npm ci --ignore-scripts --no-audit --no-fund --prefix "$runtime"
+      - uses: browser-actions/setup-chrome@v2
       - name: Discover hosted Chromium
         shell: bash
         run: |
@@ -146,21 +151,13 @@ jobs:
             fi
           done
           if [ -z "${CHROME_PATH:-}" ]; then
-            browser_path="$(node -e "const {chromium}=require('playwright'); process.stdout.write(chromium.executablePath())" 2>/dev/null || true)"
-            if [ ! -x "$browser_path" ]; then
-              browser_path="$(find "$HOME/.cache/ms-playwright" -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) | head -1)"
-            fi
-            echo "resolved_browser_path=${browser_path:-none}"
-            find "$HOME/.cache/ms-playwright" -maxdepth 4 -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) -print | head -20 || true
-            chmod +x "$browser_path"
-            test -x "$browser_path"
-            echo "BROWSER_VERSION=$($browser_path --version | head -1)" >> "$GITHUB_ENV"
-            echo "CHROME_PATH=$browser_path" >> "$GITHUB_ENV"
+            echo "no external system Chrome found" >&2
+            exit 1
           fi
           test -n "${CHROME_PATH:-}"
       - name: Build and verify manifest-addressed artifact
         run: |
-          CANDIDATE_SHA="$CANDIDATE_SHA" BROWSER_VERSION="$BROWSER_VERSION" node experiments/bilibili-browser-probe/artifact.mjs build "$RUNNER_TEMP/probe-artifact"
+          CANDIDATE_SHA="$CANDIDATE_SHA" BROWSER_VERSION="$BROWSER_VERSION" PLAYWRIGHT_RUNTIME_ROOT="$RUNNER_TEMP/probe-runtime" node experiments/bilibili-browser-probe/artifact.mjs build "$RUNNER_TEMP/probe-artifact"
           CANDIDATE_SHA="$CANDIDATE_SHA" node experiments/bilibili-browser-probe/artifact.mjs verify "$RUNNER_TEMP/probe-artifact"
           tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/bilibili-browser-probe.tar.gz" probe-artifact
           sha256sum "$RUNNER_TEMP/bilibili-browser-probe.tar.gz" | tee "$RUNNER_TEMP/archive.sha256"
@@ -188,10 +185,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install pinned browser and runtime dependency
-        run: |
-          npm install --no-save "playwright@${PLAYWRIGHT_VERSION}"
-          npx playwright install chromium
+      - uses: browser-actions/setup-chrome@v2
       - name: Download artifact produced by J3a
         uses: actions/download-artifact@v4
         with:
@@ -203,20 +197,11 @@ jobs:
           bundle="$RUNNER_TEMP/downloaded/probe-artifact"
           test -f "$bundle/manifest.json"
           CANDIDATE_SHA="$CANDIDATE_SHA" node "$bundle/experiments/bilibili-browser-probe/artifact.mjs" verify "$bundle"
-          ln -s "$GITHUB_WORKSPACE/node_modules" "$bundle/node_modules"
           browser_path=""
           for candidate in google-chrome-stable google-chrome chromium chromium-browser; do
             if command -v "$candidate" >/dev/null 2>&1; then browser_path="$(command -v "$candidate")"; break; fi
           done
-          if [ -z "$browser_path" ]; then
-            browser_path="$(node -e "const {chromium}=require('playwright'); process.stdout.write(chromium.executablePath())" 2>/dev/null || true)"
-            if [ ! -x "$browser_path" ]; then
-              browser_path="$(find "$HOME/.cache/ms-playwright" -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) | head -1)"
-            fi
-          fi
           echo "resolved_browser_path=${browser_path:-none}"
-          find "$HOME/.cache/ms-playwright" -maxdepth 4 -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) -print | head -20 || true
-          if [ ! -x "$browser_path" ]; then chmod +x "$browser_path"; fi
           test -x "$browser_path"
           CANDIDATE_SHA="$CANDIDATE_SHA" CHROME_PATH="$browser_path" node "$bundle/experiments/bilibili-browser-probe/consumer.mjs" "$bundle"
 
