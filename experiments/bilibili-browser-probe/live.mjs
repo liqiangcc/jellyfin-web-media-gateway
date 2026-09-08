@@ -153,7 +153,7 @@ function requestOne(candidate, pins, maxBytes, signal) {
     if (target.protocol !== 'https:' || !allowedHost(target.hostname)) { reject(new Error('candidate host denied')); return; }
     publicAddressFor(target.hostname, pins).then((address) => {
       const rangeEnd = Math.max(0, maxBytes - 1);
-      const req = https.request({ host: address, port: 443, servername: target.hostname, path: `${target.pathname}${target.search}`, method: 'GET', headers: { host: target.hostname, range: `bytes=0-${rangeEnd}` }, rejectUnauthorized: true, signal }, (res) => {
+      const req = https.request({ host: address, port: 443, servername: target.hostname, path: `${target.pathname}${target.search}`, method: 'GET', headers: { host: target.hostname, range: `bytes=0-${rangeEnd}`, 'user-agent': 'bilibili-browser-probe/1', referer: 'https://www.bilibili.com/' }, rejectUnauthorized: true, signal }, (res) => {
         let bytes = 0;
         res.on('data', (chunk) => { bytes += chunk.length; if (bytes > maxBytes) req.destroy(new Error('independent request budget exceeded')); });
         res.on('end', () => resolve({ status_class: statusClass(res.statusCode), bytes, content_type: String(res.headers['content-type'] || 'unknown').split(';', 1)[0] }));
@@ -186,21 +186,27 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
       await route.continue({ headers });
     });
     const page = await context.newPage();
+    const pendingObservations = new Set();
     page.on('response', async (response) => {
-      if (candidates.size >= MAX_CANDIDATES || response.status() < 200 || response.status() >= 300) return;
-      let url;
-      try { url = new URL(response.url()); } catch { return; }
-      if (!allowedHost(url.hostname)) return;
-      const headers = await response.allHeaders().catch(() => ({}));
-      const contentType = String(headers['content-type'] || '').split(';', 1)[0];
-      if (!MEDIA_TYPES.test(contentType)) return;
-      const id = candidates.size + 1;
-      const mediaPath = `${url.pathname}${url.search}`.toLowerCase();
-      const role = contentType.startsWith('audio/') ? 'audio' : /(^|[/?=&_-])video([/?=&_.-]|$)/.test(mediaPath) ? 'video' : 'muxed';
-      candidates.set(id, { url: url.href, role, codec: 'unknown', container: contentType.split('/')[1] || 'unknown', status_class: statusClass(response.status()), range_supported: 'unknown', header_names: Object.keys(headers).filter((name) => SAFE_HEADERS.has(name.toLowerCase())), egress_allowed: true, expiry_hint: 'unknown' });
+      const task = (async () => {
+        if (candidates.size >= MAX_CANDIDATES || response.status() < 200 || response.status() >= 300) return;
+        let url;
+        try { url = new URL(response.url()); } catch { return; }
+        if (!allowedHost(url.hostname)) return;
+        const headers = await response.allHeaders().catch(() => ({}));
+        const contentType = String(headers['content-type'] || '').split(';', 1)[0];
+        if (!MEDIA_TYPES.test(contentType)) return;
+        const id = candidates.size + 1;
+        const mediaPath = `${url.pathname}${url.search}`.toLowerCase();
+        const role = contentType.startsWith('audio/') ? 'audio' : /(^|[/?=&_-])video([/?=&_.-]|$)/.test(mediaPath) ? 'video' : 'muxed';
+        candidates.set(id, { url: url.href, role, codec: 'unknown', container: contentType.split('/')[1] || 'unknown', status_class: statusClass(response.status()), range_supported: 'unknown', header_names: Object.keys(headers).filter((name) => SAFE_HEADERS.has(name.toLowerCase())), egress_allowed: true, expiry_hint: 'unknown' });
+      })();
+      pendingObservations.add(task);
+      task.finally(() => pendingObservations.delete(task));
     });
     await page.goto(admitted.navigation.url, { waitUntil: 'domcontentloaded', timeout: admitted.timeout_ms });
     await page.waitForTimeout(Math.min(3000, admitted.timeout_ms));
+    await Promise.allSettled([...pendingObservations]);
     const partMatch = new URL(page.url()).pathname.includes(`/video/${admitted.navigation.bvid}`) && new URL(page.url()).searchParams.get('p') === String(admitted.navigation.part);
     await context.close(); context = undefined; browser = undefined;
     const independent = [];
