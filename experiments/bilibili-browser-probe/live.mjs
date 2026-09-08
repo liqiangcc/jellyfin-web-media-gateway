@@ -16,6 +16,7 @@ import { chromium } from 'playwright-core';
 import { navigationDescriptor, validateLiveInvocation } from '../../plugins/bilibili/live_selector.mjs';
 import { summarizeObservation, SCHEMA_VERSION } from '../../plugins/bilibili/experimental_probe.mjs';
 import { classifyError, classifyTransport, diagnosticCounters } from './diagnostic.mjs';
+import { createFinalizer, terminationClass } from './finalizer.mjs';
 
 const MAX_REQUESTS = 200;
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
@@ -70,7 +71,11 @@ function statusClass(status) {
 }
 
 function recordFailure(state, error, phaseHint, status, transportStage) {
-  if (state.failure || state.transportFinalized) return state.failure;
+  // Once the broker has emitted a successful CONNECT response, a later socket
+  // callback belongs to the already observed transport outcome. The explicit
+  // response-budget path is the only failure that may supersede it before the
+  // tunnel cleanup callback runs.
+  if (state.failure || state.transportFinalized || state.transport && !state.responseLimitTriggered) return state.failure;
   const counters = diagnosticCounters(state);
   state.failure = classifyError(error, phaseHint, { ...counters, status, transport_stage: transportStage });
   return state.failure;
@@ -249,6 +254,8 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
   let context;
   let profile;
   let result;
+  let caughtError;
+  const finalizer = createFinalizer();
   try {
     profile = await createDisposableProfile();
     context = await chromium.launchPersistentContext(profile, { executablePath: browserPath, headless: true, timeout: admitted.timeout_ms, args: [
@@ -316,13 +323,9 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
     observation.containment = { broker: 'public-host-pinned', dns_pin: 'public-address-pinned', redirects: 'revalidated-per-hop', connect: 'public-host-only', websocket: 'no-upgrade-export', service_worker: 'disabled-for-observation', quic: 'disabled', secret_headers: 'stripped-and-not-exported' };
     observation.independent_consumer = { requests: independent.length, bytes: totalBytes, results: independent.map(({ role, status_class, bytes, content_type }) => ({ role, status_class, bytes, content_type })) };
     observation.cleanup = { browser_exit: 'complete', temporary_profile: 'removed-in-finally', ephemeral_candidates: 'cleared-in-finally' };
-    result = { schema_version: SCHEMA_VERSION, observation, denied_count: state.denied.length };
+    result = { schema_version: SCHEMA_VERSION, termination: 'normal', observation, denied_count: state.denied.length };
   } catch (error) {
-    result = {
-      schema_version: SCHEMA_VERSION,
-      diagnostic: state.failure || recordFailure(state, error, 'chromium_navigation'),
-      cleanup: { browser_exit: 'pending', temporary_profile: 'pending', ephemeral_candidates: 'pending' },
-    };
+    caughtError = error;
   } finally {
     candidates.clear();
     if (context) await context.close().catch(() => {});
@@ -331,6 +334,11 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
     broker.close();
     state.pins.clear(); state.denied.length = 0;
   }
-  if (result?.diagnostic) result.cleanup = { browser_exit: 'complete', temporary_profile: 'removed-in-finally', ephemeral_candidates: 'cleared-in-finally' };
+  if (!result) {
+    const diagnostic = state.failure || recordFailure(state, caughtError, 'chromium_navigation') || classifyError(caughtError, 'unknown', diagnosticCounters(state));
+    result = finalizer.finalize({ result: 'failure', termination: terminationClass(caughtError), diagnostic, activity: { page_navigation: true }, cleanup: {
+      browser_exit: 'complete', broker_close: 'complete', temporary_profile: 'complete', ephemeral_candidates: 'complete', dns_pins: 'complete', staging: 'unknown',
+    } });
+  }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }

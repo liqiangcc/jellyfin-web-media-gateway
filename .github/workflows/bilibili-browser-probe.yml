@@ -49,7 +49,7 @@ jobs:
       - name: Run synthetic contract and leakage negatives
         env:
           PLAYWRIGHT_RUNTIME_ROOT: ${{ runner.temp }}/probe-runtime
-        run: node --test experiments/bilibili-browser-probe/contract.test.mjs experiments/bilibili-browser-probe/diagnostic.test.mjs experiments/bilibili-browser-probe/transport.test.mjs experiments/bilibili-browser-probe/artifact.test.mjs
+        run: node --test experiments/bilibili-browser-probe/contract.test.mjs experiments/bilibili-browser-probe/diagnostic.test.mjs experiments/bilibili-browser-probe/transport.test.mjs experiments/bilibili-browser-probe/finalizer.test.mjs experiments/bilibili-browser-probe/artifact.test.mjs
 
   probe-containment:
     name: J2 Chromium broker containment and cleanup
@@ -234,6 +234,10 @@ jobs:
           const live = fs.readFileSync('experiments/bilibili-browser-probe/live.mjs', 'utf8');
           for (const marker of ['publicAddressFor', 'MAX_REQUESTS', 'MAX_INDEPENDENT_BYTES', 'serviceWorkers', 'launchPersistentContext', 'mkdtemp', 'pendingObservations', 'onTunnelClosed', 'transportFinalized', 'candidates.clear']) {
             if (!live.includes(marker)) throw new Error(`missing live boundary marker: ${marker}`);
+          }
+          const finalizer = fs.readFileSync('experiments/bilibili-browser-probe/finalizer.mjs', 'utf8');
+          for (const marker of ['createFinalizer', 'finalizeResult', 'terminationClass', 'ephemeral_candidates', 'dns_pins']) {
+            if (!finalizer.includes(marker)) throw new Error(`missing finalizer boundary marker: ${marker}`);
           }
           const preflight = fs.readFileSync('experiments/bilibili-browser-probe/transport-preflight.mjs', 'utf8');
           for (const marker of ['PREFLIGHT_AUTHORITY', 'method: \'CONNECT\'', 'page_navigation: false', 'media_request: false', 'selector: false', 'consumer: false']) {

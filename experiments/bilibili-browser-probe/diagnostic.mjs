@@ -34,6 +34,9 @@ const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 const MAX_METADATA_BYTES = 1024 * 1024;
 
 const ERROR_CODES = Object.freeze([
+  ['ERR_HTTP2_PROTOCOL_ERROR', 'chromium_navigation', 'http2_protocol_error', 'downstream_close'],
+  ['ERR_HTTP2_STREAM_ERROR', 'chromium_navigation', 'http2_stream_error', 'downstream_close'],
+  ['ERR_HTTP2_GOAWAY_SESSION', 'chromium_navigation', 'http2_session_closed', 'downstream_close'],
   ['ERR_SSL_PROTOCOL_ERROR', 'tls_handshake', 'tls_protocol_error', 'tls_handshake'],
   ['ERR_TLS_CERT_ALTNAME_INVALID', 'tls_handshake', 'tls_certificate_error', 'tls_handshake'],
   ['CERT_HAS_EXPIRED', 'tls_handshake', 'tls_certificate_error', 'tls_handshake'],
@@ -45,6 +48,11 @@ const ERROR_CODES = Object.freeze([
   ['EAI_NONAME', 'dns_address_policy', 'dns_lookup_failed', 'resolve_policy'],
   ['ENOTFOUND', 'dns_address_policy', 'dns_lookup_failed', 'resolve_policy'],
   ['BROKER_CONNECT', 'broker_connect', 'broker_connect_failed', 'unknown'],
+  ['ERR_CONNECTION_CLOSED', 'chromium_navigation', 'connection_closed', 'downstream_close'],
+  ['ERR_CONNECTION_ABORTED', 'chromium_navigation', 'connection_aborted', 'downstream_close'],
+  ['ERR_CONNECTION_RESET', 'chromium_navigation', 'connection_reset', 'tcp_connect'],
+  ['ERR_CONNECTION_REFUSED', 'chromium_navigation', 'connection_refused', 'tcp_connect'],
+  ['ERR_CONNECTION_TIMED_OUT', 'chromium_navigation', 'connection_timeout', 'tcp_connect'],
   ['ECONNREFUSED', 'broker_connect', 'connection_refused', 'tcp_connect'],
   ['ECONNRESET', 'broker_connect', 'connection_reset', 'tcp_connect'],
   ['ETIMEDOUT', 'broker_connect', 'connection_timeout', 'tcp_connect'],
@@ -72,7 +80,14 @@ function statusClass(status) {
 function codeMatch(value) {
   if (typeof value !== 'string' || value.length === 0 || value.length > 128) return undefined;
   const normalized = value.toUpperCase();
-  return ERROR_CODES.find(([marker]) => normalized.includes(marker));
+  return ERROR_CODES.find(([marker]) => {
+    if (normalized === marker) return true;
+    // Chromium emits markers as `net::ERR_*`; Node emits them after a
+    // whitespace boundary.  Avoid matching arbitrary query/header text or
+    // identifiers such as NOT_ERR_* supplied by an untrusted caller.
+    const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?:^|NET::|\\s)${escaped}(?:$|\\s|[^A-Z0-9_])`).test(normalized);
+  });
 }
 
 function hintMatch(value) {

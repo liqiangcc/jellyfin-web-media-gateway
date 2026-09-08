@@ -6,6 +6,8 @@ import { once } from 'node:events';
 import { chromium } from 'playwright-core';
 import { summarizeObservation, rejectSensitiveInput, SCHEMA_VERSION } from '../../plugins/bilibili/experimental_probe.mjs';
 import { runLive } from './live.mjs';
+import { classifyError } from './diagnostic.mjs';
+import { finalizeResult, terminationClass } from './finalizer.mjs';
 
 const TIMEOUT_MS = 15_000;
 const MAX_REQUESTS = 200;
@@ -228,4 +230,31 @@ async function main() {
   await runSynthetic();
 }
 
-main().catch((error) => { process.stderr.write(`probe failed: ${error.message}\n`); process.exitCode = 1; });
+let resultPublished = false;
+
+function publishProcessFailure(reason, termination = 'error') {
+  if (resultPublished) return;
+  resultPublished = true;
+  const error = reason instanceof Error ? reason : undefined;
+  // Process-level failures can bypass the promise returned by main(). Keep
+  // their evidence finite and make cleanup uncertainty explicit.
+  const result = finalizeResult({ result: 'failure', termination: terminationClass(error, termination), diagnostic: classifyError(error, 'unknown'), activity: { page_navigation: false }, cleanup: {
+    browser_exit: 'unknown', broker_close: 'unknown', temporary_profile: 'unknown', ephemeral_candidates: 'unknown', dns_pins: 'unknown', staging: 'unknown',
+  } });
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`, () => { process.exitCode = 1; });
+}
+
+// These handlers cover errors/rejections and observable signals raised after
+// the normal promise path has been lost. They intentionally publish only the
+// same bounded result shape and never copy the process error text.
+process.once('uncaughtException', (error) => publishProcessFailure(error, 'error'));
+process.once('unhandledRejection', (reason) => publishProcessFailure(reason, 'error'));
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, () => publishProcessFailure(undefined, 'signal'));
+}
+
+main().then(() => {
+  resultPublished = true;
+}, (error) => {
+  publishProcessFailure(error, terminationClass(error));
+});
