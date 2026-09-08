@@ -87,6 +87,7 @@ async function mediaState(page) {
       paused: player?.paused ?? true,
       ended: player?.ended ?? false,
       error: error ? { code: error.code, message: error.message || '' } : null,
+      display: window.__displayPrep?.getMediaState?.() || null,
     };
   });
 }
@@ -134,6 +135,22 @@ async function activateAndAssertProgression(page) {
     throw new Error(`Display activation did not advance media: before=${before.currentTime} after=${after.currentTime} paused=${after.paused} error=${after.error?.code || 'none'}`);
   }
   return { before, after };
+}
+
+async function waitForDisplayState(page, state, target = null) {
+  await page.waitForFunction(({ state: expected, target: seekTarget }) => {
+    const player = document.querySelector('#player');
+    if (!player || player.error) return false;
+    if (expected === 'paused') return player.paused;
+    if (expected === 'playing') return !player.paused && player.currentTime > (seekTarget ?? 0) + 0.25;
+    if (expected === 'seeked') {
+      const displayState = window.__displayPrep?.getMediaState?.();
+      return displayState?.lastAppliedPositionMs === Math.round(seekTarget * 1000) && Math.abs(player.currentTime - seekTarget) < 0.75;
+    }
+    if (expected === 'stopped') return player.paused && player.currentTime <= 0.1;
+    return false;
+  }, { state, target }, { timeout: 15000 });
+  return mediaState(page);
 }
 
 function assertCleanBrowser(page, label) {
@@ -197,13 +214,46 @@ async function run() {
     activation: { user_gesture: true, before_current_time: activation.before.currentTime, after_current_time: activation.after.currentTime, progressed: true },
   };
 
-  for (const [command, expectedState] of [['pause', 'paused'], ['play', 'playing'], ['seek', 'playing'], ['stop', 'stopped']]) {
-    if (command === 'seek') await control.locator('#seek-position').fill('1200');
-    await control.locator(`#${command}`).click();
-    await control.waitForFunction(state => document.querySelector('#playback-state')?.textContent === state, expectedState, { timeout: 10000 });
-  }
+  const commandMedia = {};
+  const pausedBefore = await mediaState(display);
+  await control.locator('#pause').click();
+  await control.waitForFunction(() => document.querySelector('#playback-state')?.textContent === 'paused', null, { timeout: 10000 });
+  const paused = await waitForDisplayState(display, 'paused');
+  await display.waitForTimeout(800);
+  const pausedAfter = await mediaState(display);
+  if (Math.abs(pausedAfter.currentTime - paused.currentTime) > 0.1) throw new Error('Display media advanced after pause command');
+  commandMedia.pause = { before: pausedBefore, after: pausedAfter, server_state: 'paused', progression_stopped: true };
+
+  const playedBefore = await mediaState(display);
+  await control.locator('#play').click();
+  await control.waitForFunction(() => document.querySelector('#playback-state')?.textContent === 'playing', null, { timeout: 10000 });
+  const played = await waitForDisplayState(display, 'playing', playedBefore.currentTime);
+  if (played.paused || !(played.currentTime > playedBefore.currentTime + 0.25)) throw new Error('Display media did not resume after play command');
+  commandMedia.play = { before: playedBefore, after: played, server_state: 'playing', progression_resumed: true };
+
+  const seekTarget = 1.2;
+  await control.locator('#pause').click();
+  await control.waitForFunction(() => document.querySelector('#playback-state')?.textContent === 'paused', null, { timeout: 10000 });
+  const seekPause = await waitForDisplayState(display, 'paused');
+  await control.locator('#seek-position').fill('1200');
+  await control.locator('#seek').click();
+  await control.waitForFunction(() => document.querySelector('#playback-state')?.textContent === 'paused', null, { timeout: 10000 });
+  const seeked = await waitForDisplayState(display, 'seeked', seekTarget);
+  if (Math.abs(seeked.currentTime - seekTarget) >= 0.5) throw new Error(`Display media did not seek near ${seekTarget}s: ${seeked.currentTime}`);
+  commandMedia.seek = { target_seconds: seekTarget, before: seekPause, after: seeked, server_state: 'paused', target_applied: true };
+
+  await control.locator('#play').click();
+  await control.waitForFunction(() => document.querySelector('#playback-state')?.textContent === 'playing', null, { timeout: 10000 });
+  const resumedAfterSeek = await waitForDisplayState(display, 'playing', seekTarget);
+  commandMedia.play_after_seek = { after: resumedAfterSeek, server_state: 'playing', progression_resumed: true };
+
+  await control.locator('#stop').click();
+  await control.waitForFunction(() => document.querySelector('#playback-state')?.textContent === 'stopped', null, { timeout: 10000 });
+  const stopped = await waitForDisplayState(display, 'stopped');
+  if (!stopped.paused || stopped.currentTime > 0.1) throw new Error(`Display media did not stop/reset: paused=${stopped.paused} currentTime=${stopped.currentTime}`);
+  commandMedia.stop = { after: stopped, server_state: 'stopped', reset_to_start: true };
   evidence.production_path.push('/control?session_id=<id> → play → pause → seek → stop');
-  evidence.claims.C6 = { commands: ['play', 'pause', 'seek', 'stop'], revision_aware: true };
+  evidence.claims.C6 = { commands: ['play', 'pause', 'seek', 'stop'], revision_aware: true, display_media_sync: commandMedia };
 
   const sessionAState = await control.evaluate(async id => (await fetch(`/api/v1/control/${encodeURIComponent(id)}`)).json(), sessionId);
   if (sessionAState.now_playing?.state !== 'stopped') throw new Error('Session A was not stopped before repeated-use creation');
