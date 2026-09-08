@@ -87,6 +87,7 @@ async function mediaState(page) {
       paused: player?.paused ?? true,
       ended: player?.ended ?? false,
       error: error ? { code: error.code, message: error.message || '' } : null,
+      display: window.__displayPrep?.getMediaState?.() || null,
     };
   });
 }
@@ -142,7 +143,10 @@ async function waitForDisplayState(page, state, target = null) {
     if (!player || player.error) return false;
     if (expected === 'paused') return player.paused;
     if (expected === 'playing') return !player.paused && player.currentTime > (seekTarget ?? 0) + 0.25;
-    if (expected === 'seeked') return !player.paused && Math.abs(player.currentTime - seekTarget) < 0.5;
+    if (expected === 'seeked') {
+      const displayState = window.__displayPrep?.getMediaState?.();
+      return !player.paused && displayState?.lastAppliedPositionMs === Math.round(seekTarget * 1000) && Math.abs(player.currentTime - seekTarget) < 0.75;
+    }
     if (expected === 'stopped') return player.paused && player.currentTime <= 0.1;
     return false;
   }, { state, target }, { timeout: 15000 });
