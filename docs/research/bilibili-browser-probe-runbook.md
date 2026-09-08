@@ -57,8 +57,9 @@ acquisition.
    starting Chromium.
 2. Start the downloaded probe with the selected public content selector and no
    caller supplied URL, headers, profile, proxy, or CDP endpoint. The Bilibili
-   plugin constructs the page navigation descriptor; use its broker and
-   central egress policy. The explicit entry is:
+   plugin constructs the page navigation descriptor; use the experimental
+   fail-closed broker. This experiment does not prove production `EgressPolicy`
+   integration. The explicit entry is:
 
    ```text
    BILIBILI_PROBE_ALLOW_LIVE=1 node experiments/bilibili-browser-probe/probe.mjs \
