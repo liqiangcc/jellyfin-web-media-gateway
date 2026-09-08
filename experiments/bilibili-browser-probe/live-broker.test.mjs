@@ -33,8 +33,16 @@ function proxyGet(port, target) {
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString() }));
     });
+    req.setTimeout(3000, () => { req.destroy(new Error(`proxy request timeout: ${target}`)); });
     req.on('error', reject); req.end();
   });
+}
+
+function waitForEvent(emitter, event, label, timeout = 3000) {
+  return Promise.race([
+    once(emitter, event),
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timeout`)), timeout)),
+  ]);
 }
 
 test('the live broker enforces host, DNS, redirect and upgrade policy through one seam', async (t) => {
@@ -44,7 +52,7 @@ test('the live broker enforces host, DNS, redirect and upgrade policy through on
     resolveAddress: async (host) => { if (host === 'private.bilibili.com') throw new Error('non-public'); return '127.0.0.1'; },
   });
   const port = await listen(broker);
-  t.after(() => broker.close());
+  t.after(() => { broker.closeAllConnections?.(); return broker.close(); });
 
   assert.deepEqual(await proxyGet(port, 'https://www.bilibili.com/media'), { status: 200, body: '/media' });
   assert.equal((await proxyGet(port, 'https://private.bilibili.com/media')).status, 403);
@@ -55,7 +63,7 @@ test('the live broker enforces host, DNS, redirect and upgrade policy through on
   const socket = net.connect(port, '127.0.0.1');
   await once(socket, 'connect');
   socket.write('GET / HTTP/1.1\r\nHost: www.bilibili.com\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n');
-  const upgrade = await once(socket, 'data');
+  const upgrade = await waitForEvent(socket, 'data', 'upgrade');
   assert.match(upgrade[0].toString(), /403 Forbidden/);
   socket.destroy();
   assert.ok(state.denied.some((entry) => entry.kind === 'upgrade'));
@@ -71,11 +79,11 @@ test('CONNECT uses the same broker byte budget and denies private DNS', async (t
     connect: () => { const socket = net.connect(remotePort, '127.0.0.1'); socket.once('connect', () => socket.emit('secureConnect')); return socket; },
   });
   const port = await listen(broker);
-  t.after(() => broker.close());
+  t.after(() => { broker.closeAllConnections?.(); return broker.close(); });
   const client = net.connect(port, '127.0.0.1');
   await once(client, 'connect');
   client.write('CONNECT www.bilibili.com:443 HTTP/1.1\r\nHost: www.bilibili.com:443\r\n\r\n');
-  await once(client, 'close').catch(() => {});
+  await waitForEvent(client, 'close', 'CONNECT close').finally(() => client.destroy());
   assert.ok(state.responseBytes > state.responseLimit);
   assert.equal((await proxyGet(port, 'https://private.bilibili.com/final')).status, 403);
   client.destroy();
