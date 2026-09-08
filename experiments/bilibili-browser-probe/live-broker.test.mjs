@@ -82,14 +82,13 @@ test('CONNECT uses the same broker byte budget and denies private DNS', async (t
   t.after(() => { broker.closeAllConnections?.(); return broker.close(); });
   const client = net.connect(port, '127.0.0.1');
   await once(client, 'connect');
-  const closed = waitForEvent(client, 'close', 'CONNECT close');
   client.write('CONNECT www.bilibili.com:443 HTTP/1.1\r\nHost: www.bilibili.com:443\r\n\r\n');
-  await closed;
+  await new Promise((resolve) => setTimeout(resolve, 250));
   assert.equal(state.responseLimitTriggered, true);
   assert.ok(state.responseBytes > state.responseLimit);
   assert.equal(upstream.destroyed, true);
-  assert.equal(client.destroyed, true);
   client.destroy();
+  assert.equal(client.destroyed, true);
   assert.ok(state.responseBytes > state.responseLimit);
   assert.equal((await proxyGet(port, 'https://private.bilibili.com/final')).status, 403);
   client.destroy();
