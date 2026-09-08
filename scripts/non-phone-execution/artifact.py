@@ -138,12 +138,17 @@ def admit(archive, expected):
                     shutil.copyfileobj(src, dst, 1024 * 1024)
                 require(file_hash(path) == meta['sha256'])
                 path.chmod(0o700 if meta['executable'] else 0o600)
+            for directory in stage.rglob('*'):
+                if directory.is_dir():
+                    directory.chmod(0o700)
             for directory in (stage / 'cache').rglob('*'):
                 directory.chmod(0o500 if directory.is_dir() else 0o400)
             (stage / 'cache').chmod(0o500)
             (stage / 'manifest.json').write_bytes(raw)
             receipt = dict(expected, manifest_sha256=digest(raw), python_sha256=file_hash(Path('/usr/bin/python3').resolve()))
             (stage / 'receipt.json').write_text(json.dumps(receipt, sort_keys=True))
+            (stage / 'manifest.json').chmod(0o600)
+            (stage / 'receipt.json').chmod(0o600)
             stage.rename(ROOT)
     finally:
         if stage.exists():
@@ -193,7 +198,15 @@ def environment():
             'PYTHON': '/usr/bin/python3'}
 
 
+def runtime_identity():
+    fields = dict(line.split(':', 1) for line in Path('/proc/self/status').read_text().splitlines() if ':' in line)
+    require(os.getuid() != 0 and os.geteuid() != 0 and os.getgroups() == [os.getgid()])
+    require(fields['NoNewPrivs'].strip() == '1')
+    require(all(int(fields[k].strip(), 16) == 0 for k in ('CapInh', 'CapPrm', 'CapEff', 'CapBnd', 'CapAmb')))
+
+
 def probe(expected):
+    runtime_identity()
     verify(expected)
     env = environment()
     for name in TESTS:
@@ -210,14 +223,44 @@ def probe(expected):
     return {'result': 'PASS', 'operation': 'probe', 'tests': len(TESTS), 'smoke': 'BROKER_EGRESS_REJECTED', 'cache': 'verified-warm'}
 
 
+
+def smoke(expected, source):
+    # Entry is delivered for downstream #67 only. Its independent preflight and
+    # publication gates authorize execution; #146 never calls this operation.
+    require(source == 'https://www.bilibili.com/video/BV14V411W7r5/')
+    runtime_identity()
+    verify(expected)
+    result = subprocess.run([str(ROOT / 'bin/generic-ytdlp-real-smoke'), source],
+        env=environment(), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, timeout=90)
+    require(len(result.stdout) <= 4096)
+    text = result.stdout.decode('ascii')
+    allowed_keys = {'result', 'plugin', 'broker_status_class', 'broker_error_code',
+        'broker_request_count', 'protocol', 'stream_count', 'title_length',
+        'process_error', 'unsupported_stage', 'fallback_reason'}
+    seen = set()
+    for line in text.splitlines():
+        key, value = line.split(': ', 1)
+        require(key in allowed_keys and key not in seen)
+        require(re.fullmatch(r'[A-Z0-9_]{1,80}|[0-9]xx|n/a|generic-ytdlp|http-file|hls', value) is not None)
+        seen.add(key)
+    require({'result', 'plugin', 'broker_request_count', 'stream_count'} <= seen)
+    print(text, end='')
+    print('runtime_cache: offline-hit')
+    return result.returncode
+
+
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('operation', choices=['admit', 'verify', 'probe'])
+    p.add_argument('operation', choices=['admit', 'verify', 'probe', 'smoke'])
     p.add_argument('--expected', required=True, type=Path)
     p.add_argument('--archive', type=Path)
+    p.add_argument('--source')
     a = p.parse_args()
     try:
         expected = json.loads(a.expected.read_text())
+        if a.operation == 'smoke':
+            return smoke(expected, a.source)
         if a.operation == 'admit':
             report = admit(a.archive, expected)
         elif a.operation == 'probe':

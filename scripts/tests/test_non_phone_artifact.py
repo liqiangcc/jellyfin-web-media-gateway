@@ -48,7 +48,9 @@ class AdmissionTests(unittest.TestCase):
                 self.assertFalse(root.exists())
                 self.assertEqual(list(Path(temp).glob('admission-*')), [])
 
-    def test_report_never_forwards_runtime_output(self):
-        source = Path(a.__file__).read_text()
-        self.assertNotIn('cargo', source.lower().replace('cargo_bin_exe_ytdlp-sandbox', ''))
-        self.assertNotIn('pip', source.lower().replace('pipe', ''))
+    def test_unpublished_or_wrong_sample_never_executes(self):
+        with patch.object(a.subprocess, 'run') as run:
+            for source in ('https://user:secret@example.test/', 'https://example.test/'):
+                with self.assertRaises(a.AdmissionError):
+                    a.smoke({}, source)
+            run.assert_not_called()
