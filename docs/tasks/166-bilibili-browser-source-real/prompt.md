@@ -10,8 +10,8 @@ Expected environment label: env:cloud
 Downstream handoff profile: docs/tasks/handoffs/cloud.md
 ```
 
-读取 AGENTS.md 及其启动文档、GitHub Issue #166 全部相关历史、本目录 task.md、docs/tasks/issue-lifecycle-protocol.md、docs/tasks/execution-anchor-recovery-protocol.md、docs/tasks/freshness-integration-protocol.md 和 task.md 引用文档。
+读取 `AGENTS.md`、GitHub Issue #166 全部 relevant history、本目录 `task.md`、`docs/tasks/issue-lifecycle-protocol.md`、`docs/tasks/execution-anchor-recovery-protocol.md`、`docs/tasks/freshness-integration-protocol.md`、`docs/tasks/handoffs/README.md` 与 `cloud.md`，以及 task.md 引用的 canonical/research docs。
 
-从 GitHub 确认 ready + env eligibility + no active owner + Required Capabilities 才 claim；否则停止。候选/PR/状态从 Issue 读取，不从聊天猜测。按 task.md Freshness Contract 执行，不因无关 main 更新机械全量重跑。若有可恢复 Candidate/PR 优先续用。
+Publication Gate 已冻结 #169 live probe、#172 target runtime、tx-node admission、固定 selector 和 runbook；先从 GitHub read-back 验证 `status:ready + env:cloud + no active owner`，再 claim Attempt。只使用已下载的 target-runnable bundle：`playwright-core@1.55.0` 已随产物携带，tx-node 不得 npm install。所有编译/测试证据来自 GitHub Actions；不要本地编译、不要访问手机/TV/VNC/生产服务。
 
-claim 后记录 Attempt 并 in-progress；first coherent in-scope commit 尽早 push durable branch，适合时建立 draft PR/单次 EXECUTION CHECKPOINT。完成评论 EXECUTION REPORT → review；阻塞评论 BLOCKER REPORT → blocked；释放 owner 后 STOP。不自行 done/close 或启动下一项。模型/构建/实站权限约束以 task.md 为准。
+按 task.md 运行最多两次 clean anonymous tx-node browser sessions，执行 `bilibili:BV14V411W7r5:part-2`，记录脱敏 C0/C1/C2 Evidence。完成时按协议先评论 `[EXECUTION REPORT]`/`[BLOCKER REPORT]`，再切换 review/blocked、释放 ownership 并停止；不要自行关闭 Issue 或启动后续实现 Task。
