@@ -1,5 +1,7 @@
 # Session Bootstrap — Issue #146
 
+Before following any older Issue entry, read current AGENTS.md §4.1 and the latest task.md linked from the live Issue. All builds require GitHub-hosted Actions; target/workspace compile paths in earlier package revisions are superseded.
+
 GitHub Issue: https://github.com/liqiangcc/jellyfin-web-media-gateway/issues/146
 Task Contract: `docs/tasks/146-non-phone-execution-prep/task.md`
 Expected Worker: Codex Cloud with capabilities required by task.md

@@ -1,5 +1,7 @@
 # Coordinator Handoff — Non-phone Web delivery
 
+Build routing: AGENTS.md §4.1 requires remote GitHub-hosted Actions for every compilation/build, including test binaries. #146 R2 prepares verified artifacts and a compile-free launcher; #67 R19 consumes them. Never use old target-toolchain/cargo paths. Read actual live package links before claim.
+
 This is a project coordination/resume profile, not a Worker Task Contract. User direction: temporarily do not deploy the phone; complete ordinary Linux real Bilibili Web playback. Long-term phone/TV requirements are preserved. See docs/product-roadmap.md and docs/non-phone-web-playback-plan.md.
 
 ## Resume from GitHub
@@ -10,7 +12,7 @@ Active delivery graph:
 
 ```text
 #146 NON-PHONE-EXECUTION-PREP
-→ #67 R18 ordinary Linux real extraction
+→ #67 R19 ordinary Linux real extraction
 → #68 real Web product playback
 
 #147 navigation workflow repair — independent, no phone/site dependency
