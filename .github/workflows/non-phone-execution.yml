@@ -1,0 +1,85 @@
+name: non-phone-execution
+on:
+  push:
+    branches: ['worker/issue-146-*']
+permissions:
+  contents: read
+jobs:
+  helpers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Assert exact Candidate
+        env:
+          CANDIDATE: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE"
+      - name: Test preparation helpers and existing offline tooling
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Establish frozen dedicated build layout
+        run: |
+          sudo install -d -o "$(id -u)" -g "$(id -g)" -m 700 /home/gateway-verify/non-phone
+      - name: Build frozen runtime and assemble delivery
+        run: python3 scripts/non-phone-execution/build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: non-phone-runtime-${{ env.CANDIDATE_SHA }}
+          path: ${{ runner.temp }}/delivery
+          if-no-files-found: error
+          retention-days: 14
+  consumer:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    env:
+      CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Obtain authenticated artifact and expected identity
+        run: python3 scripts/non-phone-execution/download.py "$GITHUB_RUN_ID" "$CANDIDATE_SHA" "$RUNNER_TEMP/control"
+      - name: Fresh consumer without runtime build checkout
+        run: |
+          test ! -e /home/gateway-verify
+          sudo useradd --create-home --user-group --shell /usr/sbin/nologin gateway-verify
+          sudo chmod 700 /home/gateway-verify
+          sudo cp "$RUNNER_TEMP/control/artifact.zip" "$RUNNER_TEMP/control/expected.json" scripts/non-phone-execution/artifact.py /home/gateway-verify/
+          sudo chown gateway-verify:gateway-verify /home/gateway-verify/artifact.zip /home/gateway-verify/expected.json /home/gateway-verify/artifact.py
+          for operation in admit verify probe verify; do
+            sudo setpriv --reuid=gateway-verify --regid=gateway-verify --init-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs env -i HOME=/home/gateway-verify PATH=/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 python3 /home/gateway-verify/artifact.py "$operation" --expected /home/gateway-verify/expected.json --archive /home/gateway-verify/artifact.zip
+          done
+      - name: Missing and mutated assets fail before launch
+        run: |
+          root=/home/gateway-verify/non-phone/runtime-80fb081b129f8f664124b84ddcc9698039e2cfd1
+          for relative in source/plugins/generic-ytdlp/worker/worker.py bin/ytdlp-sandbox; do
+            sudo mv "$root/$relative" "$root/$relative.saved"
+            if sudo -u gateway-verify env PYTHONDONTWRITEBYTECODE=1 python3 /home/gateway-verify/artifact.py probe --expected /home/gateway-verify/expected.json; then exit 1; fi
+            sudo mv "$root/$relative.saved" "$root/$relative"
+            sudo cp "$root/$relative" "$RUNNER_TEMP/asset-backup"
+            printf 'mutation' | sudo tee -a "$root/$relative" >/dev/null
+            if sudo -u gateway-verify env PYTHONDONTWRITEBYTECODE=1 python3 /home/gateway-verify/artifact.py probe --expected /home/gateway-verify/expected.json; then exit 1; fi
+            sudo cp "$RUNNER_TEMP/asset-backup" "$root/$relative"
+            sudo chown gateway-verify:gateway-verify "$root/$relative"
+          done
