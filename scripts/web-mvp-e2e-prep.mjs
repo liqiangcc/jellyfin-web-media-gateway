@@ -110,6 +110,14 @@ async function assertUsableMedia(page, label) {
   return state;
 }
 
+function assertNoUnexpectedMediaFailures(label) {
+  const unsuccessful = evidence.requests.gateway_media_responses.filter(response => response.status < 200 || response.status >= 300);
+  const failedRequests = evidence.failures.filter(failure => failure.includes('/stream/'));
+  if (unsuccessful.length || failedRequests.length) {
+    throw new Error(`${label} Gateway media failures: responses=${unsuccessful.map(response => response.status).join(',') || 'none'} requests=${failedRequests.length}`);
+  }
+}
+
 async function activateAndAssertProgression(page) {
   const before = await mediaState(page);
   await page.locator('#activate').click();
@@ -225,6 +233,8 @@ async function run() {
   if (renderingB.session_id !== sessionBId || renderingB.item_revision !== 1) throw new Error('Display did not resolve Session B before reload');
   const mediaPathB = await display.evaluate(() => document.querySelector('#player')?.src || '');
   if (!mediaPathB?.startsWith(new URL(base).origin + '/stream/')) throw new Error('Session B did not receive a Gateway media path');
+  const readyMediaB = await assertUsableMedia(display, 'Session B');
+  assertNoUnexpectedMediaFailures('Session B');
   evidence.production_path.push('Display renders Session B from the server-owned current rendering relationship');
   evidence.claims.C4 = {
     rendering_session_a: rendering.session_id,
@@ -232,7 +242,12 @@ async function run() {
     item_revision: renderingB.item_revision,
     safe_gateway_path: true,
   };
-  evidence.claims.C5.browser_media_path_after_session_b = safeUrl(mediaPathB);
+  evidence.claims.C5 = {
+    ...evidence.claims.C5,
+    browser_media_path_after_session_b: safeUrl(mediaPathB),
+    session_b_ready_state: readyMediaB.readyState,
+    session_b_duration_seconds: readyMediaB.duration,
+  };
 
   const preReloadRegistration = await display.evaluate(() => window.__displayPrep.getRegistration());
   await control.reload({ waitUntil: 'domcontentloaded' });
@@ -298,6 +313,7 @@ async function run() {
 
   await assertCleanBrowser(display, 'Display');
   await assertCleanBrowser(control, 'Control');
+  assertNoUnexpectedMediaFailures('final browser journey');
   evidence.claims.C9 = { browser_storage_dom_network_scan: 'clean', physical_tv_phone_real_site_out_of_scope: true };
   evidence.requests.external_source = '[redacted]';
   evidence.failures = evidence.failures.slice(0, 10);
