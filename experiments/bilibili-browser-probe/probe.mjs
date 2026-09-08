@@ -32,24 +32,24 @@ function fixtureServer() {
           ]
         };
         fetch('/metadata');
-        fetch('http://blocked.test/forbidden').catch(() => {});
+        fetch('http://deny.invalid/forbidden').catch(() => {});
         fetch('/redirect').catch(() => {});
         navigator.serviceWorker.register('/sw.js').catch(() => {});
         const worker = new Worker('/worker.js');
         worker.onmessage = () => { window.__workerDone = true; };
-        const ws = new WebSocket('ws://blocked.test/socket');
+        const ws = new WebSocket('ws://deny.invalid/socket');
         ws.onerror = () => {};
       </script>`);
       return;
     }
     if (req.url === '/sw.js') {
       res.writeHead(200, { 'content-type': 'application/javascript', 'service-worker-allowed': '/' });
-      res.end("self.addEventListener('fetch', event => { if (new URL(event.request.url).pathname === '/sw-probe') event.respondWith(fetch('http://blocked.test/sw')); });");
+      res.end("self.addEventListener('fetch', event => { if (new URL(event.request.url).pathname === '/sw-probe') event.respondWith(fetch('http://deny.invalid/sw')); });");
       return;
     }
     if (req.url === '/worker.js') {
       res.writeHead(200, { 'content-type': 'application/javascript' });
-      res.end("fetch('http://blocked.test/worker').catch(() => {}); setTimeout(() => postMessage('started'), 100);");
+      res.end("fetch('http://deny.invalid/worker', {mode: 'no-cors'}).catch(() => {}); setTimeout(() => postMessage('started'), 100);");
       return;
     }
     if (req.url === '/metadata') {
@@ -58,7 +58,7 @@ function fixtureServer() {
       return;
     }
     if (req.url === '/redirect') {
-      res.writeHead(302, { location: 'http://blocked.test/final' });
+      res.writeHead(302, { location: 'http://deny.invalid/final' });
       res.end();
       return;
     }
@@ -162,7 +162,7 @@ async function main() {
       broker: 'loopback-allowlist',
       dns_pin: 'fixture.test→127.0.0.1 recorded by broker',
       redirect: denied.some((item) => item.redirected) ? 'denied' : 'not-observed',
-      worker: denied.some((item) => item.host === 'blocked.test') ? 'denied' : 'not-observed',
+      worker: denied.some((item) => item.host === 'deny.invalid' && item.path === '/worker') ? 'denied' : 'not-observed',
       service_worker: 'disabled-for-observation',
       websocket: denied.some((item) => item.method === 'CONNECT') ? 'denied-by-connect-policy' : 'denied-by-http-proxy',
       quic: 'disabled',
