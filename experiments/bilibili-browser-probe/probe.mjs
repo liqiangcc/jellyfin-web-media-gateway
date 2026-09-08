@@ -49,7 +49,7 @@ function fixtureServer() {
     }
     if (req.url === '/worker.js') {
       res.writeHead(200, { 'content-type': 'application/javascript' });
-      res.end("fetch('http://blocked.test/worker').then(() => postMessage('done')).catch(() => postMessage('done'));");
+      res.end("fetch('http://blocked.test/worker').catch(() => {}); postMessage('started');");
       return;
     }
     if (req.url === '/metadata') {
@@ -140,7 +140,7 @@ async function main() {
     const raw = await page.evaluate(() => window.__probeObservation);
     const observation = summarizeObservation(raw);
     await page.waitForFunction(() => window.__workerDone === true, undefined, { timeout: TIMEOUT_MS });
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(1000);
     if (requests.length > MAX_REQUESTS) throw new Error('request budget exceeded');
     const denied = requests.filter((item) => !item.allowed);
     if (!requests.some((item) => item.allowed && item.host === 'fixture.test')) throw new Error('broker did not mediate allowed fixture');
