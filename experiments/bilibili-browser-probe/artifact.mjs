@@ -12,10 +12,9 @@ const dependency = {
 };
 const staticFiles = [
   'experiments/bilibili-browser-probe/probe.mjs', 'experiments/bilibili-browser-probe/live.mjs',
-  'experiments/bilibili-browser-probe/contract.test.mjs', 'experiments/bilibili-browser-probe/artifact.mjs',
-  'experiments/bilibili-browser-probe/consumer.mjs', 'experiments/bilibili-browser-probe/package.json',
-  'experiments/bilibili-browser-probe/package-lock.json', 'experiments/bilibili-browser-probe/artifact.test.mjs',
-  'experiments/bilibili-browser-probe/live-broker.test.mjs', 'plugins/bilibili/experimental_probe.mjs',
+  'experiments/bilibili-browser-probe/artifact.mjs', 'experiments/bilibili-browser-probe/consumer.mjs',
+  'experiments/bilibili-browser-probe/package.json', 'experiments/bilibili-browser-probe/package-lock.json',
+  'plugins/bilibili/experimental_probe.mjs',
   'plugins/bilibili/live_selector.mjs', 'plugins/bilibili/package.json', 'docs/research/bilibili-browser-probe-runbook.md',
 ];
 const packageTopLevel = new Set(['LICENSE', 'NOTICE', 'README.md', 'ThirdPartyNotices.txt', 'cli.js', 'index.d.ts', 'index.js', 'index.mjs', 'lib', 'package.json']);
