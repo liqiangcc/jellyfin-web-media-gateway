@@ -70,7 +70,9 @@ test('the live broker enforces host, DNS, redirect and upgrade policy through on
 });
 
 test('CONNECT uses the same broker byte budget and denies private DNS', async (t) => {
-  const state = { requests: 0, responseBytes: 0, responseLimit: 8, tunnelClosed: false, denied: [], pins: new Map() };
+  const state = { requests: 0, responseBytes: 0, responseLimit: 8, denied: [], pins: new Map() };
+  let resolveTunnelClosed;
+  const tunnelClosed = new Promise((resolve) => { resolveTunnelClosed = resolve; });
   let upstream;
   const broker = brokerServer(state, {
     resolveAddress: async (host) => { if (host === 'private.bilibili.com') throw new Error('non-public'); return '127.0.0.1'; },
@@ -84,19 +86,18 @@ test('CONNECT uses the same broker byte budget and denies private DNS', async (t
       });
       return upstream;
     },
+    onTunnelClosed: resolveTunnelClosed,
   });
   const port = await listen(broker);
   t.after(() => { broker.closeAllConnections?.(); return broker.close(); });
   const client = net.connect(port, '127.0.0.1');
   await once(client, 'connect');
   client.write('CONNECT www.bilibili.com:443 HTTP/1.1\r\nHost: www.bilibili.com:443\r\n\r\n');
-  await new Promise((resolve) => setTimeout(resolve, 250));
+  const tunnelInfo = await Promise.race([tunnelClosed, new Promise((_, reject) => setTimeout(() => reject(new Error('broker cleanup hook timeout')), 1000))]);
   assert.equal(state.responseLimitTriggered, true);
   assert.ok(state.responseBytes > state.responseLimit);
-  assert.equal(state.tunnelClosed, true);
   assert.equal(upstream.destroyed, true);
-  assert.equal(client.destroyed, true);
-  assert.ok(state.responseBytes > state.responseLimit);
+  assert.deepEqual(tunnelInfo, { client_destroyed: true, upstream_destroyed: true, counter_destroyed: true });
   assert.equal((await proxyGet(port, 'https://private.bilibili.com/final')).status, 403);
   client.destroy();
 });

@@ -82,6 +82,7 @@ export function brokerServer(state, overrides = {}) {
   const resolveAddress = overrides.resolveAddress || publicAddressFor;
   const makeRequest = overrides.request || https.request;
   const makeConnect = overrides.connect || tls.connect;
+  const onTunnelClosed = overrides.onTunnelClosed || (() => {});
   const server = http.createServer(async (req, res) => {
     if (state.requests++ >= MAX_REQUESTS) { res.writeHead(429); res.end(); return; }
     let target;
@@ -139,6 +140,7 @@ export function brokerServer(state, overrides = {}) {
         state.tunnelClosed = true;
         client.unpipe(upstream); upstream.unpipe(counted);
         counted.destroy(); upstream.destroy(); client.destroy();
+        onTunnelClosed({ client_destroyed: client.destroyed, upstream_destroyed: upstream.destroyed, counter_destroyed: counted.destroyed });
       };
       const counted = new Transform({ transform(chunk, encoding, callback) {
         state.responseBytes += chunk.length;
