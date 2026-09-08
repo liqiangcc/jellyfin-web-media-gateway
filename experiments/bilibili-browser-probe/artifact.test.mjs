@@ -41,5 +41,5 @@ test('rejects missing, digest-mismatched, version-drifted and symlinked dependen
   await fs.writeFile(manifestPath, originalManifest);
   await fs.rm(entry);
   await fs.symlink('/tmp/outside-playwright-package.json', entry);
-  await assert.rejects(verify(bundle), /symlinked|missing/);
+  await assert.rejects(verify(bundle), /symlink rejected|symlinked|missing/);
 });
