@@ -132,6 +132,8 @@ def admit(archive, expected):
             require(set(names) == set(files) | {'manifest.json'})
             for name, meta in files.items():
                 require(z.getinfo(name).file_size == meta['size'])
+                mode = z.getinfo(name).external_attr >> 16
+                require(not mode & 0o111 or meta['executable'])
                 path = stage / name
                 path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                 with z.open(name) as src, path.open('xb') as dst:

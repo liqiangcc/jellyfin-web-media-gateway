@@ -27,7 +27,7 @@ def identity():
 
 
 def browser_argv(profile, url):
-    return ['/usr/bin/google-chrome', '--headless', '--no-first-run',
+    return ['/usr/bin/prlimit', '--core=0', '--fsize=8388608', '--cpu=30', '/usr/bin/google-chrome', '--headless', '--no-first-run',
             '--no-default-browser-check', '--disable-background-networking',
             '--disable-component-update', '--disable-sync',
             '--user-data-dir=' + str(profile), '--dump-dom',
