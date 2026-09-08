@@ -139,6 +139,15 @@ async function main() {
     await page.goto('http://fixture.test/page', { waitUntil: 'domcontentloaded', timeout: TIMEOUT_MS });
     const raw = await page.evaluate(() => window.__probeObservation);
     const observation = summarizeObservation(raw);
+    // Start a second worker from the harness with the handler installed in the
+    // same evaluation. The fixture worker delays its completion message, so
+    // the network denial remains observable without relying on page-script
+    // scheduling.
+    await page.evaluate(() => new Promise((resolve) => {
+      const worker = new Worker('/worker.js');
+      worker.onmessage = () => resolve(true);
+      setTimeout(() => resolve(false), 1000);
+    }));
     await page.waitForTimeout(1000);
     if (requests.length > MAX_REQUESTS) throw new Error('request budget exceeded');
     const denied = requests.filter((item) => !item.allowed);
