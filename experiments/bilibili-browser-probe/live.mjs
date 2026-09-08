@@ -9,6 +9,8 @@ import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
 import tls from 'node:tls';
+import { Transform } from 'node:stream';
+import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { once } from 'node:events';
 import { chromium } from 'playwright-core';
 import { navigationDescriptor, validateLiveInvocation } from '../../plugins/bilibili/live_selector.mjs';
@@ -129,7 +131,14 @@ function brokerServer(state) {
     upstream.once('secureConnect', () => {
       client.write('HTTP/1.1 200 Connection Established\r\nProxy-agent: bounded-bilibili-probe\r\n\r\n');
       if (head?.length) upstream.write(head);
-      client.pipe(upstream).pipe(client);
+      const counted = new Transform({ transform(chunk, encoding, callback) {
+        state.responseBytes += chunk.length;
+        if (state.responseBytes > MAX_RESPONSE_BYTES) { callback(new Error('response budget exceeded')); return; }
+        callback(null, chunk, encoding);
+      } });
+      counted.on('error', () => { client.destroy(); upstream.destroy(); });
+      client.pipe(upstream);
+      upstream.pipe(counted).pipe(client);
     });
     upstream.on('error', () => client.destroy());
     client.on('error', () => upstream.destroy());
@@ -137,19 +146,20 @@ function brokerServer(state) {
   return server;
 }
 
-function requestOne(candidate, pins, signal) {
+function requestOne(candidate, pins, maxBytes, signal) {
   return new Promise((resolve, reject) => {
     let target;
     try { target = new URL(candidate.url); } catch { reject(new Error('candidate URL malformed')); return; }
     if (target.protocol !== 'https:' || !allowedHost(target.hostname)) { reject(new Error('candidate host denied')); return; }
     publicAddressFor(target.hostname, pins).then((address) => {
-      const req = https.request({ host: address, port: 443, servername: target.hostname, path: `${target.pathname}${target.search}`, method: 'GET', headers: { host: target.hostname, range: 'bytes=0-1048575' }, rejectUnauthorized: true, signal }, (res) => {
+      const rangeEnd = Math.max(0, maxBytes - 1);
+      const req = https.request({ host: address, port: 443, servername: target.hostname, path: `${target.pathname}${target.search}`, method: 'GET', headers: { host: target.hostname, range: `bytes=0-${rangeEnd}` }, rejectUnauthorized: true, signal }, (res) => {
         let bytes = 0;
-        res.on('data', (chunk) => { bytes += chunk.length; if (bytes > MAX_INDEPENDENT_PER_REQUEST) req.destroy(new Error('independent request budget exceeded')); });
+        res.on('data', (chunk) => { bytes += chunk.length; if (bytes > maxBytes) req.destroy(new Error('independent request budget exceeded')); });
         res.on('end', () => resolve({ status_class: statusClass(res.statusCode), bytes, content_type: String(res.headers['content-type'] || 'unknown').split(';', 1)[0] }));
       });
       req.on('error', reject); req.end();
-    }, reject);
+    }, reject).catch(reject);
   });
 }
 
@@ -161,13 +171,16 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
   const brokerPort = await listen(broker);
   let browser;
   let context;
+  let profile;
   try {
-    browser = await chromium.launch({ executablePath: browserPath, headless: true, timeout: admitted.timeout_ms, args: [
+    profile = await mkdtemp('/tmp/bilibili-live-probe-');
+    await chmod(profile, 0o700);
+    context = await chromium.launchPersistentContext(profile, { executablePath: browserPath, headless: true, timeout: admitted.timeout_ms, args: [
       `--proxy-server=http://127.0.0.1:${brokerPort}`, '--proxy-bypass-list=<-loopback>',
       '--disable-quic', '--disable-features=WebTransport', '--disable-background-networking',
       '--no-first-run', '--no-default-browser-check',
-    ] });
-    context = await browser.newContext({ serviceWorkers: 'block' });
+    ], serviceWorkers: 'block' });
+    browser = context.browser();
     await context.route('**/*', async (route) => {
       const headers = safeRequestHeaders(await route.request().allHeaders());
       await route.continue({ headers });
@@ -189,14 +202,16 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
     await page.goto(admitted.navigation.url, { waitUntil: 'domcontentloaded', timeout: admitted.timeout_ms });
     await page.waitForTimeout(Math.min(3000, admitted.timeout_ms));
     const partMatch = new URL(page.url()).pathname.includes(`/video/${admitted.navigation.bvid}`) && new URL(page.url()).searchParams.get('p') === String(admitted.navigation.part);
-    await context.close(); context = undefined;
-    await browser.close(); browser = undefined;
+    await context.close(); context = undefined; browser = undefined;
     const independent = [];
     let totalBytes = 0;
     for (const candidate of candidates.values()) {
       if (independent.length >= MAX_INDEPENDENT_REQUESTS || totalBytes >= MAX_INDEPENDENT_BYTES) break;
       try {
-        const result = await requestOne(candidate, state.pins);
+        const remaining = Math.min(MAX_INDEPENDENT_PER_REQUEST, MAX_INDEPENDENT_BYTES - totalBytes);
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), Math.min(admitted.timeout_ms, 15000));
+        const result = await requestOne(candidate, state.pins, remaining, controller.signal).finally(() => clearTimeout(timer));
         totalBytes += result.bytes;
         independent.push({ ...result, role: candidate.role });
       } catch { independent.push({ status_class: 'unknown', bytes: 0, content_type: 'unknown', role: candidate.role }); }
@@ -208,12 +223,13 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
     observation.budget = { ...observation.budget, request_count: state.requests, response_bytes: state.responseBytes, response_budget: MAX_RESPONSE_BYTES, independent_requests: independent.length, independent_bytes: totalBytes };
     observation.containment = { broker: 'public-host-pinned', dns_pin: 'public-address-pinned', redirects: 'revalidated-per-hop', connect: 'public-host-only', websocket: 'no-upgrade-export', service_worker: 'disabled-for-observation', quic: 'disabled', secret_headers: 'stripped-and-not-exported' };
     observation.independent_consumer = { requests: independent.length, bytes: totalBytes, results: independent.map(({ role, status_class, bytes, content_type }) => ({ role, status_class, bytes, content_type })) };
-    observation.cleanup = { browser_exit: 'complete', ephemeral_candidates: 'cleared-in-finally' };
+    observation.cleanup = { browser_exit: 'complete', temporary_profile: 'removed-in-finally', ephemeral_candidates: 'cleared-in-finally' };
     process.stdout.write(`${JSON.stringify({ schema_version: SCHEMA_VERSION, observation, denied_count: state.denied.length }, null, 2)}\n`);
   } finally {
     candidates.clear();
     if (context) await context.close().catch(() => {});
     if (browser) await browser.close().catch(() => {});
+    if (profile) await rm(profile, { recursive: true, force: true }).catch(() => {});
     broker.close();
     state.pins.clear(); state.denied.length = 0;
   }
