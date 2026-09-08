@@ -6,7 +6,6 @@
  */
 import http from 'node:http';
 import { once } from 'node:events';
-import { pathToFileURL } from 'node:url';
 import { brokerServer } from './live.mjs';
 import { classifyTransport, diagnosticCounters } from './diagnostic.mjs';
 import { PREFLIGHT_AUTHORITY } from '../../plugins/bilibili/live_selector.mjs';
@@ -86,7 +85,8 @@ export async function runTransportPreflight() {
   return output;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
-  const result = await runTransportPreflight();
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-}
+// This file is an executable entry point rather than an importable library.
+// It has no argv/env authority surface: invoking it always performs exactly
+// the one plugin-owned preflight described above.
+const result = await runTransportPreflight();
+process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
