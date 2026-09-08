@@ -145,7 +145,7 @@ async function waitForDisplayState(page, state, target = null) {
     if (expected === 'playing') return !player.paused && player.currentTime > (seekTarget ?? 0) + 0.25;
     if (expected === 'seeked') {
       const displayState = window.__displayPrep?.getMediaState?.();
-      return !player.paused && displayState?.lastAppliedPositionMs === Math.round(seekTarget * 1000) && Math.abs(player.currentTime - seekTarget) < 0.75;
+      return displayState?.lastAppliedPositionMs === Math.round(seekTarget * 1000) && Math.abs(player.currentTime - seekTarget) < 0.75;
     }
     if (expected === 'stopped') return player.paused && player.currentTime <= 0.1;
     return false;
@@ -232,12 +232,20 @@ async function run() {
   commandMedia.play = { before: playedBefore, after: played, server_state: 'playing', progression_resumed: true };
 
   const seekTarget = 1.2;
+  await control.locator('#pause').click();
+  await control.waitForFunction(() => document.querySelector('#playback-state')?.textContent === 'paused', null, { timeout: 10000 });
+  const seekPause = await waitForDisplayState(display, 'paused');
   await control.locator('#seek-position').fill('1200');
   await control.locator('#seek').click();
-  await control.waitForFunction(() => document.querySelector('#playback-state')?.textContent === 'playing', null, { timeout: 10000 });
+  await control.waitForFunction(() => document.querySelector('#playback-state')?.textContent === 'paused', null, { timeout: 10000 });
   const seeked = await waitForDisplayState(display, 'seeked', seekTarget);
-  if (seeked.paused || Math.abs(seeked.currentTime - seekTarget) >= 0.5) throw new Error(`Display media did not seek near ${seekTarget}s: ${seeked.currentTime}`);
-  commandMedia.seek = { target_seconds: seekTarget, after: seeked, server_state: 'playing', target_applied: true };
+  if (Math.abs(seeked.currentTime - seekTarget) >= 0.5) throw new Error(`Display media did not seek near ${seekTarget}s: ${seeked.currentTime}`);
+  commandMedia.seek = { target_seconds: seekTarget, before: seekPause, after: seeked, server_state: 'paused', target_applied: true };
+
+  await control.locator('#play').click();
+  await control.waitForFunction(() => document.querySelector('#playback-state')?.textContent === 'playing', null, { timeout: 10000 });
+  const resumedAfterSeek = await waitForDisplayState(display, 'playing', seekTarget);
+  commandMedia.play_after_seek = { after: resumedAfterSeek, server_state: 'playing', progression_resumed: true };
 
   await control.locator('#stop').click();
   await control.waitForFunction(() => document.querySelector('#playback-state')?.textContent === 'stopped', null, { timeout: 10000 });
