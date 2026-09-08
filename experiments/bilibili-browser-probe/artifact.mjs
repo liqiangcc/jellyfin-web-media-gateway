@@ -18,7 +18,7 @@ const staticFiles = [
   'experiments/bilibili-browser-probe/live-broker.test.mjs', 'plugins/bilibili/experimental_probe.mjs',
   'plugins/bilibili/live_selector.mjs', 'plugins/bilibili/package.json', 'docs/research/bilibili-browser-probe-runbook.md',
 ];
-const packageTopLevel = new Set(['LICENSE', 'NOTICE', 'README.md', 'cli.js', 'index.d.ts', 'index.js', 'index.mjs', 'lib', 'package.json']);
+const packageTopLevel = new Set(['LICENSE', 'NOTICE', 'README.md', 'ThirdPartyNotices.txt', 'cli.js', 'index.d.ts', 'index.js', 'index.mjs', 'lib', 'package.json']);
 const sha256 = async (file) => crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex');
 const relativeSafe = (value) => typeof value === 'string' && value.length > 0 && !path.isAbsolute(value) && !value.split('/').includes('..');
 
