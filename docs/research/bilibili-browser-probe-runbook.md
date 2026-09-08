@@ -120,6 +120,20 @@ inside `node_modules/playwright-core`. The Worker may use an equivalent
 structured SSH/runuser wrapper that preserves these arguments and the same
 low-privilege process; it must record the exact command shape without secrets.
 
+## Diagnostic output (#176)
+
+The #176 diagnostic mode uses the same live command and selector above. If the
+browser or broker fails before a sanitized observation is produced, the probe
+emits a bounded `diagnostic` object instead of the original error. Its `phase`
+is one of `dns_address_policy`, `broker_connect`, `tls_handshake`,
+`proxy_response`, `chromium_navigation`, `http_status`, or `unknown`; counters
+are capped by the existing session budgets and `status_class` is coarse.
+
+The diagnostic intentionally omits the error message and all URL, host/address,
+certificate, header, body, profile, cookie, authorization, and candidate data.
+Treat a phase result as an explanation of the blocked layer only. It does not
+produce a media candidate or change #166's source-portability result.
+
 Do not click play or trigger full-video preload. The probe observes bounded
 response metadata, keeps short-lived candidate descriptors server-side, closes
 the browser, and then performs only the independent bounded reads allowed by

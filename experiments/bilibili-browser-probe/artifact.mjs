@@ -12,6 +12,7 @@ const dependency = {
 };
 const staticFiles = [
   'experiments/bilibili-browser-probe/probe.mjs', 'experiments/bilibili-browser-probe/live.mjs',
+  'experiments/bilibili-browser-probe/diagnostic.mjs',
   'experiments/bilibili-browser-probe/artifact.mjs', 'experiments/bilibili-browser-probe/consumer.mjs',
   'experiments/bilibili-browser-probe/package.json', 'experiments/bilibili-browser-probe/package-lock.json',
   'plugins/bilibili/experimental_probe.mjs',

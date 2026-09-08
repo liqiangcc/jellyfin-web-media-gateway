@@ -15,6 +15,7 @@ import { once } from 'node:events';
 import { chromium } from 'playwright-core';
 import { navigationDescriptor, validateLiveInvocation } from '../../plugins/bilibili/live_selector.mjs';
 import { summarizeObservation, SCHEMA_VERSION } from '../../plugins/bilibili/experimental_probe.mjs';
+import { classifyError, diagnosticCounters } from './diagnostic.mjs';
 
 const MAX_REQUESTS = 200;
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
@@ -68,6 +69,13 @@ function statusClass(status) {
   return `${Math.floor(status / 100)}xx`;
 }
 
+function recordFailure(state, error, phaseHint, status) {
+  if (state.failure) return state.failure;
+  const counters = diagnosticCounters(state);
+  state.failure = classifyError(error, phaseHint, { ...counters, status });
+  return state.failure;
+}
+
 async function publicAddressFor(host, pins) {
   const answers = await dns.lookup(host, { all: true, verbatim: false });
   if (!answers.length || answers.some(({ address }) => !publicAddress(address))) throw new Error('non-public DNS answer denied');
@@ -94,6 +102,7 @@ export function brokerServer(state, overrides = {}) {
     }
     let address;
     try { address = await resolveAddress(host, state.pins); } catch {
+      recordFailure(state, { code: 'ERR_DNS_ADDRESS_POLICY' }, 'dns_address_policy');
       state.denied.push({ kind: 'http', host, reason: 'dns-address-policy' });
       res.writeHead(403); res.end('denied'); return;
     }
@@ -116,7 +125,10 @@ export function brokerServer(state, overrides = {}) {
       reply.on('end', () => { if (!res.writableEnded) res.end(); });
       reply.on('error', () => { if (!res.writableEnded) res.end(); });
     });
-    upstream.on('error', () => { if (!res.writableEnded) { res.writeHead(502); res.end(); } });
+    upstream.on('error', (error) => {
+      recordFailure(state, error, 'broker_connect');
+      if (!res.writableEnded) { res.writeHead(502); res.end(); }
+    });
     req.pipe(upstream);
   });
   server.on('connect', async (req, client, head) => {
@@ -129,6 +141,7 @@ export function brokerServer(state, overrides = {}) {
     }
     let address;
     try { address = await resolveAddress(host.toLowerCase(), state.pins); } catch {
+      recordFailure(state, { code: 'ERR_DNS_ADDRESS_POLICY' }, 'dns_address_policy');
       state.denied.push({ kind: 'connect', host: String(host).toLowerCase(), reason: 'dns-address-policy' });
       client.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return;
     }
@@ -155,7 +168,7 @@ export function brokerServer(state, overrides = {}) {
       client.pipe(upstream);
       upstream.pipe(counted).pipe(client);
     });
-    upstream.on('error', () => client.destroy());
+    upstream.on('error', (error) => { recordFailure(state, error, 'broker_connect'); client.destroy(); });
     client.on('error', () => upstream.destroy());
   });
   server.on('upgrade', (req, socket) => {
@@ -215,13 +228,14 @@ export function removeDisposableProfile(profile) {
 
 export async function runLive(invocation, browserPath = process.env.CHROME_PATH || '/usr/bin/google-chrome') {
   const admitted = validateLiveInvocation(invocation);
-  const state = { requests: 0, responseBytes: 0, denied: [], pins: new Map() };
+  const state = { requests: 0, responseBytes: 0, metadataBytes: 0, denied: [], pins: new Map() };
   const candidates = new Map();
   const broker = brokerServer(state);
   const brokerPort = await listen(broker);
   let browser;
   let context;
   let profile;
+  let result;
   try {
     profile = await createDisposableProfile();
     context = await chromium.launchPersistentContext(profile, { executablePath: browserPath, headless: true, timeout: admitted.timeout_ms, args: [
@@ -253,7 +267,16 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
       pendingObservations.add(task);
       task.finally(() => pendingObservations.delete(task));
     });
-    await page.goto(admitted.navigation.url, { waitUntil: 'domcontentloaded', timeout: admitted.timeout_ms });
+    try {
+      const navigationResponse = await page.goto(admitted.navigation.url, { waitUntil: 'domcontentloaded', timeout: admitted.timeout_ms });
+      if (navigationResponse?.status() >= 300) {
+        recordFailure(state, { code: 'ERR_HTTP_RESPONSE_CODE_FAILURE' }, 'http_status', navigationResponse.status());
+        throw new Error('navigation returned a non-success status');
+      }
+    } catch (error) {
+      recordFailure(state, error, 'chromium_navigation');
+      throw error;
+    }
     await page.waitForTimeout(Math.min(3000, admitted.timeout_ms));
     await Promise.allSettled([...pendingObservations]);
     const partMatch = new URL(page.url()).pathname.includes(`/video/${admitted.navigation.bvid}`) && new URL(page.url()).searchParams.get('p') === String(admitted.navigation.part);
@@ -275,11 +298,18 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
     const sourceKind = roles.includes('video') && roles.includes('audio') ? 'av_separated' : roles.length ? 'muxed' : 'unknown';
     const raw = { schema_version: SCHEMA_VERSION, selector: { site_id: 'bilibili', content_id: admitted.navigation.bvid, part: admitted.navigation.part }, part_match: partMatch, source_kind: sourceKind, events: state.requests, resources: candidates.size, metadata_bytes: JSON.stringify([...candidates.values()].map(({ url, ...item }) => item)).length, independent_after_browser_exit: independent.some((item) => item.status_class === '2xx'), candidates: [...candidates.values()].map(({ url, ...item }) => ({ ...item, independent: undefined })) };
     const observation = summarizeObservation(raw);
+    state.metadataBytes = raw.metadata_bytes;
     observation.budget = { ...observation.budget, request_count: state.requests, response_bytes: state.responseBytes, response_budget: MAX_RESPONSE_BYTES, independent_requests: independent.length, independent_bytes: totalBytes };
     observation.containment = { broker: 'public-host-pinned', dns_pin: 'public-address-pinned', redirects: 'revalidated-per-hop', connect: 'public-host-only', websocket: 'no-upgrade-export', service_worker: 'disabled-for-observation', quic: 'disabled', secret_headers: 'stripped-and-not-exported' };
     observation.independent_consumer = { requests: independent.length, bytes: totalBytes, results: independent.map(({ role, status_class, bytes, content_type }) => ({ role, status_class, bytes, content_type })) };
     observation.cleanup = { browser_exit: 'complete', temporary_profile: 'removed-in-finally', ephemeral_candidates: 'cleared-in-finally' };
-    process.stdout.write(`${JSON.stringify({ schema_version: SCHEMA_VERSION, observation, denied_count: state.denied.length }, null, 2)}\n`);
+    result = { schema_version: SCHEMA_VERSION, observation, denied_count: state.denied.length };
+  } catch (error) {
+    result = {
+      schema_version: SCHEMA_VERSION,
+      diagnostic: state.failure || recordFailure(state, error, 'chromium_navigation'),
+      cleanup: { browser_exit: 'pending', temporary_profile: 'pending', ephemeral_candidates: 'pending' },
+    };
   } finally {
     candidates.clear();
     if (context) await context.close().catch(() => {});
@@ -288,4 +318,6 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
     broker.close();
     state.pins.clear(); state.denied.length = 0;
   }
+  if (result?.diagnostic) result.cleanup = { browser_exit: 'complete', temporary_profile: 'removed-in-finally', ephemeral_candidates: 'cleared-in-finally' };
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
