@@ -135,14 +135,17 @@ export function brokerServer(state, overrides = {}) {
     upstream.once('secureConnect', () => {
       client.write('HTTP/1.1 200 Connection Established\r\nProxy-agent: bounded-bilibili-probe\r\n\r\n');
       if (head?.length) upstream.write(head);
+      const closeTunnel = () => {
+        client.unpipe(upstream); upstream.unpipe(counted);
+        counted.destroy(); upstream.destroy(); client.destroy();
+      };
       const counted = new Transform({ transform(chunk, encoding, callback) {
         state.responseBytes += chunk.length;
-        if (state.responseBytes > (state.responseLimit || MAX_RESPONSE_BYTES)) { state.responseLimitTriggered = true; callback(new Error('response budget exceeded')); return; }
+        if (state.responseBytes > (state.responseLimit || MAX_RESPONSE_BYTES)) { state.responseLimitTriggered = true; closeTunnel(); callback(new Error('response budget exceeded')); return; }
         callback(null, chunk, encoding);
       } });
       counted.on('error', () => {
-        client.unpipe(upstream); upstream.unpipe(counted);
-        counted.destroy(); upstream.destroy(); client.destroy();
+        closeTunnel();
       });
       client.pipe(upstream);
       upstream.pipe(counted).pipe(client);
