@@ -8,11 +8,12 @@ profile, VNC session or existing Gateway process.
 
 ## Admission gate
 
-The Coordinator has accepted the live-capable implementation (#169) and the
-self-contained target runtime package (#172). Before any live request, the
-Worker must verify the exact provenance below from GitHub and verify the
-manifest/digest of the downloaded bundle. If any field differs, stop with
-`BLOCKED` and do not enable live mode.
+The Coordinator has accepted the live-capable implementation (#169), the
+self-contained target runtime package (#172), the transport diagnostic (#182)
+and exact artifact delivery (#185). Before any live request, the Worker must
+verify the exact provenance below from GitHub and verify the manifest/digest of
+the downloaded bundle. If any field differs, stop with `BLOCKED` and do not
+enable live mode.
 
 ### Accepted #169 live probe
 
@@ -52,10 +53,35 @@ J2 broker evidence: 10054717444 / sha256:0a5f088a140a1c2b5f864ea7029e0648bfcbacc
 Runtime: playwright-core@1.55.0, regular-file package tree, no browser binary and no bin/ installer files
 ```
 
-The #172 bundle is the runnable derivative of the accepted #169 probe. It must
-be copied to a clean directory on the target. Do not run `npm install`, use a
-workspace `node_modules` link, use an npm cache, or install a browser package on
-tx-node. The target supplies only its external system Chrome.
+The #172 bundle is the accepted target-runtime provenance for the #169 probe.
+The current live Attempt must use the exact #182 artifact delivered and
+integrity-verified by #185 below. Do not run `npm install`, use a workspace
+`node_modules` link, use an npm cache, or install a browser package on tx-node.
+The target supplies only its external system Chrome.
+
+### Current live Attempt artifact (#182 / #185)
+
+```text
+Candidate SHA: 7de63b231fc4582fc29ceb5a359050f4ffe22fcb
+Actions workflow run: 34236219201
+J1: 102094492167
+J2: 102094492067
+J3a: 102094491740
+J3: 102095295856
+J4: 102094492237
+JI1: 102094492032
+Bundle artifact: 10060036115
+Bundle size: 4,201,531 bytes
+Actions upload digest: sha256:53c57ce5c22219753ff8ad7f3fbea6c112958d88f84daa799bc03aa8e3f02259
+```
+
+This is the only artifact admitted for the live Attempt. #185 confirmed that
+the same archive was copied to a fresh tx-node staging directory, verified for
+size, SHA-256, ZIP integrity and manifest identity as `gateway-verify` UID/GID
+1001, and then removed with no residue. That accepted staging copy is gone;
+the Worker must retrieve and verify artifact `10060036115` again before a new
+staging copy. Do not substitute a prior #172 artifact, another Candidate or an
+unverified copy.
 
 ## Target admission
 
@@ -101,7 +127,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
   -u NO_PROXY -u no_proxy \
   BILIBILI_PROBE_ALLOW_LIVE=1 \
   CHROME_PATH=/usr/bin/google-chrome-stable \
-  CANDIDATE_SHA=989bacdbf7e0fcde053005a45a1ad41b219b8b46 \
+  CANDIDATE_SHA=7de63b231fc4582fc29ceb5a359050f4ffe22fcb \
   node experiments/bilibili-browser-probe/artifact.mjs verify .
 
 env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
@@ -109,7 +135,7 @@ env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
   -u NO_PROXY -u no_proxy \
   BILIBILI_PROBE_ALLOW_LIVE=1 \
   CHROME_PATH=/usr/bin/google-chrome-stable \
-  CANDIDATE_SHA=989bacdbf7e0fcde053005a45a1ad41b219b8b46 \
+  CANDIDATE_SHA=7de63b231fc4582fc29ceb5a359050f4ffe22fcb \
   node experiments/bilibili-browser-probe/probe.mjs \
     --mode live --selector bilibili:BV14V411W7r5:part-2
 ```
@@ -151,6 +177,14 @@ Actions must build and manifest-verify the exact Candidate artifact before a
 single `gateway-verify` tx-node preflight is allowed. An observed stage is
 diagnostic evidence only; it does not authorize an egress relay or unlock
 Issue #166.
+
+The accepted #182 no-page preflight reached `transport_stage=proxy_response`
+with `transport_outcome=success`, `status_class=2xx`, one request, zero
+response/metadata bytes and no page navigation, media request, selector or
+consumer activity. This is transport admission evidence only. It does not
+prove that the page can be observed, that a source is portable, that the
+independent consumer can read media, or that any playback path works; the live
+Attempt must still produce page/source and post-browser consumer evidence.
 
 Do not click play or trigger full-video preload. The probe observes bounded
 response metadata, keeps short-lived candidate descriptors server-side, closes

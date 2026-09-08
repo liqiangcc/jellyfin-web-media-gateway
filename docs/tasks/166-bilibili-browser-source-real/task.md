@@ -7,13 +7,13 @@ GitHub Issue: #166
 Parent Goal / Research Item: #68 / R005 real source portability
 Task ID: BILIBILI-BROWSER-SOURCE-REAL
 Task kind: verification
-Base commit: 3a2a5fe8900b0ecf728e12461420ca043bdd2702
+Base commit: f6b15fbde6952300d313ef940634e4b1c8bffc00
 Candidate commit: n/a; live Evidence is owned by Issue/Attempt
 Session bootstrap prompt: docs/tasks/166-bilibili-browser-source-real/prompt.md
 Preferred worker: cloud-codex with authenticated SSH tx-node
 Eligible worker environments: env:cloud after publication gate
 Required capabilities: github-read-write, repository-static-analysis, cloud-interactive, interactive-linux-debug, authenticated SSH tx-node
-Hard publication dependencies: #169 Final Acceptance and #172 Final Acceptance; exact provenance/target/runbook freeze below
+Hard publication dependencies: #169, #172, #182 and #185 Final Acceptance; exact provenance/target/runbook freeze below
 ```
 
 > This is a separate target verification Task. The Worker does not compile locally or on tx-node, does not deploy a phone/TV, and does not modify Gateway/production state. GitHub Actions are the build authority; tx-node is only the live browser evidence target.
@@ -32,9 +32,35 @@ Target architecture: x86_64 (browser capability evidence only; not ARM64 phone p
 
 The live network/target Evidence authority is deliberately separate from #169/#172 hosted implementation evidence. Do not split this Task by runner or device, and do not infer a live result from the hosted synthetic jobs.
 
+## Attempt and Status Lifecycle
+
+The Issue history contains one previously blocked live run (`Attempt: 1`),
+blocked before page observation by the earlier broker-connect failure. This
+contract refresh does not create a new result or renumber history. The next
+real browser run is exactly `Attempt: 2` and may start only after the
+Coordinator completes the contract-refresh Publication Gate.
+
+The required lifecycle is:
+
+```text
+status:blocked (current history)
+  → status:draft (Coordinator contract refresh / PR review)
+  → status:ready + env:cloud (Publication Gate and queue read-back)
+  → status:in-progress (Worker claims Attempt 2)
+  → status:review (Worker Execution Report)
+  → Coordinator ACCEPT / REVISE / BLOCK
+```
+
+`REVISE` returns the same Issue to `status:ready` for Attempt 3 or a later
+numbered Attempt; `BLOCK` returns it to `status:blocked` until an approved
+dependency or capability changes. The Worker must not skip the ready/claim
+transition, start another Attempt, set `status:done`, close the Issue, or
+change #166 while executing. Only the Coordinator may perform the final
+acceptance and closure.
+
 ## Frozen Publication Preconditions
 
-The following values were independently accepted before this revision. The Worker must verify them again from GitHub and the downloaded artifact before any live request.
+The following values were independently accepted before this revision. The Worker must verify them again from GitHub and the downloaded artifact before any live request. The #169 and #172 records remain provenance for the live probe and target runtime; the current live Attempt artifact is the exact #182 artifact delivered and integrity-verified by #185.
 
 ### Live-capable probe (#169)
 
@@ -76,7 +102,59 @@ J2 broker evidence: ID 10054717444 / sha256:0a5f088a140a1c2b5f864ea7029e0648bfcb
 Runtime: playwright-core@1.55.0, 321 manifest-inventoried regular files, no browser binary and no bin/ installer files
 ```
 
-The #172 package is a derivative of #169 for target runtime closure. It must be copied to a clean target directory and verified from its manifest; no npm install, package manager cache, workspace `node_modules` link or fallback dependency is allowed on tx-node.
+The #172 package is the accepted derivative of #169 that established target
+runtime closure and remains provenance only. The current live package is the
+#182 artifact below; it must be copied to a clean target directory and verified
+from its manifest. No npm install, package manager cache, workspace
+`node_modules` link or fallback dependency is allowed on tx-node.
+
+### Current live Attempt artifact (#182 / #185)
+
+```text
+Candidate SHA: 7de63b231fc4582fc29ceb5a359050f4ffe22fcb
+Actions workflow run: 34236219201
+Required jobs:
+  J1 102094492167
+  J2 102094492067
+  J3a 102094491740
+  J3 102095295856
+  J4 102094492237
+  JI1 102094492032
+Bundle artifact: ID 10060036115
+Bundle size: 4,201,531 bytes
+Actions upload digest: sha256:53c57ce5c22219753ff8ad7f3fbea6c112958d88f84daa799bc03aa8e3f02259
+```
+
+This is the only artifact admitted for the next live Attempt. #182 added and
+accepted the transport-phase diagnostic to this Candidate; #185 Final
+Acceptance confirms the same archive was copied to tx-node, verified for size,
+SHA-256, ZIP integrity and manifest identity as `gateway-verify` UID/GID 1001,
+and then removed with no residue. The #185 staging copy was deliberately
+cleaned, so the Worker must retrieve and verify artifact `10060036115` again
+before staging a fresh copy; no prior target bytes may be assumed. A different
+Candidate, artifact, digest or unverified copy is `BLOCKED`.
+
+The accepted #182 no-page transport preflight is supporting admission evidence
+only:
+
+```text
+schema_version: 2
+transport_stage: proxy_response
+transport_outcome: success
+status_class: 2xx
+request_count: 1
+response_bytes: 0
+metadata_bytes: 0
+page_navigation: false
+media_request: false
+selector: false
+consumer: false
+```
+
+It proves only that the bounded transport diagnostic reached that coarse
+boundary under the accepted artifact. It does not authorize an egress relay,
+prove page/source portability, prove media playback, or replace the required
+page/source and independent-consumer evidence below.
 
 ### Target admission
 
@@ -109,8 +187,8 @@ Run it as the low-privilege user from the verified downloaded artifact, with pro
 
 ## In Scope / Steps
 
-1. Read the required canonical startup documents, the full Issue history, #169/#172 acceptance comments, the exact task/runbook and lifecycle/freshness protocols.
-2. From GitHub, verify both accepted provenance sets, the bundle zip/manifest/digests, the target runtime package version and the runbook commit. Stop `BLOCKED` before live traffic if any value differs.
+1. Read the required canonical startup documents, the full Issue history, #169/#172/#182/#185 acceptance comments, the exact task/runbook and lifecycle/freshness protocols.
+2. From GitHub, verify the accepted #169/#172 provenance, the exact #182/#185 artifact identity, bundle zip/manifest/digests, target runtime package version and runbook commit. Stop `BLOCKED` before live traffic if any value differs.
 3. Perform the target admission checks above as read-only diagnostics. Confirm the low-privilege user can launch the external Chrome without `--no-sandbox`; do not install packages or alter target services.
 4. Use at most two independent clean sessions. Each session uses only the frozen opaque selector and plugin-generated page navigation. Record whether the requested part is preserved and only bounded sanitized candidate metadata.
 5. After each browser exits, run the independent server-side consumer from the same process boundary with approved request metadata only. A muxed candidate must be readable; AV-separated media requires both video and audio reads. Count actual response bytes, including errors, and stop at limits.
@@ -121,11 +199,17 @@ Run it as the low-privilege user from the verified downloaded artifact, with pro
 
 | Job | Claim / PASS condition | Plane / Host | Required Evidence |
 | --- | --- | --- | --- |
-| J0 | C0: exact #169/#172 artifact, runbook, version, low privilege, clean profile, no proxy, broker/transport policy, budgets and cleanup admission all pass before live traffic | authenticated SSH / tx-node | read-only preflight + exact artifact/manifest/digest checks |
+| J0 | C0: exact #169/#172 provenance plus the current #182/#185 artifact, runbook, version, low privilege, clean profile, no proxy, broker/transport policy, budgets and cleanup admission all pass before live traffic | authenticated SSH / tx-node | read-only preflight + exact artifact/manifest/digest checks |
 | J1 | C1: two clean anonymous sessions preserve the requested part and expose at least one bounded candidate set | authenticated SSH / tx-node | two sanitized session records, actual request/byte counts and network path |
 | J2 | C2: independent post-browser consumer reads at least one portable candidate (both streams when AV-separated), with no Secret, private redirect or budget violation | authenticated SSH / tx-node | consumer status classes/limited byte counts, lifecycle and negative outcomes |
 
 Task success requires complete sanitized Evidence and a Coordinator decision for C0/C1/C2. A complete reproducible negative result may be accepted as research delivery, but downstream source/plugin/playback implementation is unlocked only when C0/C1/C2 are all `PASS`. Unknown codec/expiry fields remain `unknown`; they do not become guessed PASS evidence.
+
+The accepted #182 transport result (`proxy_response / success / 2xx`) is not
+page, source, consumer or playback proof. The next Attempt must still produce
+sanitized page/source observation for the frozen selector and an independent
+post-browser consumer result after browser exit; transport success alone cannot
+make C1 or C2 pass.
 
 `FAIL` is a reproducible site/protocol incompatibility (wrong part, blob-only source, non-readable stream, expiry, 4xx/5xx, private redirect, secret-header requirement or bounded cancellation). `BLOCKED` is reserved for missing artifact/browser/permission/egress capability or a required design change. Do not retry through proxy rotation, copied credentials or expanded budgets.
 
@@ -151,6 +235,8 @@ Semantic authorities:
 
 - #169 Final Acceptance at `f9a48dbef6535c4bb38188b050384ac4156187af`;
 - #172 Final Acceptance at `3a2a5fe8900b0ecf728e12461420ca043bdd2702`;
+- #182 Final Acceptance at Candidate `7de63b231fc4582fc29ceb5a359050f4ffe22fcb`, with the accepted no-page transport result recorded above;
+- #185 Final Acceptance of artifact `10060036115` at the exact size/digest recorded above;
 - `AGENTS.md`, `docs/security.md`, `docs/implementation-contracts.md`, Browser/Site Plugin/R008 contracts;
 - this exact selector, target admission and runbook freeze.
 
@@ -169,8 +255,9 @@ Execution plane: authenticated SSH
 Runner / Target: tx-node / VM-0-11-ubuntu / x86_64 / gateway-verify UID 1001
 OS, Node/npm, Chrome: exact observed versions
 Network path: target browser → experimental fail-closed broker → public Bilibili; no proxy
-Base / dependency Candidate SHAs: exact #169/#172 values; runbook/task base
-Workflow/run/job/artifact: exact accepted IDs/digests
+Base / dependency Candidate SHAs: exact #169/#172 provenance plus current #182 Candidate; runbook/task base
+Workflow/run/job/artifact: exact accepted #169/#172 and #182/#185 IDs/digests
+Transport admission: #182 `proxy_response / success / 2xx`; page/source/consumer proof still required in this Attempt
 Commands / selector / budgets: exact values and actual use
 Sanitized Evidence: no URL/token/cookie/Auth/raw body/DOM/HAR
 Result: PASS | CONDITIONAL PASS | FAIL | BLOCKED
