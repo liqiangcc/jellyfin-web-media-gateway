@@ -136,6 +136,7 @@ export function brokerServer(state, overrides = {}) {
       client.write('HTTP/1.1 200 Connection Established\r\nProxy-agent: bounded-bilibili-probe\r\n\r\n');
       if (head?.length) upstream.write(head);
       const closeTunnel = () => {
+        state.tunnelClosed = true;
         client.unpipe(upstream); upstream.unpipe(counted);
         counted.destroy(); upstream.destroy(); client.destroy();
       };

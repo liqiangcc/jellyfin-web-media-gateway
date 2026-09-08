@@ -70,13 +70,20 @@ test('the live broker enforces host, DNS, redirect and upgrade policy through on
 });
 
 test('CONNECT uses the same broker byte budget and denies private DNS', async (t) => {
-  const state = { requests: 0, responseBytes: 0, responseLimit: 8, denied: [], pins: new Map() };
+  const state = { requests: 0, responseBytes: 0, responseLimit: 8, tunnelClosed: false, denied: [], pins: new Map() };
   let upstream;
   const broker = brokerServer(state, {
     resolveAddress: async (host) => { if (host === 'private.bilibili.com') throw new Error('non-public'); return '127.0.0.1'; },
     // A deterministic Duplex seam exercises the production CONNECT pipeline
     // without relying on a TLS handshake or a second network service.
-    connect: () => { upstream = new PassThrough(); process.nextTick(() => { upstream.emit('secureConnect'); upstream.end(Buffer.alloc(32, 7)); }); return upstream; },
+    connect: () => {
+      upstream = new PassThrough();
+      setImmediate(() => {
+        upstream.emit('secureConnect');
+        setImmediate(() => { upstream.push(Buffer.alloc(32, 7)); upstream.push(null); });
+      });
+      return upstream;
+    },
   });
   const port = await listen(broker);
   t.after(() => { broker.closeAllConnections?.(); return broker.close(); });
@@ -86,8 +93,8 @@ test('CONNECT uses the same broker byte budget and denies private DNS', async (t
   await new Promise((resolve) => setTimeout(resolve, 250));
   assert.equal(state.responseLimitTriggered, true);
   assert.ok(state.responseBytes > state.responseLimit);
+  assert.equal(state.tunnelClosed, true);
   assert.equal(upstream.destroyed, true);
-  client.destroy();
   assert.equal(client.destroyed, true);
   assert.ok(state.responseBytes > state.responseLimit);
   assert.equal((await proxyGet(port, 'https://private.bilibili.com/final')).status, 403);
