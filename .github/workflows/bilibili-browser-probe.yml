@@ -59,8 +59,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install pinned browser test library
-        run: npm install --no-save --ignore-scripts "playwright-core@${PLAYWRIGHT_VERSION}"
+      - name: Install pinned browser and test library
+        run: |
+          npm install --no-save "playwright@${PLAYWRIGHT_VERSION}"
+          npx playwright install chromium
       - name: Discover hosted Chromium
         shell: bash
         run: |
@@ -71,6 +73,12 @@ jobs:
               break
             fi
           done
+          if [ -z "${CHROME_PATH:-}" ]; then
+            browser_path="$(find "$HOME/.cache/ms-playwright" -type f -path '*/chrome-linux64/chrome' -perm -111 | head -1)"
+            test -n "$browser_path"
+            echo "CHROME_PATH=$browser_path" >> "$GITHUB_ENV"
+            "$browser_path" --version
+          fi
           test -n "${CHROME_PATH:-}"
       - name: Run real Chromium synthetic containment probe
         run: node experiments/bilibili-browser-probe/probe.mjs > probe-evidence.json
@@ -101,8 +109,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install pinned runtime dependency
-        run: npm install --no-save --ignore-scripts "playwright-core@${PLAYWRIGHT_VERSION}"
+      - name: Install pinned browser and runtime dependency
+        run: |
+          npm install --no-save "playwright@${PLAYWRIGHT_VERSION}"
+          npx playwright install chromium
       - name: Discover hosted Chromium
         shell: bash
         run: |
@@ -113,6 +123,12 @@ jobs:
               break
             fi
           done
+          if [ -z "${CHROME_PATH:-}" ]; then
+            browser_path="$(find "$HOME/.cache/ms-playwright" -type f -path '*/chrome-linux64/chrome' -perm -111 | head -1)"
+            test -n "$browser_path"
+            echo "BROWSER_VERSION=$($browser_path --version | head -1)" >> "$GITHUB_ENV"
+            echo "CHROME_PATH=$browser_path" >> "$GITHUB_ENV"
+          fi
           test -n "${CHROME_PATH:-}"
       - name: Build and verify manifest-addressed artifact
         run: |
