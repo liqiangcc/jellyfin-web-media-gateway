@@ -74,10 +74,12 @@ jobs:
             fi
           done
           if [ -z "${CHROME_PATH:-}" ]; then
-            browser_path="$(node -e "const {chromium}=require('playwright'); process.stdout.write(chromium.executablePath())")"
+            browser_path="$(node -e "const {chromium}=require('playwright'); process.stdout.write(chromium.executablePath())" 2>/dev/null || true)"
             if [ ! -x "$browser_path" ]; then
-              browser_path="$(find "$HOME/.cache/ms-playwright" -type f -perm -111 | grep -E '/(chrome|headless_shell|chrome-headless-shell)$' | head -1)"
+              browser_path="$(find "$HOME/.cache/ms-playwright" -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) | head -1)"
             fi
+            echo "resolved_browser_path=${browser_path:-none}"
+            find "$HOME/.cache/ms-playwright" -maxdepth 4 -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) -print | head -20 || true
             test -x "$browser_path"
             echo "CHROME_PATH=$browser_path" >> "$GITHUB_ENV"
             "$browser_path" --version
@@ -127,10 +129,12 @@ jobs:
             fi
           done
           if [ -z "${CHROME_PATH:-}" ]; then
-            browser_path="$(node -e "const {chromium}=require('playwright'); process.stdout.write(chromium.executablePath())")"
+            browser_path="$(node -e "const {chromium}=require('playwright'); process.stdout.write(chromium.executablePath())" 2>/dev/null || true)"
             if [ ! -x "$browser_path" ]; then
-              browser_path="$(find "$HOME/.cache/ms-playwright" -type f -perm -111 | grep -E '/(chrome|headless_shell|chrome-headless-shell)$' | head -1)"
+              browser_path="$(find "$HOME/.cache/ms-playwright" -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) | head -1)"
             fi
+            echo "resolved_browser_path=${browser_path:-none}"
+            find "$HOME/.cache/ms-playwright" -maxdepth 4 -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) -print | head -20 || true
             test -x "$browser_path"
             echo "BROWSER_VERSION=$($browser_path --version | head -1)" >> "$GITHUB_ENV"
             echo "CHROME_PATH=$browser_path" >> "$GITHUB_ENV"
@@ -182,10 +186,12 @@ jobs:
           test -f "$bundle/manifest.json"
           CANDIDATE_SHA="$CANDIDATE_SHA" node "$bundle/experiments/bilibili-browser-probe/artifact.mjs" verify "$bundle"
           ln -s "$GITHUB_WORKSPACE/node_modules" "$bundle/node_modules"
-          browser_path="$(node -e "const {chromium}=require('playwright'); process.stdout.write(chromium.executablePath())")"
+          browser_path="$(node -e "const {chromium}=require('playwright'); process.stdout.write(chromium.executablePath())" 2>/dev/null || true)"
           if [ ! -x "$browser_path" ]; then
-            browser_path="$(find "$HOME/.cache/ms-playwright" -type f -perm -111 | grep -E '/(chrome|headless_shell|chrome-headless-shell)$' | head -1)"
+            browser_path="$(find "$HOME/.cache/ms-playwright" -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) | head -1)"
           fi
+          echo "resolved_browser_path=${browser_path:-none}"
+          find "$HOME/.cache/ms-playwright" -maxdepth 4 -type f \( -name chrome -o -name headless_shell -o -name chrome-headless-shell \) -print | head -20 || true
           test -x "$browser_path"
           CANDIDATE_SHA="$CANDIDATE_SHA" CHROME_PATH="$browser_path" node "$bundle/experiments/bilibili-browser-probe/consumer.mjs" "$bundle"
 
