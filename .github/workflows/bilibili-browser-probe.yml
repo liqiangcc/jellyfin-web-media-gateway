@@ -74,7 +74,7 @@ jobs:
             fi
           done
           if [ -z "${CHROME_PATH:-}" ]; then
-            browser_path="$(find "$HOME/.cache/ms-playwright" -type f -path '*/chrome-linux64/chrome' -perm -111 | head -1)"
+            browser_path="$(find "$HOME/.cache/ms-playwright" -type f \( -path '*/chrome-linux64/chrome' -o -path '*/chrome-linux/chrome' -o -name headless_shell \) -perm -111 | head -1)"
             test -n "$browser_path"
             echo "CHROME_PATH=$browser_path" >> "$GITHUB_ENV"
             "$browser_path" --version
@@ -124,7 +124,7 @@ jobs:
             fi
           done
           if [ -z "${CHROME_PATH:-}" ]; then
-            browser_path="$(find "$HOME/.cache/ms-playwright" -type f -path '*/chrome-linux64/chrome' -perm -111 | head -1)"
+            browser_path="$(find "$HOME/.cache/ms-playwright" -type f \( -path '*/chrome-linux64/chrome' -o -path '*/chrome-linux/chrome' -o -name headless_shell \) -perm -111 | head -1)"
             test -n "$browser_path"
             echo "BROWSER_VERSION=$($browser_path --version | head -1)" >> "$GITHUB_ENV"
             echo "CHROME_PATH=$browser_path" >> "$GITHUB_ENV"
@@ -176,7 +176,9 @@ jobs:
           test -f "$bundle/manifest.json"
           CANDIDATE_SHA="$CANDIDATE_SHA" node "$bundle/experiments/bilibili-browser-probe/artifact.mjs" verify "$bundle"
           ln -s "$GITHUB_WORKSPACE/node_modules" "$bundle/node_modules"
-          CANDIDATE_SHA="$CANDIDATE_SHA" CHROME_PATH="$(find "$HOME/.cache/ms-playwright" -type f -path '*/chrome-linux64/chrome' -perm -111 | head -1)" node "$bundle/experiments/bilibili-browser-probe/consumer.mjs" "$bundle"
+          browser_path="$(find "$HOME/.cache/ms-playwright" -type f \( -path '*/chrome-linux64/chrome' -o -path '*/chrome-linux/chrome' -o -name headless_shell \) -perm -111 | head -1)"
+          test -n "$browser_path"
+          CANDIDATE_SHA="$CANDIDATE_SHA" CHROME_PATH="$browser_path" node "$bundle/experiments/bilibili-browser-probe/consumer.mjs" "$bundle"
 
   probe-integration:
     name: JI1 remote workspace integration and regressions
