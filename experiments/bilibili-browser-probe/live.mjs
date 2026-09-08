@@ -340,5 +340,5 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
       browser_exit: 'complete', broker_close: 'complete', temporary_profile: 'complete', ephemeral_candidates: 'complete', dns_pins: 'complete', staging: 'unknown',
     } });
   }
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  return result;
 }

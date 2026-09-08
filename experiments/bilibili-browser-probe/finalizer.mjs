@@ -1,4 +1,4 @@
-import { DIAGNOSTIC_PHASES, TRANSPORT_OUTCOMES, TRANSPORT_STAGES, classifyFailure } from './diagnostic.mjs';
+import { DIAGNOSTIC_PHASES, DIAGNOSTIC_REASONS, TRANSPORT_OUTCOMES, TRANSPORT_STAGES, classifyFailure } from './diagnostic.mjs';
 
 export const TERMINATION_CLASSES = Object.freeze(['normal', 'error', 'timeout', 'abort', 'signal', 'unknown']);
 export const RESULT_STATUSES = Object.freeze(['success', 'failure', 'unknown', 'blocked']);
@@ -7,6 +7,7 @@ const stageSet = new Set(TRANSPORT_STAGES);
 const outcomeSet = new Set(TRANSPORT_OUTCOMES);
 const terminationSet = new Set(TERMINATION_CLASSES);
 const resultSet = new Set(RESULT_STATUSES);
+const reasonSet = new Set(DIAGNOSTIC_REASONS);
 
 const bounded = (value, maximum) => Number.isSafeInteger(value) && value >= 0 && value <= maximum ? value : 0;
 const bool = (value) => value === true;
@@ -33,7 +34,7 @@ function safeDiagnostic(input = {}) {
   return Object.freeze({
     schema_version: 2,
     phase,
-    reason: typeof value.reason === 'string' && /^[a-z0-9_]{1,48}$/.test(value.reason) ? value.reason : classified.reason,
+    reason: typeof value.reason === 'string' && reasonSet.has(value.reason) ? value.reason : classified.reason,
     status_class: classified.status_class,
     transport_stage: enumOr(value.transport_stage, stageSet, classified.transport_stage),
     transport_outcome: enumOr(value.transport_outcome, outcomeSet, classified.transport_outcome),

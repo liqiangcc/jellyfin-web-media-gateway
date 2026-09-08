@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { classifyError } from './diagnostic.mjs';
 import { createFinalizer, finalizeResult, terminationClass, TERMINATION_CLASSES } from './finalizer.mjs';
 
@@ -56,6 +57,13 @@ test('finalizer gives explicit unknown cleanup for impossible paths', () => {
   assert.equal(result.activity.consumer, false);
 });
 
+test('finalizer rejects lexical but non-enumerated diagnostic reasons', () => {
+  const result = finalizeResult({ result: 'failure', termination: 'error', diagnostic: {
+    phase: 'chromium_navigation', reason: 'caller_invented_reason', transport_stage: 'downstream_close',
+  } });
+  assert.equal(result.diagnostic.reason, 'chromium_navigation_failed');
+});
+
 test('finalizer bounds timeout, abort, and process-error cleanup paths', () => {
   for (const termination of ['timeout', 'abort', 'error']) {
     const result = finalizeResult({ result: 'failure', termination, diagnostic: { phase: 'unknown', reason: 'untrusted https://secret.invalid/?token=x' }, cleanup: { browser_exit: 'unknown' } });
@@ -63,4 +71,13 @@ test('finalizer bounds timeout, abort, and process-error cleanup paths', () => {
     assert.equal(result.cleanup.browser_exit, 'unknown');
     assert.doesNotMatch(JSON.stringify(result), /https?:\/\/|secret|token|[?&=]/i);
   }
+});
+
+test('probe has one output owner and bounded process-level termination', () => {
+  const probe = fs.readFileSync(new URL('./probe.mjs', import.meta.url), 'utf8');
+  const live = fs.readFileSync(new URL('./live.mjs', import.meta.url), 'utf8');
+  assert.equal((probe.match(/process\.stdout\.write/g) || []).length, 1);
+  assert.doesNotMatch(live, /process\.stdout\.write/);
+  assert.match(probe, /\['SIGINT', 'SIGTERM'\]/);
+  assert.match(probe, /setTimeout\(\(\) => \{[\s\S]*process\.exit\(exitCode\)/);
 });

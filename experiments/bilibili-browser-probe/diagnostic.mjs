@@ -64,6 +64,19 @@ const ERROR_CODES = Object.freeze([
   ['ERR_ABORTED', 'chromium_navigation', 'navigation_aborted', 'downstream_close'],
 ]);
 
+// Durable diagnostic reasons are a closed vocabulary.  This is exported so
+// the finalizer can reject caller-supplied labels instead of treating a
+// merely lexical string as trusted evidence.
+export const DIAGNOSTIC_REASONS = Object.freeze([
+  ...new Set([
+    ...ERROR_CODES.map(([, , reason]) => reason),
+    ...DIAGNOSTIC_PHASES.filter((phase) => phase !== 'unknown').map((phase) => `${phase}_failed`),
+    'unclassified_failure',
+    'status_1xx', 'status_2xx', 'status_3xx', 'status_4xx', 'status_5xx',
+  ]),
+]);
+const DIAGNOSTIC_REASON_SET = new Set(DIAGNOSTIC_REASONS);
+
 const PHASE_HINTS = new Set(DIAGNOSTIC_PHASES);
 const TRANSPORT_STAGE_SET = new Set(TRANSPORT_STAGES);
 const TRANSPORT_OUTCOME_SET = new Set(TRANSPORT_OUTCOMES);
@@ -174,4 +187,8 @@ export function diagnosticCounters(state = {}) {
     response_bytes: boundedCounter(state.responseBytes, MAX_RESPONSE_BYTES),
     metadata_bytes: boundedCounter(state.metadataBytes, MAX_METADATA_BYTES),
   };
+}
+
+export function isDiagnosticReason(value) {
+  return typeof value === 'string' && DIAGNOSTIC_REASON_SET.has(value);
 }
