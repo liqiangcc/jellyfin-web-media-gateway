@@ -18,6 +18,7 @@ const staticFiles = [
   'plugins/bilibili/live_selector.mjs', 'plugins/bilibili/package.json', 'docs/research/bilibili-browser-probe-runbook.md',
 ];
 const packageTopLevel = new Set(['LICENSE', 'NOTICE', 'README.md', 'ThirdPartyNotices.txt', 'cli.js', 'index.d.ts', 'index.js', 'index.mjs', 'lib', 'package.json']);
+const excludedPackageFiles = new Set(['bin/install_media_pack.ps1']);
 const sha256 = async (file) => crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex');
 const relativeSafe = (value) => typeof value === 'string' && value.length > 0 && !path.isAbsolute(value) && !value.split('/').includes('..');
 
@@ -50,6 +51,7 @@ async function runtimeEntries(runtimeRoot, output) {
   const files = await walk(packageRoot);
   for (const file of files) {
     const relative = path.relative(packageRoot, file).split(path.sep).join('/');
+    if (excludedPackageFiles.has(relative)) continue;
     if (!packageTopLevel.has(relative.split('/')[0])) throw new Error(`unexpected playwright-core package entry: ${relative}`);
     await copyRegular(file, path.join(output, dependency.package_path, relative));
   }
