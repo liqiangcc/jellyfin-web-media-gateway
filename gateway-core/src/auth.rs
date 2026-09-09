@@ -415,6 +415,29 @@ impl SessionVault {
         Ok(())
     }
 
+    /// Resolve an opaque candidate-session identity issued by the Vault.  The
+    /// caller receives only the metadata reference; secret material remains
+    /// behind this boundary and the reference must still be a live candidate
+    /// for the requested site/account pair.
+    pub(crate) fn candidate_session_ref(
+        &self,
+        site_id: &str,
+        account_ref: &str,
+        session_id: &str,
+    ) -> Result<SiteSessionRef, VaultError> {
+        let inner = self.inner.lock().expect("session vault poisoned");
+        inner
+            .sessions
+            .get(session_id)
+            .filter(|stored| {
+                stored.candidate
+                    && stored.reference.site_id() == site_id
+                    && stored.reference.account_ref() == account_ref
+            })
+            .map(|stored| stored.reference.clone())
+            .ok_or(VaultError::CandidateNotFound)
+    }
+
     pub fn active_session(
         &self,
         site_id: &str,

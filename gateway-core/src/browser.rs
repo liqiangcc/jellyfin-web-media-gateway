@@ -161,8 +161,12 @@ pub enum BrowserStatus {
 pub struct BrowserOperationId(u64);
 
 impl BrowserOperationId {
-    pub(crate) const fn value(self) -> u64 {
+    pub const fn value(self) -> u64 {
         self.0
+    }
+
+    pub const fn from_value(value: u64) -> Self {
+        Self(value)
     }
 }
 
@@ -305,6 +309,7 @@ impl BrowserObservationHandoff {
             ResolveContext {
                 browser_observation: Some(&self.observation),
                 server_observation: Some(&self.server_observation),
+                authenticated_session: None,
             },
         )
     }
@@ -325,6 +330,10 @@ impl BrowserNavigationRequest {
             operation_id: BrowserOperationId(Uuid::new_v4().as_u128() as u64),
             url,
         }
+    }
+
+    pub fn with_operation_id(operation_id: BrowserOperationId, url: Url) -> Self {
+        Self { operation_id, url }
     }
 
     pub fn operation_id(&self) -> BrowserOperationId {

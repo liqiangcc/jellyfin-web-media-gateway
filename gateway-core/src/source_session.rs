@@ -10,6 +10,7 @@ use crate::control::{
     NavigationStart,
 };
 use crate::display_session::{DisplaySessionError, DisplaySessionService};
+use crate::browser::BrowserObservationHandoff;
 use crate::playback::{Command, CommandError, NavigationTicket};
 use crate::{Binding, EgressScope, GatewayError, GatewayService};
 use axum::response::{IntoResponse, Response};
@@ -135,6 +136,13 @@ impl SourceSessionService {
             .then_some(media)
     }
 
+    pub(crate) fn recognize(
+        &self,
+        source: &str,
+    ) -> Result<site_adapter_api::SourceLocator, AdapterError> {
+        self.registry.recognize(source)
+    }
+
     /// Publish a media projection without allowing a delayed preparation to
     /// roll the projection back after a newer Playback item has committed.
     ///
@@ -227,6 +235,58 @@ impl SourceSessionService {
             },
         );
         outcome
+    }
+
+    /// Consume a server-owned authenticated browser handoff through the
+    /// normal source/session publication path. The Browser Worker facts and
+    /// opaque auth proof are passed to the owning SiteAdapterRegistry; this
+    /// method never receives or projects session material.
+    pub(crate) fn create_authenticated(
+        &self,
+        gateway: &GatewayService,
+        control: &ControlService,
+        displays: &DisplaySessionService,
+        request: CreateSessionRequest,
+        browser_handoff: BrowserObservationHandoff,
+        authenticated_session: site_adapter_api::AuthenticatedSessionHandoff,
+    ) -> CreationOutcome {
+        if browser_handoff.is_expired() {
+            return authenticated_failure(
+                axum::http::StatusCode::CONFLICT,
+                "SOURCE_OBSERVATION_EXPIRED",
+                "authenticated browser observation has expired",
+            );
+        }
+        if browser_handoff.locator().site_id.as_str() != authenticated_session.site_id() {
+            return authenticated_failure(
+                axum::http::StatusCode::CONFLICT,
+                "SOURCE_AUTH_STALE",
+                "authenticated browser handoff is stale for this source",
+            );
+        }
+
+        match self.recognize(&request.source) {
+            Ok(locator) if locator == *browser_handoff.locator() => {}
+            Ok(_) | Err(_) => {
+                return authenticated_failure(
+                    axum::http::StatusCode::CONFLICT,
+                    "SOURCE_AUTH_STALE",
+                    "authenticated browser handoff is stale for this source",
+                );
+            }
+        }
+
+        self.create_with_context(
+            gateway,
+            control,
+            displays,
+            request,
+            ResolveContext {
+                browser_observation: Some(browser_handoff.observation()),
+                server_observation: Some(browser_handoff.server_observation()),
+                authenticated_session: Some(&authenticated_session),
+            },
+        )
     }
 
     fn create_fresh(
@@ -646,12 +706,33 @@ fn failure_for_adapter(error: AdapterError) -> CreationOutcome {
             "SOURCE_AMBIGUOUS",
             "source matched multiple registered adapters",
         ),
+        AdapterError::ObservationExpired => (
+            axum::http::StatusCode::CONFLICT,
+            "SOURCE_OBSERVATION_EXPIRED",
+            "authenticated browser observation has expired",
+        ),
+        AdapterError::ContentNotFound => (
+            axum::http::StatusCode::CONFLICT,
+            "SOURCE_AUTH_STALE",
+            "authenticated browser observation is stale for this source",
+        ),
         _ => (
             axum::http::StatusCode::UNPROCESSABLE_ENTITY,
             "SOURCE_UNSUPPORTED",
             "registered adapter could not prepare the source",
         ),
     };
+    CreationOutcome::Failure {
+        status,
+        error: CreateSessionErrorResponse { code, message },
+    }
+}
+
+fn authenticated_failure(
+    status: axum::http::StatusCode,
+    code: &'static str,
+    message: &'static str,
+) -> CreationOutcome {
     CreationOutcome::Failure {
         status,
         error: CreateSessionErrorResponse { code, message },
@@ -715,6 +796,7 @@ mod tests {
         SecretReference,
         Navigation,
         Observation,
+        AuthenticatedObservation,
     }
 
     struct FixtureAdapter {
@@ -802,10 +884,18 @@ mod tests {
             locator: &SourceLocator,
             context: ResolveContext<'_>,
         ) -> Result<ResolvedMedia, AdapterError> {
-            if matches!(self.mode, FixtureMode::Observation)
+            if matches!(
+                self.mode,
+                FixtureMode::Observation | FixtureMode::AuthenticatedObservation
+            )
                 && (context.browser_observation.is_none() || context.server_observation.is_none())
             {
                 return Err(AdapterError::ObservationRequired);
+            }
+            if matches!(self.mode, FixtureMode::AuthenticatedObservation)
+                && context.authenticated_session.is_none()
+            {
+                return Err(AdapterError::AccessRequired);
             }
             self.resolve(locator)
         }
@@ -881,6 +971,45 @@ mod tests {
             }],
         };
         (observation, server)
+    }
+
+    fn authenticated_browser_handoff(
+        locator_payload: &str,
+        ttl: std::time::Duration,
+    ) -> crate::browser::BrowserObservationHandoff {
+        let (observation, server_observation) = observation_context();
+        crate::browser::BrowserObservationHandoff::bind(
+            crate::browser::BrowserSessionId::new(),
+            crate::browser::BrowserOperationId::from_value(248),
+            SourceLocator {
+                site_id: "fixture".into(),
+                plugin_id: "fixture-authenticated".into(),
+                locator_version: 1,
+                opaque_payload: locator_payload.into(),
+            },
+            crate::browser::BrowserObservationPayload {
+                operation_id: crate::browser::BrowserOperationId::from_value(248),
+                observation,
+                server_observation,
+            },
+            ttl,
+        )
+        .unwrap()
+    }
+
+    fn authenticated_session() -> site_adapter_api::AuthenticatedSessionHandoff {
+        site_adapter_api::AuthenticatedSessionHandoff::new_server_owned(
+            "fixture",
+            "account-a",
+            "candidate-ref",
+            site_adapter_api::BrowserAuthObservation {
+                schema_version: site_adapter_api::BROWSER_AUTH_OBSERVATION_VERSION,
+                sequence: 1,
+                state: site_adapter_api::BrowserAuthState::CandidateReady,
+                diagnostic: site_adapter_api::BrowserAuthDiagnostic::CandidateAccepted,
+            },
+        )
+        .unwrap()
     }
 
     async fn json(response: axum::response::Response) -> serde_json::Value {
@@ -994,6 +1123,7 @@ mod tests {
                 ResolveContext {
                     browser_observation: Some(&observation),
                     server_observation: Some(&server_observation),
+                    authenticated_session: None,
                 },
             )
             .into_response();
@@ -1003,6 +1133,137 @@ mod tests {
         assert!(body.to_string().contains("/stream/"));
         assert!(!body.to_string().contains("source-session-ref"));
         assert!(!body.to_string().contains("media.example.invalid"));
+    }
+
+    #[tokio::test]
+    async fn authenticated_playback_seam_uses_context_and_is_exactly_once() {
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(FixtureAdapter {
+                plugin: "fixture-authenticated",
+                priority: 10,
+                mode: FixtureMode::AuthenticatedObservation,
+            }))
+            .unwrap();
+        let service = service_with_registry(registry);
+        register_display(&service).await;
+        let request = super::CreateSessionRequest {
+            request_id: "authenticated-create".into(),
+            source: "fixture://observation".into(),
+            display_id: "display-a".into(),
+        };
+        let first = json(
+            service.create_authenticated_playback_session(
+                request.clone(),
+                authenticated_browser_handoff("fixture://observation", std::time::Duration::from_secs(30)),
+                authenticated_session(),
+            ),
+        )
+        .await;
+        let capability_count = service.capability_count();
+        let replay = json(
+            service.create_authenticated_playback_session(
+                request,
+                authenticated_browser_handoff("fixture://observation", std::time::Duration::from_secs(30)),
+                authenticated_session(),
+            ),
+        )
+        .await;
+
+        assert_eq!(first["session_id"], replay["session_id"]);
+        assert_eq!(first["media"]["streams"], replay["media"]["streams"]);
+        assert_eq!(service.capability_count(), capability_count);
+        assert_eq!(service.control().session_count(), 1);
+        assert!(first["media"]["streams"][0]["gateway_path"]
+            .as_str()
+            .is_some_and(|path| path.starts_with("/stream/")));
+    }
+
+    #[tokio::test]
+    async fn authenticated_playback_seam_rejects_stale_handoff_without_publication() {
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(FixtureAdapter {
+                plugin: "fixture-authenticated",
+                priority: 10,
+                mode: FixtureMode::AuthenticatedObservation,
+            }))
+            .unwrap();
+        let service = service_with_registry(registry);
+        register_display(&service).await;
+        let response = service.create_authenticated_playback_session(
+            super::CreateSessionRequest {
+                request_id: "authenticated-stale".into(),
+                source: "fixture://observation".into(),
+                display_id: "display-a".into(),
+            },
+            authenticated_browser_handoff("fixture://other", std::time::Duration::from_secs(30)),
+            authenticated_session(),
+        );
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = json(response).await;
+        assert_eq!(body["code"], "SOURCE_AUTH_STALE");
+        assert_eq!(service.control().session_count(), 0);
+        assert_eq!(service.capability_count(), 0);
+        assert!(!body.to_string().contains("candidate-ref"));
+    }
+
+    #[tokio::test]
+    async fn authenticated_playback_seam_rejects_expired_observation() {
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(FixtureAdapter {
+                plugin: "fixture-authenticated",
+                priority: 10,
+                mode: FixtureMode::AuthenticatedObservation,
+            }))
+            .unwrap();
+        let service = service_with_registry(registry);
+        register_display(&service).await;
+        let response = service.create_authenticated_playback_session(
+            super::CreateSessionRequest {
+                request_id: "authenticated-expired".into(),
+                source: "fixture://observation".into(),
+                display_id: "display-a".into(),
+            },
+            authenticated_browser_handoff("fixture://observation", std::time::Duration::ZERO),
+            authenticated_session(),
+        );
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = json(response).await;
+        assert_eq!(body["code"], "SOURCE_OBSERVATION_EXPIRED");
+        assert_eq!(service.control().session_count(), 0);
+        assert_eq!(service.capability_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn authenticated_playback_errors_are_secret_safe() {
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(FixtureAdapter {
+                plugin: "fixture-authenticated",
+                priority: 10,
+                mode: FixtureMode::AuthenticatedObservation,
+            }))
+            .unwrap();
+        let service = service_with_registry(registry);
+        register_display(&service).await;
+        let response = service.create_authenticated_playback_session(
+            super::CreateSessionRequest {
+                request_id: "authenticated-secret-safe".into(),
+                source: "fixture://observation".into(),
+                display_id: "display-a".into(),
+            },
+            authenticated_browser_handoff("fixture://other", std::time::Duration::from_secs(30)),
+            authenticated_session(),
+        );
+        let body = json(response).await;
+        let serialized = body.to_string();
+        assert!(!serialized.contains("candidate-ref"));
+        assert!(!serialized.contains("source-session-ref"));
+        assert!(!serialized.contains("media.example.invalid"));
+        assert!(!serialized.contains("Bearer"));
+        assert!(!serialized.contains("Cookie"));
     }
 
     #[tokio::test]

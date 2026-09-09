@@ -7,12 +7,13 @@
 
 use crate::auth::{CandidateValidation, SessionVault, SiteSessionRef, VaultError};
 use crate::browser::{
-    BrowserAuthMode, BrowserError, BrowserEvent, BrowserSession, BrowserWorker,
+    BrowserAuthMode, BrowserError, BrowserEvent, BrowserNavigationRequest, BrowserObservationHandoff,
+    BrowserOperationId, BrowserSession, BrowserWorker,
     R008NavigationPolicy,
 };
 use site_adapter_api::{
     AuthenticatedSessionHandoff, BROWSER_AUTH_OBSERVATION_VERSION, BrowserAuthDiagnostic,
-    BrowserAuthObservation, BrowserAuthState, validate_browser_auth_observation,
+    BrowserAuthObservation, BrowserAuthState, SourceLocator, validate_browser_auth_observation,
 };
 use std::collections::VecDeque;
 use std::fmt;
@@ -192,6 +193,10 @@ impl<W: BrowserWorker> BrowserAuthAttempt<W> {
         self.expires_at <= Instant::now()
     }
 
+    pub fn expires_in(&self) -> Duration {
+        self.expires_at.saturating_duration_since(Instant::now())
+    }
+
     pub fn events_after(&self, after_sequence: u64) -> Vec<BrowserAuthEvent> {
         self.events
             .iter()
@@ -219,10 +224,11 @@ impl<W: BrowserWorker> BrowserAuthAttempt<W> {
 
     pub async fn navigate(
         &mut self,
-        request: crate::browser::BrowserNavigationRequest,
+        request: BrowserNavigationRequest,
         policy: &R008NavigationPolicy,
-    ) -> Result<(), BrowserAuthRuntimeError> {
+    ) -> Result<BrowserOperationId, BrowserAuthRuntimeError> {
         self.ensure_live()?;
+        let operation_id = request.operation_id();
         self.worker
             .navigate(self.session.id(), request, policy)
             .await
@@ -230,6 +236,7 @@ impl<W: BrowserWorker> BrowserAuthAttempt<W> {
                 self.observe_worker_error(error);
                 error.into()
             })
+            .map(|()| operation_id)
     }
 
     pub async fn request_input(
@@ -248,6 +255,49 @@ impl<W: BrowserWorker> BrowserAuthAttempt<W> {
                 self.observe_worker_error(error);
                 error.into()
             })
+    }
+
+    pub fn cancel_operation(
+        &mut self,
+        operation_id: BrowserOperationId,
+    ) -> Result<(), BrowserAuthRuntimeError> {
+        self.ensure_live()?;
+        self.worker
+            .cancel(self.session.id(), operation_id)
+            .map_err(Into::into)
+    }
+
+    /// Consume the worker's one-shot generic observation and bind it to the
+    /// opaque locator selected by the owning SiteAdapterRegistry.
+    pub fn take_observation_handoff(
+        &mut self,
+        locator: SourceLocator,
+        operation_id: BrowserOperationId,
+        ttl: Duration,
+    ) -> Result<BrowserObservationHandoff, BrowserAuthRuntimeError> {
+        self.ensure_live()?;
+        BrowserObservationHandoff::take_from_worker(
+            self.worker.as_ref(),
+            self.session.id(),
+            operation_id,
+            locator,
+            ttl,
+        )?
+        .ok_or(BrowserAuthRuntimeError::InvalidObservation)
+    }
+
+    /// Resolve an opaque candidate identity through the Vault and perform the
+    /// existing atomic validation/swap.  Raw session material never leaves
+    /// this runtime.
+    pub fn accept_candidate_ref(
+        &mut self,
+        candidate_session_id: &str,
+        observation: BrowserAuthObservation,
+    ) -> Result<AuthenticatedSessionHandoff, BrowserAuthRuntimeError> {
+        let candidate = self
+            .vault
+            .candidate_session_ref(&self.site_id, &self.account_ref, candidate_session_id)?;
+        self.accept_candidate(candidate, observation)
     }
 
     /// Record a generic candidate-ready observation after the Site Plugin has

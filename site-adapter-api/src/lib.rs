@@ -128,6 +128,10 @@ pub struct ServerOwnedObservation {
 pub struct ResolveContext<'a> {
     pub browser_observation: Option<&'a BrowserObservation>,
     pub server_observation: Option<&'a ServerOwnedObservation>,
+    /// An optional server-owned authenticated session handoff.  Core only
+    /// transports this opaque proof; the owning Site Plugin decides whether
+    /// the source requires it and how to interpret its generic auth facts.
+    pub authenticated_session: Option<&'a AuthenticatedSessionHandoff>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
