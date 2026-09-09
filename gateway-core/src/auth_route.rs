@@ -4,7 +4,7 @@
 //! lifecycle.  Browser facts remain generic and the SiteAdapter/SourceSession
 //! contracts remain the only place that interprets a source.
 
-use crate::auth::{SessionVault, VaultError};
+use crate::auth::{SessionVault, SiteSessionRef, VaultError};
 #[cfg(any(test, feature = "test-support"))]
 use crate::browser::FakeBrowserWorker;
 use crate::browser::{
@@ -17,7 +17,7 @@ use crate::source_session::CreateSessionRequest;
 use crate::{GatewayService, GatewayState};
 use axum::Json;
 use axum::extract::{Path, Query, State, rejection::JsonRejection};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use site_adapter_api::{
@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
 use uuid::Uuid;
@@ -42,6 +42,10 @@ const MAX_INPUT: usize = 2048;
 const MAX_EVENTS: usize = 64;
 const MAX_CURSOR: u64 = 1_000_000_000;
 const HANDOFF_TTL: Duration = Duration::from_secs(60);
+const AUTH_CAPABILITY_TTL: Duration = Duration::from_secs(300);
+const MAX_CAPABILITY: usize = 128;
+const VIEW_CAPABILITY_HEADER: &str = "x-gateway-auth-view-capability";
+const PANEL_CAPABILITY_HEADER: &str = "x-gateway-auth-panel-capability";
 
 #[derive(Clone)]
 pub(crate) struct AuthRouteCoordinator {
@@ -69,6 +73,7 @@ enum AuthAttempt {
 
 struct AttemptRecord {
     attempt: AuthAttempt,
+    capabilities: AuthCapabilities,
     requests: HashMap<String, u64>,
     last_operation: u64,
     accepted: Option<AcceptedHandoff>,
@@ -91,6 +96,40 @@ struct AcceptedHandoff {
 struct StartRecord {
     fingerprint: u64,
     attempt_id: String,
+    capabilities: AuthCapabilities,
+}
+
+#[derive(Clone)]
+struct AuthCapabilities {
+    view: String,
+    panel: String,
+    expires_at: Instant,
+}
+
+impl AuthCapabilities {
+    fn new() -> Self {
+        Self {
+            view: format!("view-{}", Uuid::new_v4().simple()),
+            panel: format!("panel-{}", Uuid::new_v4().simple()),
+            expires_at: Instant::now() + AUTH_CAPABILITY_TTL,
+        }
+    }
+
+    fn matches(&self, kind: CapabilityKind, value: &str) -> bool {
+        if self.expires_at <= Instant::now() {
+            return false;
+        }
+        match kind {
+            CapabilityKind::View => self.view == value,
+            CapabilityKind::Panel => self.panel == value,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CapabilityKind {
+    View,
+    Panel,
 }
 
 impl AuthRouteCoordinator {
@@ -140,7 +179,7 @@ impl AuthRouteCoordinator {
         request_id: &str,
         site_id: &str,
         account_ref: &str,
-    ) -> Result<(String, BrowserAuthState, u64, bool), ApiError> {
+    ) -> Result<(String, BrowserAuthState, u64, bool, AuthCapabilities), ApiError> {
         let _start_guard = self.start_gate.lock().await;
         let fingerprint = fingerprint(&(site_id, account_ref));
         if let Some(existing) = self
@@ -176,6 +215,7 @@ impl AuthRouteCoordinator {
                 record.state(),
                 record.expires_in(),
                 true,
+                existing.capabilities,
             ));
         }
 
@@ -192,8 +232,10 @@ impl AuthRouteCoordinator {
         }
         .map_err(ApiError::from_runtime)?;
         let attempt_id = format!("a-{}", Uuid::new_v4().simple());
+        let capabilities = AuthCapabilities::new();
         let record = AttemptRecord {
             attempt,
+            capabilities: capabilities.clone(),
             requests: HashMap::new(),
             last_operation: 0,
             accepted: None,
@@ -213,9 +255,31 @@ impl AuthRouteCoordinator {
                 StartRecord {
                     fingerprint,
                     attempt_id: attempt_id.clone(),
+                    capabilities: capabilities.clone(),
                 },
             );
-        Ok((attempt_id, state, expires_in, false))
+        Ok((attempt_id, state, expires_in, false, capabilities))
+    }
+
+    fn authorize(&self, id: &str, capability: &str, kind: CapabilityKind) -> Result<(), ApiError> {
+        if !bounded_ref(capability, MAX_CAPABILITY) {
+            return Err(ApiError::forbidden("AUTH_CAPABILITY_INVALID"));
+        }
+        let attempts = self.attempts.lock().expect("auth attempt store poisoned");
+        let Some(record) = attempts.get(id) else {
+            return Err(ApiError::not_found("AUTH_ATTEMPT_NOT_FOUND"));
+        };
+        let expired = record.is_expired();
+        let matches = record.capabilities.matches(kind, capability);
+        drop(attempts);
+        if expired {
+            self.expire_and_remove(id);
+            return Err(ApiError::conflict("AUTH_CAPABILITY_EXPIRED"));
+        }
+        if !matches {
+            return Err(ApiError::forbidden("AUTH_CAPABILITY_INVALID"));
+        }
+        Ok(())
     }
 
     fn take(&self, id: &str) -> Result<AttemptRecord, ApiError> {
@@ -455,6 +519,74 @@ impl AuthRouteCoordinator {
         Ok((false, status))
     }
 
+    async fn capture_candidate(
+        &self,
+        id: &str,
+        request_id: &str,
+        capture: &CaptureRequest,
+        locator: SourceLocator,
+    ) -> Result<(bool, AuthRouteStatus), ApiError> {
+        let _operation_guard = self.operation_gate.lock().await;
+        let mut record = self.take(id)?;
+        let request_fingerprint = fingerprint(&(
+            capture.operation_id,
+            capture.source.as_str(),
+            capture.observation.schema_version,
+            capture.observation.sequence,
+        ));
+        if let Some(previous) = record.requests.get(request_id).copied() {
+            if previous != request_fingerprint {
+                self.put(id.to_owned(), record);
+                return Err(ApiError::conflict("AUTH_REQUEST_ID_MISMATCH"));
+            }
+            let status = AuthRouteStatus::from(record.state());
+            self.put(id.to_owned(), record);
+            return Ok((true, status));
+        }
+        if record.accepted.is_some() {
+            self.put(id.to_owned(), record);
+            return Err(ApiError::conflict("AUTH_CANDIDATE_ALREADY_ACCEPTED"));
+        }
+        let browser = match record.take_observation(locator, capture.operation_id, HANDOFF_TTL) {
+            Ok(browser) => browser,
+            Err(error) => {
+                self.put(id.to_owned(), record);
+                return Err(ApiError::from_runtime(error));
+            }
+        };
+        let observation = match capture.observation.into_observation() {
+            Ok(observation) => observation,
+            Err(error) => {
+                self.put(id.to_owned(), record);
+                return Err(error);
+            }
+        };
+        let candidate = match record.capture_candidate(request_id, observation).await {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                self.put(id.to_owned(), record);
+                return Err(ApiError::from_runtime(error));
+            }
+        };
+        let authenticated = match record.accept_candidate_ref(candidate.session_id(), observation) {
+            Ok(authenticated) => authenticated,
+            Err(error) => {
+                self.put(id.to_owned(), record);
+                return Err(ApiError::from_runtime(error));
+            }
+        };
+        record.accepted = Some(AcceptedHandoff {
+            browser,
+            authenticated,
+        });
+        record
+            .requests
+            .insert(request_id.to_owned(), request_fingerprint);
+        let status = AuthRouteStatus::from(record.state());
+        self.put(id.to_owned(), record);
+        Ok((false, status))
+    }
+
     async fn playback(
         &self,
         gateway: &GatewayService,
@@ -574,6 +706,20 @@ impl AttemptRecord {
         }
     }
 
+    async fn capture_candidate(
+        &mut self,
+        request_id: &str,
+        observation: BrowserAuthObservation,
+    ) -> Result<SiteSessionRef, BrowserAuthRuntimeError> {
+        match &mut self.attempt {
+            AuthAttempt::Chromium(attempt) => {
+                attempt.capture_candidate(request_id, observation).await
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            AuthAttempt::Fake(attempt) => attempt.capture_candidate(request_id, observation).await,
+        }
+    }
+
     fn cancel(&mut self) -> Result<(), BrowserAuthRuntimeError> {
         match &mut self.attempt {
             AuthAttempt::Chromium(attempt) => attempt.cancel(),
@@ -662,6 +808,15 @@ pub(crate) struct CandidateRequest {
     pub source: String,
     pub operation_id: u64,
     pub candidate_session_id: String,
+    pub observation: AuthObservationDto,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CaptureRequest {
+    pub request_id: String,
+    pub source: String,
+    pub operation_id: u64,
     pub observation: AuthObservationDto,
 }
 
@@ -812,6 +967,8 @@ pub(crate) struct StartResponse {
     pub state: AuthRouteStatus,
     pub expires_in_seconds: u64,
     pub duplicate: bool,
+    pub view_capability: String,
+    pub panel_capability: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -940,6 +1097,12 @@ impl ApiError {
             code,
         }
     }
+    fn forbidden(code: &'static str) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code,
+        }
+    }
     fn from_runtime(error: BrowserAuthRuntimeError) -> Self {
         let code = match error {
             BrowserAuthRuntimeError::Browser(error) => error.code(),
@@ -1031,12 +1194,14 @@ pub(crate) async fn start_handler(
         .start(&request.request_id, &request.site_id, &request.account_ref)
         .await
     {
-        Ok((attempt_id, state_value, expires, duplicate)) => Json(StartResponse {
+        Ok((attempt_id, state_value, expires, duplicate, capabilities)) => Json(StartResponse {
             request_id: request.request_id,
             attempt_id,
             state: state_value.into(),
             expires_in_seconds: expires,
             duplicate,
+            view_capability: capabilities.view,
+            panel_capability: capabilities.panel,
         })
         .into_response(),
         Err(error) => error.into_response(),
@@ -1047,9 +1212,20 @@ pub(crate) async fn events_handler(
     State(state): State<Arc<GatewayState>>,
     Path(attempt_id): Path<String>,
     Query(query): Query<EventsQuery>,
+    headers: HeaderMap,
 ) -> Response {
     if !bounded_ref(&attempt_id, 128) {
         return ApiError::not_found("AUTH_ATTEMPT_NOT_FOUND").into_response();
+    }
+    let capability = match capability_header(&headers, CapabilityKind::View) {
+        Ok(capability) => capability,
+        Err(error) => return error.into_response(),
+    };
+    if let Err(error) = state
+        .auth_routes
+        .authorize(&attempt_id, capability, CapabilityKind::View)
+    {
+        return error.into_response();
     }
     match state
         .auth_routes
@@ -1070,6 +1246,7 @@ pub(crate) async fn events_handler(
 pub(crate) async fn navigation_handler(
     State(state): State<Arc<GatewayState>>,
     Path(attempt_id): Path<String>,
+    headers: HeaderMap,
     request: Result<Json<NavigationRequest>, JsonRejection>,
 ) -> Response {
     let Json(request) = match request {
@@ -1078,6 +1255,16 @@ pub(crate) async fn navigation_handler(
     };
     if !bounded_ref(&attempt_id, 128) || !bounded_ref(&request.request_id, MAX_REQUEST_ID) {
         return ApiError::bad_request("AUTH_REQUEST_INVALID").into_response();
+    }
+    let capability = match capability_header(&headers, CapabilityKind::Panel) {
+        Ok(capability) => capability,
+        Err(error) => return error.into_response(),
+    };
+    if let Err(error) = state
+        .auth_routes
+        .authorize(&attempt_id, capability, CapabilityKind::Panel)
+    {
+        return error.into_response();
     }
     let url = match parse_navigation_url(&request.url) {
         Ok(url) => url,
@@ -1112,6 +1299,7 @@ pub(crate) async fn navigation_handler(
 pub(crate) async fn input_handler(
     State(state): State<Arc<GatewayState>>,
     Path(attempt_id): Path<String>,
+    headers: HeaderMap,
     request: Result<Json<InputRequest>, JsonRejection>,
 ) -> Response {
     let Json(request) = match request {
@@ -1120,6 +1308,16 @@ pub(crate) async fn input_handler(
     };
     if !bounded_ref(&attempt_id, 128) || !bounded_ref(&request.request_id, MAX_REQUEST_ID) {
         return ApiError::bad_request("AUTH_REQUEST_INVALID").into_response();
+    }
+    let capability = match capability_header(&headers, CapabilityKind::Panel) {
+        Ok(capability) => capability,
+        Err(error) => return error.into_response(),
+    };
+    if let Err(error) = state
+        .auth_routes
+        .authorize(&attempt_id, capability, CapabilityKind::Panel)
+    {
+        return error.into_response();
     }
     let input = match request.input.into_input() {
         Ok(input) => input,
@@ -1143,6 +1341,7 @@ pub(crate) async fn input_handler(
 pub(crate) async fn cancel_handler(
     State(state): State<Arc<GatewayState>>,
     Path(attempt_id): Path<String>,
+    headers: HeaderMap,
     request: Result<Json<CancelRequest>, JsonRejection>,
 ) -> Response {
     let Json(request) = match request {
@@ -1151,6 +1350,16 @@ pub(crate) async fn cancel_handler(
     };
     if !bounded_ref(&attempt_id, 128) || !bounded_ref(&request.request_id, MAX_REQUEST_ID) {
         return ApiError::bad_request("AUTH_REQUEST_INVALID").into_response();
+    }
+    let capability = match capability_header(&headers, CapabilityKind::Panel) {
+        Ok(capability) => capability,
+        Err(error) => return error.into_response(),
+    };
+    if let Err(error) = state
+        .auth_routes
+        .authorize(&attempt_id, capability, CapabilityKind::Panel)
+    {
+        return error.into_response();
     }
     match state
         .auth_routes
@@ -1170,6 +1379,7 @@ pub(crate) async fn cancel_handler(
 pub(crate) async fn candidate_handler(
     State(state): State<Arc<GatewayState>>,
     Path(attempt_id): Path<String>,
+    headers: HeaderMap,
     request: Result<Json<CandidateRequest>, JsonRejection>,
 ) -> Response {
     let Json(request) = match request {
@@ -1182,6 +1392,16 @@ pub(crate) async fn candidate_handler(
         || !bounded_text(&request.source, MAX_SOURCE)
     {
         return ApiError::bad_request("AUTH_REQUEST_INVALID").into_response();
+    }
+    let capability = match capability_header(&headers, CapabilityKind::Panel) {
+        Ok(capability) => capability,
+        Err(error) => return error.into_response(),
+    };
+    if let Err(error) = state
+        .auth_routes
+        .authorize(&attempt_id, capability, CapabilityKind::Panel)
+    {
+        return error.into_response();
     }
     let locator = match state.source_sessions.recognize(&request.source) {
         Ok(locator) => locator,
@@ -1206,9 +1426,62 @@ pub(crate) async fn candidate_handler(
     }
 }
 
+/// Capture candidate material through the crate-private #257 seam. The HTTP
+/// caller supplies only a generic ready observation and opaque source data;
+/// raw profile/session material never enters this DTO or its response.
+pub(crate) async fn capture_handler(
+    State(state): State<Arc<GatewayState>>,
+    Path(attempt_id): Path<String>,
+    headers: HeaderMap,
+    request: Result<Json<CaptureRequest>, JsonRejection>,
+) -> Response {
+    let Json(request) = match request {
+        Ok(request) => request,
+        Err(rejection) => return auth_json_rejection(rejection),
+    };
+    if !bounded_ref(&attempt_id, 128)
+        || !bounded_ref(&request.request_id, MAX_REQUEST_ID)
+        || !bounded_text(&request.source, MAX_SOURCE)
+    {
+        return ApiError::bad_request("AUTH_REQUEST_INVALID").into_response();
+    }
+    let capability = match capability_header(&headers, CapabilityKind::Panel) {
+        Ok(capability) => capability,
+        Err(error) => return error.into_response(),
+    };
+    if let Err(error) = state
+        .auth_routes
+        .authorize(&attempt_id, capability, CapabilityKind::Panel)
+    {
+        return error.into_response();
+    }
+    if request.operation_id == 0 {
+        return ApiError::bad_request("AUTH_OPERATION_INVALID").into_response();
+    }
+    let locator = match state.source_sessions.recognize(&request.source) {
+        Ok(locator) => locator,
+        Err(_) => return ApiError::bad_request("AUTH_SOURCE_UNSUPPORTED").into_response(),
+    };
+    match state
+        .auth_routes
+        .capture_candidate(&attempt_id, &request.request_id, &request, locator)
+        .await
+    {
+        Ok((duplicate, status)) => Json(AcceptedResponse {
+            attempt_id,
+            accepted: true,
+            duplicate,
+            state: status,
+        })
+        .into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
 pub(crate) async fn playback_handler(
     State(state): State<Arc<GatewayState>>,
     Path(attempt_id): Path<String>,
+    headers: HeaderMap,
     request: Result<Json<CreateSessionRequest>, JsonRejection>,
 ) -> Response {
     let Json(request) = match request {
@@ -1221,6 +1494,16 @@ pub(crate) async fn playback_handler(
         || !bounded_ref(&request.display_id, 128)
     {
         return ApiError::bad_request("AUTH_REQUEST_INVALID").into_response();
+    }
+    let capability = match capability_header(&headers, CapabilityKind::Panel) {
+        Ok(capability) => capability,
+        Err(error) => return error.into_response(),
+    };
+    if let Err(error) = state
+        .auth_routes
+        .authorize(&attempt_id, capability, CapabilityKind::Panel)
+    {
+        return error.into_response();
     }
     match state
         .auth_routes
@@ -1257,6 +1540,24 @@ fn auth_json_rejection(rejection: JsonRejection) -> Response {
         }),
     )
         .into_response()
+}
+
+fn capability_header<'a>(
+    headers: &'a HeaderMap,
+    kind: CapabilityKind,
+) -> Result<&'a str, ApiError> {
+    let name = match kind {
+        CapabilityKind::View => VIEW_CAPABILITY_HEADER,
+        CapabilityKind::Panel => PANEL_CAPABILITY_HEADER,
+    };
+    let value = headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| ApiError::forbidden("AUTH_CAPABILITY_REQUIRED"))?;
+    if !bounded_ref(value, MAX_CAPABILITY) {
+        return Err(ApiError::forbidden("AUTH_CAPABILITY_INVALID"));
+    }
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -1307,6 +1608,47 @@ mod tests {
             coordinator.events(&first.0, 0).await,
             Err(ApiError {
                 code: "AUTH_ATTEMPT_NOT_FOUND",
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn capabilities_are_opaque_attempt_owned_and_short_lived() {
+        let vault = SessionVault::isolated_test();
+        vault
+            .register_account("fixture", "account", "fixture")
+            .unwrap();
+        let coordinator = AuthRouteCoordinator::fake_for_tests(vault);
+        let first = coordinator
+            .start("start-capability", "fixture", "account")
+            .await
+            .unwrap();
+        let capabilities = &first.4;
+        assert!(bounded_ref(&capabilities.view, MAX_CAPABILITY));
+        assert!(bounded_ref(&capabilities.panel, MAX_CAPABILITY));
+        assert_ne!(capabilities.view, capabilities.panel);
+        assert!(
+            coordinator
+                .authorize(&first.0, &capabilities.view, CapabilityKind::View)
+                .is_ok()
+        );
+        assert!(
+            coordinator
+                .authorize(&first.0, &capabilities.panel, CapabilityKind::Panel)
+                .is_ok()
+        );
+        assert!(matches!(
+            coordinator.authorize(&first.0, &capabilities.view, CapabilityKind::Panel),
+            Err(ApiError {
+                code: "AUTH_CAPABILITY_INVALID",
+                ..
+            })
+        ));
+        assert!(matches!(
+            coordinator.authorize(&first.0, "view-other", CapabilityKind::View),
+            Err(ApiError {
+                code: "AUTH_CAPABILITY_INVALID",
                 ..
             })
         ));

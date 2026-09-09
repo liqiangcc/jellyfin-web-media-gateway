@@ -329,6 +329,37 @@ mod tests {
                 .unwrap(),
         ).await.unwrap();
         assert_eq!(registered.status(), StatusCode::OK);
+        let registered_body = to_bytes(registered.into_body(), 4096).await.unwrap();
+        let registered: serde_json::Value = serde_json::from_slice(&registered_body).unwrap();
+        let attempt_id = registered["attempt_id"].as_str().unwrap();
+        let view_capability = registered["view_capability"].as_str().unwrap();
+        let panel_capability = registered["panel_capability"].as_str().unwrap();
+        assert!(view_capability.starts_with("view-"));
+        assert!(panel_capability.starts_with("panel-"));
+
+        let missing_capability = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/api/v1/auth/attempts/{attempt_id}/events?after=0"))
+                    .header("host", "127.0.0.1:8787")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing_capability.status(), StatusCode::FORBIDDEN);
+        let authorized_events = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/api/v1/auth/attempts/{attempt_id}/events?after=0"))
+                    .header("host", "127.0.0.1:8787")
+                    .header("x-gateway-auth-view-capability", view_capability)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(authorized_events.status(), StatusCode::OK);
 
         let unregistered = app.oneshot(
             Request::post("/api/v1/auth/attempts")

@@ -843,6 +843,10 @@ impl GatewayService {
                 post(auth_route::candidate_handler),
             )
             .route(
+                "/api/v1/auth/attempts/{attempt_id}/candidate/capture",
+                post(auth_route::capture_handler),
+            )
+            .route(
                 "/api/v1/auth/attempts/{attempt_id}/playback",
                 post(auth_route::playback_handler),
             )
@@ -1301,6 +1305,12 @@ input{max-width:9rem;padding:.65rem;border:1px solid #66748b;border-radius:.4rem
 </div></section>
 <section aria-labelledby="display-heading"><h2 id="display-heading">Active Display</h2><dl><dt>Display</dt><dd id="display-id">Not available</dd><dt>Status</dt><dd id="display-status">Not available</dd><dt>Observation</dt><dd id="display-observation">Not available</dd><dt>Error</dt><dd id="display-error">None</dd></dl></section>
 <section aria-labelledby="site-heading"><h2 id="site-heading">Site / Account</h2><dl><dt>Site</dt><dd id="site">Unavailable</dd><dt>Account</dt><dd id="account-state">Unknown</dd><dt>Native panel</dt><dd id="panel-status">Not attached</dd></dl></section>
+<section id="auth-section" aria-labelledby="auth-heading"><h2 id="auth-heading">Generic site authentication</h2><p>Start a short-lived server-owned browser attempt. The panel accepts only generic navigation and input; site meaning stays with the registered plugin.</p>
+<form id="auth-start-form"><label for="auth-site">Site ID</label><input id="auth-site" name="site_id" required maxlength="128" autocomplete="off" placeholder="registered-site"><label for="auth-account">Account reference</label><input id="auth-account" name="account_ref" required maxlength="256" autocomplete="off" placeholder="account-reference"><button id="auth-start" type="submit">Start authentication</button></form>
+<dl><dt>Attempt</dt><dd id="auth-attempt">None</dd><dt>State</dt><dd id="auth-state">Idle</dd><dt>Expiry</dt><dd id="auth-expiry">None</dd></dl>
+<div id="auth-panel" hidden><p id="auth-status" class="status" role="status" aria-live="polite"></p><form id="auth-navigation-form"><label for="auth-url">Public page URL</label><input id="auth-url" type="url" maxlength="4096" placeholder="https://example.invalid/login"><button type="submit">Navigate</button></form><div class="controls" aria-label="Generic browser input"><input id="auth-text" maxlength="2048" placeholder="bounded text input"><button id="auth-send-text" type="button">Send text</button><button id="auth-submit" type="button">Submit</button><label><span class="sr-only">Key</span><input id="auth-key" maxlength="128" placeholder="key"></label><button id="auth-send-key" type="button">Send key</button></div>
+<form id="auth-capture-form"><h3>Candidate capture</h3><label for="auth-capture-source">Source URL</label><input id="auth-capture-source" type="url" maxlength="4096" placeholder="https://example.invalid/media"><label for="auth-capture-operation">Observation operation</label><input id="auth-capture-operation" type="number" min="1" step="1" required><label for="auth-capture-sequence">Observation sequence</label><input id="auth-capture-sequence" type="number" min="1" step="1" required><label for="auth-capture-diagnostic">Diagnostic</label><select id="auth-capture-diagnostic"><option value="candidate_accepted">candidate accepted</option><option value="none">none</option></select><button type="submit">Request candidate capture</button></form>
+<form id="auth-playback-form"><h3>Authenticated playback handoff</h3><label for="auth-playback-source">Source URL</label><input id="auth-playback-source" type="url" maxlength="4096" required placeholder="https://example.invalid/media"><label for="auth-playback-display">Display ID</label><input id="auth-playback-display" maxlength="128" required placeholder="display-id"><button type="submit">Play through Gateway</button></form><button id="auth-cancel" type="button">Cancel attempt</button><ol id="auth-events" aria-live="polite"></ol></div></section>
 <section aria-labelledby="action-heading"><h2 id="action-heading">Action required</h2><p id="action-required">None</p></section>
 <p id="feedback" class="status" role="status" aria-live="polite"></p>
 </main>
@@ -1310,6 +1320,7 @@ input{max-width:9rem;padding:.65rem;border:1px solid #66748b;border-radius:.4rem
   const viewEndpoint = sessionId ? `/api/v1/control/${encodeURIComponent(sessionId)}` : null;
   const eventEndpoint = sessionId ? `/api/v1/sessions/${encodeURIComponent(sessionId)}/events` : null;
   let currentView = null, requestInFlight = false, refreshSequence = 0, eventCursor = null, eventPollInFlight = false;
+  let authAttempt = null, authPollInFlight = false, authRequestSequence = 0, authOperationSequence = 0;
   const $ = id => document.querySelector(id);
   const text = (id, value) => { $(id).textContent = value == null || value === '' ? 'Unavailable' : String(value); };
   const setConnection = (value, error = false) => { text('#connection', value); $('#connection').classList.toggle('error', error); };
@@ -1333,6 +1344,51 @@ input{max-width:9rem;padding:.65rem;border:1px solid #66748b;border-radius:.4rem
   };
   const clearView = () => { currentView = null; ['#item','#playback-state','#position','#display-id','#display-status','#display-observation','#display-error','#site','#account-state','#panel-status','#action-required'].forEach(id => text(id, 'Unavailable')); ['#play','#pause','#seek','#stop'].forEach(id => { $(id).disabled = true; }); };
   const readJson = async response => { try { return await response.json(); } catch (_) { return {}; } };
+  const authRequestId = prefix => `auth-${prefix}-${Date.now()}-${(++authRequestSequence).toString(36)}`;
+  const authHeaders = kind => ({'content-type':'application/json', [`x-gateway-auth-${kind}-capability`]:authAttempt?.[`${kind}Capability`] || ''});
+  const authFeedback = (value, error = false) => { text('#auth-status', value); $('#auth-status').classList.toggle('error', error); };
+  const appendAuthEvents = payload => {
+    const list = $('#auth-events');
+    for (const event of [...(payload.auth_events || []), ...(payload.browser_events || [])]) {
+      if (!event || typeof event.sequence !== 'number') continue;
+      const item = document.createElement('li'); item.textContent = `${event.sequence}: ${event.state || event.kind || 'event'}${event.diagnostic ? ` (${event.diagnostic})` : ''}`; list.append(item);
+      while (list.children.length > 32) list.firstElementChild.remove();
+    }
+    if (payload.state) text('#auth-state', payload.state);
+  };
+  const pollAuth = async () => {
+    if (!authAttempt || authPollInFlight) return;
+    authPollInFlight = true;
+    try {
+      const response = await fetch(`/api/v1/auth/attempts/${encodeURIComponent(authAttempt.id)}/events?after=${encodeURIComponent(authAttempt.cursor)}`, {cache:'no-store', headers:{'x-gateway-auth-view-capability':authAttempt.viewCapability}});
+      const payload = await readJson(response);
+      if (!response.ok) { authFeedback(payload.code || 'Authentication view expired.', true); return; }
+      appendAuthEvents(payload); const events = [...(payload.auth_events || []), ...(payload.browser_events || [])]; authAttempt.cursor = events.reduce((max, event) => Math.max(max, Number(event.sequence) || 0), authAttempt.cursor); authAttempt.state = payload.state;
+    } catch (_) { authFeedback('Authentication panel unavailable; playback state remains independent.', true); } finally { authPollInFlight = false; }
+  };
+  const authPost = async (path, body, message) => {
+    if (!authAttempt) return null;
+    try {
+      const response = await fetch(`/api/v1/auth/attempts/${encodeURIComponent(authAttempt.id)}${path}`, {method:'POST', headers:authHeaders('panel'), body:JSON.stringify(body)});
+      const payload = await readJson(response); if (!response.ok) { authFeedback(payload.code || 'Authentication operation rejected.', true); return null; }
+      authFeedback(message || 'Authentication operation accepted.'); return payload;
+    } catch (_) { authFeedback('Authentication panel unavailable; retry is safe.', true); return null; }
+  };
+  const startAuth = async event => {
+    event.preventDefault();
+    const site_id = $('#auth-site').value.trim(), account_ref = $('#auth-account').value.trim(); if (!site_id || !account_ref) return;
+    $('#auth-start').disabled = true; authFeedback('Starting server-owned authentication attempt.');
+    try {
+      const response = await fetch('/api/v1/auth/attempts', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({request_id:authRequestId('start'),site_id,account_ref})});
+      const payload = await readJson(response); if (!response.ok) { authFeedback(payload.code || 'Authentication attempt rejected.', true); return; }
+      authAttempt = {id:payload.attempt_id, viewCapability:payload.view_capability, panelCapability:payload.panel_capability, cursor:0, state:payload.state}; authOperationSequence = 0; $('#auth-panel').hidden = false; text('#auth-attempt', authAttempt.id); text('#auth-state', payload.state); text('#auth-expiry', `${payload.expires_in_seconds}s`); authFeedback(payload.duplicate ? 'Reconnected to the existing authentication attempt.' : 'Authentication attempt ready.'); await pollAuth();
+    } catch (_) { authFeedback('Gateway unavailable; no authentication attempt was created.', true); } finally { $('#auth-start').disabled = false; }
+  };
+  const navigateAuth = async event => { event.preventDefault(); const url=$('#auth-url').value.trim(); if (!url) return; await authPost('/navigation',{request_id:authRequestId('navigate'),operation_id:++authOperationSequence,url},'Navigation accepted.'); };
+  const inputAuth = async input => { await authPost('/input',Object.assign({request_id:authRequestId('input')},input),'Generic input accepted.'); };
+  const captureAuth = async event => { event.preventDefault(); const source=$('#auth-capture-source').value.trim(), operation_id=Number($('#auth-capture-operation').value), sequence=Number($('#auth-capture-sequence').value), diagnostic=$('#auth-capture-diagnostic').value; if (!source || !Number.isSafeInteger(operation_id) || operation_id < 1 || !Number.isSafeInteger(sequence) || sequence < 1) return; await authPost('/candidate/capture',{request_id:authRequestId('capture'),source,operation_id,observation:{schema_version:1,sequence,state:'candidate_ready',diagnostic}},'Candidate capture accepted by the server.'); };
+  const playbackAuth = async event => { event.preventDefault(); const source=$('#auth-playback-source').value.trim(), display_id=$('#auth-playback-display').value.trim(); if (!source || !display_id) return; const payload=await authPost('/playback',{request_id:authRequestId('playback'),source,display_id},'Authenticated playback handoff accepted.'); if (payload?.session_id) window.location.assign(`/control?session_id=${encodeURIComponent(payload.session_id)}`); };
+  const cancelAuth = async () => { if (!authAttempt) return; const id=authAttempt.id; const payload=await authPost('/cancel',{request_id:authRequestId('cancel')},'Authentication attempt cancelled.'); if (payload) { authAttempt=null; $('#auth-panel').hidden=true; text('#auth-attempt','None'); text('#auth-state','Idle'); text('#auth-expiry','None'); } else { authAttempt={...authAttempt,id}; } };
   const listDisplays = async () => {
     const selector = $('#display-selector');
     if (!selector) return;
@@ -1386,7 +1442,9 @@ input{max-width:9rem;padding:.65rem;border:1px solid #66748b;border-radius:.4rem
   document.querySelectorAll('[data-command]').forEach(button => button.addEventListener('click', () => command(button.dataset.command)));
   $('#seek').addEventListener('click', () => command('seek', {position_ms:Math.max(0, Number($('#seek-position').value) || 0)}));
   $('#source-form')?.addEventListener('submit', createSession); $('#display-selector')?.addEventListener('change', () => { $('#create-session').disabled = !$('#display-selector').value; });
-  window.__controlUi = {refresh, pollEvents, getView:() => currentView, listDisplays}; refresh(); if (!sessionId) listDisplays(); window.setInterval(pollEvents, 1000);
+  $('#auth-start-form')?.addEventListener('submit', startAuth); $('#auth-navigation-form')?.addEventListener('submit', navigateAuth); $('#auth-capture-form')?.addEventListener('submit', captureAuth); $('#auth-playback-form')?.addEventListener('submit', playbackAuth);
+  $('#auth-send-text')?.addEventListener('click', () => { const value=$('#auth-text').value; if (value) inputAuth({kind:'text',value}); }); $('#auth-send-key')?.addEventListener('click', () => { const key=$('#auth-key').value; if (key) inputAuth({kind:'key',key}); }); $('#auth-submit')?.addEventListener('click', () => inputAuth({kind:'submit'})); $('#auth-cancel')?.addEventListener('click', cancelAuth);
+  window.__controlUi = {refresh, pollEvents, pollAuth, getView:() => currentView, listDisplays}; refresh(); if (!sessionId) listDisplays(); window.setInterval(() => { pollEvents(); pollAuth(); }, 1000);
 })();
 </script></body></html>"##;
 
