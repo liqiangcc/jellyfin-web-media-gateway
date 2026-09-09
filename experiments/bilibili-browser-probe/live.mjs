@@ -117,14 +117,14 @@ export function commitNavigationRequestFailure(state, failure, lifecycleOutcome)
   return state.failure;
 }
 
-function recordFailure(state, error, phaseHint, status, transportStage, lifecycleOutcome, responseOrigin, redirectClass) {
+function recordFailure(state, error, phaseHint, status, transportStage, lifecycleOutcome, responseOrigin, redirectClass, responseMetadataClass) {
   // Once the broker has emitted a successful CONNECT response, a later socket
   // callback belongs to the already observed transport outcome. The explicit
   // response-budget path or an explicitly settled navigation lifecycle is the
   // only failure that may supersede it before the tunnel cleanup callback runs.
   if (!shouldRecordFailure(state, phaseHint, lifecycleOutcome)) return state.failure;
   const counters = diagnosticCounters(state);
-  state.failure = { ...classifyError(error, phaseHint, { ...counters, status, transport_stage: transportStage, lifecycle_outcome: lifecycleOutcome, response_origin: responseOrigin, redirect_class: redirectClass }), lifecycle_outcome: lifecycleOutcome || 'unknown' };
+  state.failure = { ...classifyError(error, phaseHint, { ...counters, status, transport_stage: transportStage, lifecycle_outcome: lifecycleOutcome, response_origin: responseOrigin, redirect_class: redirectClass, response_metadata_class: responseMetadataClass }), lifecycle_outcome: lifecycleOutcome || 'unknown' };
   return state.failure;
 }
 
@@ -179,7 +179,7 @@ export function brokerServer(state, overrides = {}) {
       let bodyStarted = false;
       let bodyComplete = false;
       recordUpstreamStage(state, 'upstream_response_start', 'response_started');
-      recordResponseStage(state, 'broker_request_result', 'upstream_http', reply.statusCode, { transport_outcome: 'success' });
+      recordResponseStage(state, 'broker_request_result', 'upstream_http', reply.statusCode, { response_metadata_class: 'safe_headers', transport_outcome: 'success' });
       res.writeHead(reply.statusCode || 502, reply.headers);
       reply.on('data', (chunk) => {
         if (!bodyStarted) {
@@ -466,7 +466,7 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
       recordStage(state, 'navigation_status', navigationMetadata);
       recordStage(state, 'navigation_promise_result', { lifecycle_outcome: 'fulfilled', transport_outcome: 'success' });
       if (navigationResponse?.status() >= 300) {
-        recordFailure(state, { code: 'ERR_HTTP_RESPONSE_CODE_FAILURE' }, 'http_status', navigationResponse.status(), undefined, undefined, navigationMetadata.response_origin, navigationMetadata.redirect_class);
+        recordFailure(state, { code: 'ERR_HTTP_RESPONSE_CODE_FAILURE' }, 'http_status', navigationResponse.status(), undefined, undefined, navigationMetadata.response_origin, navigationMetadata.redirect_class, navigationMetadata.response_metadata_class);
         throw new Error('navigation returned a non-success status');
       }
       recordStage(state, 'navigation_end', { ...navigationMetadata, transport_outcome: 'success' });

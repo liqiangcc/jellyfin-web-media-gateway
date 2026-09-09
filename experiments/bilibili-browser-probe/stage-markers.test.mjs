@@ -11,6 +11,7 @@ import {
   STAGE_MARKER_UPSTREAM_STATES,
   STAGE_MARKER_RESPONSE_ORIGINS,
   STAGE_MARKER_REDIRECT_CLASSES,
+  STAGE_MARKER_RESPONSE_METADATA_CLASSES,
 } from './stage-markers.mjs';
 
 test('stage vocabulary and values are finite and redact unknown fields', () => {
@@ -35,6 +36,7 @@ test('stage vocabulary and values are finite and redact unknown fields', () => {
   ]);
   assert.deepEqual(STAGE_MARKER_RESPONSE_ORIGINS, ['broker_policy', 'upstream_http', 'navigation_status', 'unknown']);
   assert.deepEqual(STAGE_MARKER_REDIRECT_CLASSES, ['none', 'redirect', 'unknown']);
+  assert.deepEqual(STAGE_MARKER_RESPONSE_METADATA_CLASSES, ['none', 'status_only', 'safe_headers', 'unknown']);
   const marker = normalizeStageMarker({
     event: 'navigation_status', status_class: '4xx', transport_stage: 'proxy_response', transport_outcome: 'failure',
     request_count: 4, response_bytes: 20, metadata_bytes: 2,
@@ -42,7 +44,7 @@ test('stage vocabulary and values are finite and redact unknown fields', () => {
   }, 3);
   assert.deepEqual(marker, {
     schema_version: 2, sequence: 3, event: 'navigation_status', status_class: '4xx',
-    response_origin: 'unknown', redirect_class: 'none',
+    response_origin: 'unknown', redirect_class: 'none', response_metadata_class: 'safe_headers',
     transport_stage: 'proxy_response', transport_outcome: 'failure', request_count: 4,
     lifecycle_outcome: 'unknown', upstream_state: 'unknown', upstream_error_class: 'unknown', response_bytes: 20, metadata_bytes: 2,
   });
@@ -51,6 +53,7 @@ test('stage vocabulary and values are finite and redact unknown fields', () => {
   assert.equal(normalizeStageMarker({ event: 'navigation_status', status_class: '999' }).status_class, 'unknown');
   assert.equal(normalizeStageMarker({ event: 'navigation_status', status_class: '3xx' }).redirect_class, 'redirect');
   assert.equal(normalizeStageMarker({ event: 'navigation_status', response_origin: 'https://secret.invalid' }).response_origin, 'unknown');
+  assert.equal(normalizeStageMarker({ event: 'navigation_status', status_class: '2xx', metadata_bytes: 2 }).response_metadata_class, 'safe_headers');
 });
 
 test('tracker emits monotonic bounded sequences and seals against late callbacks', () => {

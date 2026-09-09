@@ -51,6 +51,7 @@ export const STAGE_MARKER_RESPONSE_ORIGINS = Object.freeze([
   'broker_policy', 'upstream_http', 'navigation_status', 'unknown',
 ]);
 export const STAGE_MARKER_REDIRECT_CLASSES = Object.freeze(['none', 'redirect', 'unknown']);
+export const STAGE_MARKER_RESPONSE_METADATA_CLASSES = Object.freeze(['none', 'status_only', 'safe_headers', 'unknown']);
 
 const eventSet = new Set(STAGE_MARKER_EVENTS);
 const statusSet = new Set(STAGE_MARKER_STATUS_CLASSES);
@@ -61,6 +62,7 @@ const upstreamStateSet = new Set(STAGE_MARKER_UPSTREAM_STATES);
 const upstreamErrorClassSet = new Set(STAGE_MARKER_UPSTREAM_ERROR_CLASSES);
 const responseOriginSet = new Set(STAGE_MARKER_RESPONSE_ORIGINS);
 const redirectClassSet = new Set(STAGE_MARKER_REDIRECT_CLASSES);
+const responseMetadataClassSet = new Set(STAGE_MARKER_RESPONSE_METADATA_CLASSES);
 
 function bounded(value, maximum) {
   return Number.isSafeInteger(value) && value >= 0 && value <= maximum ? value : 0;
@@ -99,6 +101,13 @@ function redirectClass(value, status) {
   return status === '3xx' ? 'redirect' : status === 'unknown' ? 'unknown' : 'none';
 }
 
+function responseMetadataClass(value, status, metadataBytes) {
+  if (typeof value === 'string' && responseMetadataClassSet.has(value)) return value;
+  if (status === 'unknown') return 'unknown';
+  if (Number.isSafeInteger(metadataBytes) && metadataBytes > 0) return 'safe_headers';
+  return 'status_only';
+}
+
 /**
  * Normalize a marker into the closed durable DTO. Invalid event names are
  * rejected. Unknown fields are ignored and all bounded values have a safe
@@ -114,6 +123,7 @@ export function normalizeStageMarker(input = {}, sequence = 1) {
     status_class: statusClass(input.status_class),
     response_origin: responseOrigin(input.response_origin),
     redirect_class: redirectClass(input.redirect_class, input.status_class),
+    response_metadata_class: responseMetadataClass(input.response_metadata_class, input.status_class, input.metadata_bytes),
     transport_stage: transportStage(input.transport_stage),
     transport_outcome: transportOutcome(input.transport_outcome),
     lifecycle_outcome: lifecycleOutcome(input.lifecycle_outcome),
