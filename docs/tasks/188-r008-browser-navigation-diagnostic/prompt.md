@@ -15,16 +15,16 @@ Confirm #188 is `status:ready`, `env:cloud`, and owner-free, then claim a new At
 Reuse the already accepted implementation/artifact unless real target evidence requires a focused correction:
 
 ```text
-Candidate: e277220b625a2c4846ad3469a841398c685ad13b
-PR: #205
-Hosted run: 34300151962
-Artifact: 10084651588
-Artifact size: 4,215,293 bytes
-Digest: sha256:f58e4ece689595b4e73808e8a8843dca25becef738209644658f77cf22713e50
+Candidate: c8ff3f9e1b5f468e2b68d3f274da82eba0b9a76f
+PR: #209
+Hosted run: 34302593582
+Artifact: 10085488784
+Artifact size: 4,215,814 bytes
+Digest: sha256:9a074b534a4067e307d1e0108dfa66f6f296e6baeaf52e096ab8b01ee6957cb6
 Selector: bilibili:BV14V411W7r5:part-2
 ```
 
-The implementation anchor includes accepted Issue #199 stage markers and Issue #203 post-navigation lifecycle classification (PR #205 merged to `main` at `4b2590bf24c445ee1366a4c1e2101a7830efa357`). It records only finite navigation-promise, page/browser lifecycle, process termination and finalizer markers; no target evidence is reused.
+The implementation anchor includes accepted Issue #199 stage markers, Issue #203 post-navigation lifecycle classification, and Issue #207 finite navigation-rejection classification (PR #209 merged to `main` at `c3bfad69565423e4cae82b47143344e10bd89f19`). It records only finite navigation-promise, allowlisted rejection, page/browser lifecycle, process termination and finalizer markers; no target evidence is reused.
 
 ## Target rule
 
