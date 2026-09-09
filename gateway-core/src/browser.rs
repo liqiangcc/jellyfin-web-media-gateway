@@ -155,6 +155,12 @@ pub enum BrowserStatus {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct BrowserOperationId(u64);
 
+impl BrowserOperationId {
+    pub(crate) const fn value(self) -> u64 {
+        self.0
+    }
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub struct BrowserNavigationRequest {
     operation_id: BrowserOperationId,
@@ -1355,7 +1361,7 @@ mod tests {
                     },
                     server_observation: ServerOwnedObservation {
                         schema_version: site_adapter_api::BROWSER_OBSERVATION_VERSION,
-                        observation_id: observation_id,
+                        observation_id,
                         media: vec![ServerOwnedMedia {
                             observation_id: "observation-fixture".into(),
                             candidate_id: "resource-1".into(),

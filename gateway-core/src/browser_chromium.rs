@@ -605,7 +605,7 @@ impl ChromiumBrowserWorker {
 
     async fn process_cdp_event(
         &self,
-        session: &BrowserSessionId,
+        _session: &BrowserSessionId,
         state: &mut ChromiumSession,
         event: Value,
         policy: &R008NavigationPolicy,
@@ -1163,7 +1163,7 @@ impl BrowserWorker for ChromiumBrowserWorker {
         if state.active_operation != Some(operation_id) {
             return Ok(None);
         }
-        let observation_id = format!("observation-{}", operation_id.0);
+        let observation_id = format!("observation-{}", operation_id.value());
         let records = state
             .resources
             .drain(..)
@@ -1490,7 +1490,6 @@ mod tests {
             .navigate(session.id(), request, &policy)
             .await
             .unwrap();
-        let events = worker.poll_events(session.id(), 0).unwrap();
         let mut payload = None;
         for _ in 0..20 {
             let current = worker.take_observation(session.id(), operation).unwrap();
