@@ -27,8 +27,9 @@ The Task must classify each result as `PASS`, `CONDITIONAL PASS`, `FAIL` or `BLO
 1. Audit the current `ResolvedMedia`, `ResolvedStream`, `StreamProtocol`, SourceSession capability projection and Web Display media-selection behavior.
 2. Define a versioned generic shape for muxed, video and audio tracks, pairing/group identity, protocol, codec/container metadata, bounded expiry and server-owned upstream access references without Bilibili fields.
 3. Compare server remux to browser-compatible fMP4/HTTP-file, server remux to HLS, DASH+MSE, and source-browser playback against capability binding, EgressPolicy, cancellation/expiry, stale item/display generation, seek/reconnect, browser compatibility and bounded resource requirements.
-4. Select one first implementation route, or classify the decision `CONDITIONAL PASS`/`BLOCKED` with exact missing evidence and a follow-up implementation contract.
-5. Update only task/research documentation and bounded synthetic verification harnesses required for the decision. Production Bilibili/plugin behavior is out of scope.
+4. Evaluate same-item media refresh after capability expiry or upstream 401/403/410, including SourceLocator re-resolve, media-generation CAS, stale-result rejection and cleanup.
+5. Select one first implementation route, or classify the decision `CONDITIONAL PASS`/`BLOCKED` with exact missing evidence and a follow-up implementation contract.
+6. Update only task/research documentation and bounded synthetic verification harnesses required for the decision. Production Bilibili/plugin behavior is out of scope.
 
 ## Out of scope
 
@@ -50,10 +51,11 @@ The Task must classify each result as `PASS`, `CONDITIONAL PASS`, `FAIL` or `BLO
 ```text
 C1: Current unsupported DASH/separated-A/V behavior has direct source-level evidence and is distinct from live-site playback.
 C2: A generic versioned media shape represents muxed/video/audio tracks, pairing, protocol, codec/container, expiry and opaque access without Bilibili semantics or Secret leakage.
-C3: Candidate delivery routes are compared against capability binding, EgressPolicy, cancellation/expiry, stale item/display generation, seek/reconnect, browser compatibility and bounded resource requirements.
-C4: One first implementation route is selected, or the decision is explicitly CONDITIONAL PASS/BLOCKED with exact follow-up evidence and an implementation Task outline.
-C5: Hosted synthetic verification is reproducible, exact-Candidate bound and emits no source URL, cookie, Authorization, signed query or raw media/profile artifact.
-C6: No real Bilibili authentication, target navigation or playback is claimed; #246 remains independently blocked.
+C3: Candidate delivery routes and same-item media refresh are compared against capability binding, EgressPolicy, cancellation/expiry, stale item/display generation, seek/reconnect, browser compatibility and bounded resource requirements.
+C4: Same-item refresh semantics are either expressible with SourceLocator/media-generation CAS or explicitly identified as a separate required implementation.
+C5: One first implementation route is selected, or the decision is explicitly CONDITIONAL PASS/BLOCKED with exact follow-up evidence and an implementation Task outline.
+C6: Hosted synthetic verification is reproducible, exact-Candidate bound and emits no source URL, cookie, Authorization, signed query or raw media/profile artifact.
+C7: No real Bilibili authentication, target navigation or playback is claimed; #246 remains independently blocked.
 ```
 
 ## Verification matrix
@@ -62,9 +64,9 @@ C6: No real Bilibili authentication, target navigation or playback is claimed; #
 |---|---|---|---|---|
 | J0 | C1,C6 | Coordinator/GitHub read-back | current main and canonical docs | yes |
 | J1 | C1,C2,C5 | GitHub Actions | hosted x64 static/schema/secret-boundary checks | yes |
-| J2 | C2,C3,C5 | GitHub Actions | hosted x64 synthetic separated-A/V fixture and capability lifecycle checks | yes |
-| J3 | C3,C4,C5 | GitHub Actions | hosted x64 bounded browser/media compatibility harness; no live site | yes |
-| J4 | C4,C5,C6 | Coordinator review | exact Candidate, Actions artifacts and follow-up handoff | yes |
+| J2 | C2,C3,C4,C6 | GitHub Actions | hosted x64 synthetic separated-A/V fixture, refresh/CAS and capability lifecycle checks | yes |
+| J3 | C3,C5,C6 | GitHub Actions | hosted x64 bounded browser/media compatibility harness; no live site | yes |
+| J4 | C5,C6,C7 | Coordinator review | exact Candidate, Actions artifacts and follow-up handoff | yes |
 
 No target action is permitted. A future implementation Task must be separately published after this decision and must preserve the current #246 authorization gate.
 
