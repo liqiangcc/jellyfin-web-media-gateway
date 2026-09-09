@@ -8,6 +8,7 @@ import {
   brokerServer, consumeResponseBody, createDisposableProfile, removeDisposableProfile, LIVE_BROWSER_ARGS,
   shouldRecordFailure,
 } from './live.mjs';
+import { createStageTracker } from './stage-markers.mjs';
 
 async function listen(server) {
   server.listen(0, '127.0.0.1');
@@ -23,6 +24,23 @@ function fakeRequest(options, callback) {
     reply.statusCode = pathname === '/redirect' ? 302 : pathname === '/error' ? 503 : 200;
     reply.headers = { 'content-type': 'video/mp4', ...(pathname === '/redirect' ? { location: 'https://private.bilibili.com/final' } : {}) };
     callback(reply);
+  });
+  return upstream;
+}
+
+function fakeEarlyCloseRequest(options, callback) {
+  const upstream = new PassThrough();
+  process.nextTick(() => {
+    const reply = new PassThrough();
+    reply.statusCode = 200;
+    reply.headers = { 'content-type': 'text/html' };
+    callback(reply);
+    process.nextTick(() => {
+      reply.emit('aborted');
+      reply.emit('error', Object.assign(new Error('opaque upstream failure'), { code: 'ECONNRESET' }));
+      reply.emit('close');
+      upstream.emit('timeout');
+    });
   });
   return upstream;
 }
@@ -46,8 +64,8 @@ function waitForEvent(emitter, event, label, timeout = 3000) {
   });
 }
 
-test('the live broker enforces host, DNS, redirect and upgrade policy through one seam', async (t) => {
-  const state = { requests: 0, responseBytes: 0, responseLimit: 1024, denied: [], pins: new Map() };
+test('the live broker records bounded upstream response completion and socket closure', async (t) => {
+  const state = { requests: 0, responseBytes: 0, responseLimit: 1024, denied: [], pins: new Map(), stages: createStageTracker() };
   const broker = brokerServer(state, {
     request: fakeRequest,
     resolveAddress: async (host) => { if (host === 'private.bilibili.com') throw new Error('non-public'); return '127.0.0.1'; },
@@ -56,6 +74,13 @@ test('the live broker enforces host, DNS, redirect and upgrade policy through on
   t.after(() => { broker.closeAllConnections?.(); return broker.close(); });
 
   assert.deepEqual(await proxyGet(port, 'https://www.bilibili.com/media'), { status: 200, body: 'allowed' });
+  const upstreamEvents = state.stages.snapshot().filter(({ event }) => event.startsWith('upstream_'));
+  assert.deepEqual(upstreamEvents.map(({ event, upstream_state, upstream_error_class }) => ({ event, upstream_state, upstream_error_class })), [
+    { event: 'upstream_response_start', upstream_state: 'response_started', upstream_error_class: 'unknown' },
+    { event: 'upstream_response_body_start', upstream_state: 'body_started', upstream_error_class: 'unknown' },
+    { event: 'upstream_response_end', upstream_state: 'body_complete', upstream_error_class: 'unknown' },
+    { event: 'upstream_socket_close', upstream_state: 'closed_after_body', upstream_error_class: 'unknown' },
+  ]);
   assert.equal((await proxyGet(port, 'https://private.bilibili.com/media')).status, 403);
   assert.equal((await proxyGet(port, 'https://www.bilibili.com/redirect')).status, 302);
   assert.equal((await proxyGet(port, 'https://private.bilibili.com/final')).status, 403);
@@ -106,6 +131,27 @@ test('CONNECT uses the same broker byte budget and denies private DNS', async (t
   assert.doesNotMatch(JSON.stringify(state.failure), /https?:\/\/|secret|sentinel/i);
   assert.equal((await proxyGet(port, 'https://private.bilibili.com/final')).status, 403);
   client.destroy();
+});
+
+test('the live broker records early upstream closure, abort and timeout classes', async (t) => {
+  const state = { requests: 0, responseBytes: 0, responseLimit: 1024, denied: [], pins: new Map(), stages: createStageTracker() };
+  const broker = brokerServer(state, {
+    request: fakeEarlyCloseRequest,
+    resolveAddress: async () => '127.0.0.1',
+  });
+  const port = await listen(broker);
+  t.after(() => { broker.closeAllConnections?.(); return broker.close(); });
+
+  assert.deepEqual(await proxyGet(port, 'https://www.bilibili.com/early-close'), { status: 200, body: '' });
+  const upstreamEvents = state.stages.snapshot().filter(({ event }) => event.startsWith('upstream_'));
+  assert.deepEqual(upstreamEvents.map(({ event, upstream_state, upstream_error_class }) => ({ event, upstream_state, upstream_error_class })), [
+    { event: 'upstream_response_start', upstream_state: 'response_started', upstream_error_class: 'unknown' },
+    { event: 'upstream_abort', upstream_state: 'aborted', upstream_error_class: 'aborted' },
+    { event: 'upstream_error', upstream_state: 'error', upstream_error_class: 'connection_reset' },
+    { event: 'upstream_socket_close', upstream_state: 'closed_early', upstream_error_class: 'response_closed_early' },
+    { event: 'upstream_timeout', upstream_state: 'timeout', upstream_error_class: 'timeout' },
+  ]);
+  assert.doesNotMatch(JSON.stringify(state), /opaque upstream|https?:\/\/|secret|token/i);
 });
 
 test('late upstream errors cannot replace a finalized successful CONNECT outcome', async (t) => {

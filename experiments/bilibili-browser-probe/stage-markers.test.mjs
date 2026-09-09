@@ -7,17 +7,29 @@ import {
   sanitizeStageMarkers,
   STAGE_MARKER_EVENTS,
   STAGE_MARKER_LIFECYCLE_OUTCOMES,
+  STAGE_MARKER_UPSTREAM_ERROR_CLASSES,
+  STAGE_MARKER_UPSTREAM_STATES,
 } from './stage-markers.mjs';
 
 test('stage vocabulary and values are finite and redact unknown fields', () => {
   assert.deepEqual(STAGE_MARKER_EVENTS, [
     'browser_launch_start', 'browser_launch_result', 'navigation_start', 'navigation_end',
     'navigation_status', 'navigation_promise_result', 'page_lifecycle_result', 'browser_disconnect',
-    'process_termination', 'broker_request_start', 'broker_request_result', 'transport_outcome', 'finalizer_entry',
+    'process_termination', 'broker_request_start', 'broker_request_result', 'upstream_response_start',
+    'upstream_response_body_start', 'upstream_response_end', 'upstream_socket_close', 'upstream_timeout',
+    'upstream_abort', 'upstream_error', 'transport_outcome', 'finalizer_entry',
   ]);
   assert.deepEqual(STAGE_MARKER_LIFECYCLE_OUTCOMES, [
     'fulfilled', 'rejected', 'timeout', 'aborted', 'page_closed', 'page_crashed',
     'browser_disconnected', 'process_error', 'process_signal', 'unknown',
+  ]);
+  assert.deepEqual(STAGE_MARKER_UPSTREAM_STATES, [
+    'response_started', 'body_started', 'body_complete', 'closed_early',
+    'closed_after_body', 'timeout', 'aborted', 'error', 'unknown',
+  ]);
+  assert.deepEqual(STAGE_MARKER_UPSTREAM_ERROR_CLASSES, [
+    'timeout', 'aborted', 'connection_reset', 'connection_refused', 'tls_failure',
+    'response_closed_early', 'unknown',
   ]);
   const marker = normalizeStageMarker({
     event: 'navigation_status', status_class: '4xx', transport_stage: 'proxy_response', transport_outcome: 'failure',
@@ -27,7 +39,7 @@ test('stage vocabulary and values are finite and redact unknown fields', () => {
   assert.deepEqual(marker, {
     schema_version: 1, sequence: 3, event: 'navigation_status', status_class: '4xx',
     transport_stage: 'proxy_response', transport_outcome: 'failure', request_count: 4,
-    lifecycle_outcome: 'unknown', response_bytes: 20, metadata_bytes: 2,
+    lifecycle_outcome: 'unknown', upstream_state: 'unknown', upstream_error_class: 'unknown', response_bytes: 20, metadata_bytes: 2,
   });
   assert.doesNotMatch(JSON.stringify(marker), /https?:\/\/|secret|token|authorization|sentinel/i);
   assert.equal(normalizeStageMarker({ event: 'caller_controlled_stage' }), undefined);

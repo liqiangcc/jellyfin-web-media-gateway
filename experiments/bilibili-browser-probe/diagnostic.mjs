@@ -32,6 +32,10 @@ export const LIFECYCLE_OUTCOMES = Object.freeze([
   'fulfilled', 'rejected', 'timeout', 'aborted', 'page_closed', 'page_crashed',
   'browser_disconnected', 'process_error', 'process_signal', 'unknown',
 ]);
+export const UPSTREAM_ERROR_CLASSES = Object.freeze([
+  'timeout', 'aborted', 'connection_reset', 'connection_refused', 'tls_failure',
+  'response_closed_early', 'unknown',
+]);
 
 const MAX_REQUESTS = 200;
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
@@ -89,6 +93,7 @@ const PHASE_HINTS = new Set(DIAGNOSTIC_PHASES);
 const TRANSPORT_STAGE_SET = new Set(TRANSPORT_STAGES);
 const TRANSPORT_OUTCOME_SET = new Set(TRANSPORT_OUTCOMES);
 const LIFECYCLE_OUTCOME_SET = new Set(LIFECYCLE_OUTCOMES);
+const UPSTREAM_ERROR_CLASS_SET = new Set(UPSTREAM_ERROR_CLASSES);
 
 function boundedCounter(value, maximum) {
   return Number.isSafeInteger(value) && value >= 0 && value <= maximum ? value : 0;
@@ -148,6 +153,22 @@ export function classifyNavigationLifecycle(error, observed) {
 export function classifyProcessTermination(hint) {
   if (hint === 'signal') return 'process_signal';
   if (hint === 'error' || hint === 'timeout' || hint === 'abort') return 'process_error';
+  return 'unknown';
+}
+
+/**
+ * Reduce upstream socket/response errors to a fixed class without reading
+ * or publishing the error message, URL, authority, headers or body.
+ */
+export function classifyUpstreamError(error, fallback = 'unknown') {
+  const name = typeof error?.name === 'string' ? error.name : '';
+  const code = typeof error?.code === 'string' ? error.code.toUpperCase() : '';
+  if (name === 'TimeoutError' || name === 'Timeout' || code === 'ETIMEDOUT' || code === 'ERR_TIMED_OUT') return 'timeout';
+  if (name === 'AbortError' || code === 'ABORT_ERR' || code === 'ERR_ABORTED') return 'aborted';
+  if (code === 'ECONNRESET' || code === 'ERR_CONNECTION_RESET') return 'connection_reset';
+  if (code === 'ECONNREFUSED' || code === 'ERR_CONNECTION_REFUSED') return 'connection_refused';
+  if (code.startsWith('ERR_SSL_') || code.startsWith('ERR_TLS_') || code === 'CERT_HAS_EXPIRED' || code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE') return 'tls_failure';
+  if (UPSTREAM_ERROR_CLASS_SET.has(fallback) && fallback !== 'unknown') return fallback;
   return 'unknown';
 }
 
