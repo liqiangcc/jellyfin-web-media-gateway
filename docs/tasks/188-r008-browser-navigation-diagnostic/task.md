@@ -9,6 +9,8 @@ Task ID: R008-BROWSER-NAV-TERMINATION
 Task kind: combined target diagnostic
 Preferred worker: cloud-codex
 Environment: env:cloud
+Requested model: gpt-5.6-luna, reasoning high
+Fast: disabled by user; do not enable/select Fast
 Target: tx-node / gateway-verify
 ```
 
@@ -25,16 +27,18 @@ This Task does not require a host-wide clean browser state, a separately provisi
 Reuse the accepted #188 implementation unless an actual target failure proves a code correction is required:
 
 ```text
-Candidate: 77712ba7acdfd4083bc8e014db20a0a30d070e8c
-PR: #190
-Hosted run: 34250631237
-Artifact: 10065870674
-Artifact size: 4,208,834 bytes
-Artifact digest: sha256:8a290032265a03553d654a20379b451b9ed07d013ec2c7dc76a33e229ab84a39
+Candidate: c95beda94c87f166a1dd5056efb1834bdb79cc10
+PR: #201
+Hosted run: 34297453241
+Artifact: 10083700408
+Artifact size: 4,212,729 bytes
+Artifact digest: sha256:e0f289cff7852aad60300863d0a7c86f8840d6291a5511e9e70b85095894fbb2
 Selector: bilibili:BV14V411W7r5:part-2
 ```
 
 The hosted implementation gate already passed. Do not rebuild or change code before target execution unless the target result demonstrates that a focused correction is necessary.
+
+The accepted implementation includes the #199 stage-marker follow-up. Issue #199 was accepted after PR #201 merged to `main` at `97b27f34dda868e352782fea1e6f9a1aa28be91a`; its exact Candidate `c95beda94c87f166a1dd5056efb1834bdb79cc10`, hosted run `34297453241`, and artifact `10083700408` are the anchor above. The follow-up adds finite allowlisted navigation lifecycle markers and finalizer sealing while preserving sanitized output and cleanup boundaries. #199 produced no target evidence; this revised #188 Task remains responsible for the later target navigation result.
 
 ## Fast-path target contract
 
