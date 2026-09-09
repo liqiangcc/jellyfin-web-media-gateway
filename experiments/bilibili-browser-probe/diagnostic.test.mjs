@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyError, classifyFailure, diagnosticCounters, DIAGNOSTIC_PHASES } from './diagnostic.mjs';
+import { classifyError, classifyFailure, classifyNavigationLifecycle, classifyProcessTermination, diagnosticCounters, DIAGNOSTIC_PHASES, LIFECYCLE_OUTCOMES } from './diagnostic.mjs';
 
 test('classifies every bounded phase with schema-safe output', () => {
   const inputs = [
@@ -41,4 +41,29 @@ test('success metadata is unaffected by diagnostic helpers', () => {
   const before = JSON.stringify(metadata);
   classifyFailure({ phase_hint: 'unknown', error_code: 'https://secret.invalid/body' });
   assert.equal(JSON.stringify(metadata), before);
+});
+
+test('post-navigation lifecycle markers reduce to finite classes without raw error data', () => {
+  const cases = [
+    [{ name: 'TimeoutError', message: 'https://secret.invalid/?token=timeout' }, 'timeout'],
+    [{ name: 'AbortError', message: 'secret abort' }, 'aborted'],
+    [{ name: 'BrowserDisconnectedError', message: 'secret disconnect' }, 'browser_disconnected'],
+    [{ name: 'PageClosedError', message: 'secret close' }, 'page_closed'],
+    [{ name: 'PageCrashedError', message: 'secret crash' }, 'page_crashed'],
+    [{ name: 'Error', message: 'secret rejection' }, 'rejected'],
+  ];
+  const outputs = cases.map(([error, expected]) => {
+    const actual = classifyNavigationLifecycle(error);
+    assert.equal(actual, expected);
+    return actual;
+  });
+  assert.equal(classifyNavigationLifecycle(undefined), 'unknown');
+  assert.equal(classifyNavigationLifecycle(undefined, 'browser_disconnected'), 'browser_disconnected');
+  assert.equal(classifyProcessTermination('error'), 'process_error');
+  assert.equal(classifyProcessTermination('signal'), 'process_signal');
+  assert.deepEqual(LIFECYCLE_OUTCOMES, [
+    'fulfilled', 'rejected', 'timeout', 'aborted', 'page_closed', 'page_crashed',
+    'browser_disconnected', 'process_error', 'process_signal', 'unknown',
+  ]);
+  assert.doesNotMatch(JSON.stringify(outputs), /https?:\/\/|secret|token/i);
 });

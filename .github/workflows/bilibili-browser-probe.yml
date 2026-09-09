@@ -232,11 +232,11 @@ jobs:
             try { parseSelector(value); throw new Error('caller authority accepted'); } catch (error) { if (error.message === 'caller authority accepted') throw error; }
           }
           const live = fs.readFileSync('experiments/bilibili-browser-probe/live.mjs', 'utf8');
-          for (const marker of ['publicAddressFor', 'MAX_REQUESTS', 'MAX_INDEPENDENT_BYTES', 'serviceWorkers', 'launchPersistentContext', 'mkdtemp', 'pendingObservations', 'onTunnelClosed', 'transportFinalized', 'candidates.clear', 'createStageTracker', 'recordStage', 'stage_markers', 'finalizer_entry']) {
+          for (const marker of ['publicAddressFor', 'MAX_REQUESTS', 'MAX_INDEPENDENT_BYTES', 'serviceWorkers', 'launchPersistentContext', 'mkdtemp', 'pendingObservations', 'onTunnelClosed', 'transportFinalized', 'candidates.clear', 'createStageTracker', 'recordStage', 'stage_markers', 'navigation_promise_result', 'page_lifecycle_result', 'browser_disconnect', 'process_termination', 'classifyNavigationLifecycle', 'finalizer_entry']) {
             if (!live.includes(marker)) throw new Error(`missing live boundary marker: ${marker}`);
           }
           const finalizer = fs.readFileSync('experiments/bilibili-browser-probe/finalizer.mjs', 'utf8');
-          for (const marker of ['createFinalizer', 'finalizeResult', 'terminationClass', 'ephemeral_candidates', 'dns_pins', 'stage_markers', 'finalizer_entry']) {
+          for (const marker of ['createFinalizer', 'finalizeResult', 'terminationClass', 'ephemeral_candidates', 'dns_pins', 'stage_markers', 'lifecycle_outcome', 'finalizer_entry']) {
             if (!finalizer.includes(marker)) throw new Error(`missing finalizer boundary marker: ${marker}`);
           }
           const preflight = fs.readFileSync('experiments/bilibili-browser-probe/transport-preflight.mjs', 'utf8');

@@ -6,7 +6,7 @@ import { once } from 'node:events';
 import { chromium } from 'playwright-core';
 import { summarizeObservation, rejectSensitiveInput, SCHEMA_VERSION } from '../../plugins/bilibili/experimental_probe.mjs';
 import { runLive } from './live.mjs';
-import { classifyError } from './diagnostic.mjs';
+import { classifyError, classifyProcessTermination } from './diagnostic.mjs';
 import { finalizeResult, terminationClass } from './finalizer.mjs';
 import { createStageTracker } from './stage-markers.mjs';
 
@@ -277,10 +277,12 @@ function publishResult(result, exitCode = 0) {
 function publishProcessFailure(reason, termination = 'error') {
   if (resultPublished) return;
   const error = reason instanceof Error ? reason : undefined;
+  const lifecycleOutcome = classifyProcessTermination(termination);
+  processStages.record('process_termination', { lifecycle_outcome: lifecycleOutcome, transport_outcome: 'failure' });
   processStages.record('finalizer_entry');
   // Process-level failures can bypass the promise returned by main(). Keep
   // their evidence finite and make cleanup uncertainty explicit.
-  const result = finalizeResult({ result: 'failure', termination: terminationClass(error, termination), diagnostic: { ...classifyError(error, 'unknown'), stage_markers: processStages.seal() }, activity: { page_navigation: false }, cleanup: {
+  const result = finalizeResult({ result: 'failure', termination: terminationClass(error, termination), diagnostic: { ...classifyError(error, 'unknown'), lifecycle_outcome: lifecycleOutcome, stage_markers: processStages.seal() }, activity: { page_navigation: false }, cleanup: {
     browser_exit: 'unknown', broker_close: 'unknown', temporary_profile: 'unknown', ephemeral_candidates: 'unknown', dns_pins: 'unknown', staging: 'unknown',
   } });
   publishResult(result, 1);

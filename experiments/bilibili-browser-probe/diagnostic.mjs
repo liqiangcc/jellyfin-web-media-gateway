@@ -28,6 +28,10 @@ export const TRANSPORT_STAGES = Object.freeze([
   'unknown',
 ]);
 export const TRANSPORT_OUTCOMES = Object.freeze(['success', 'failure', 'unknown']);
+export const LIFECYCLE_OUTCOMES = Object.freeze([
+  'fulfilled', 'rejected', 'timeout', 'aborted', 'page_closed', 'page_crashed',
+  'browser_disconnected', 'process_error', 'process_signal', 'unknown',
+]);
 
 const MAX_REQUESTS = 200;
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
@@ -80,6 +84,7 @@ const DIAGNOSTIC_REASON_SET = new Set(DIAGNOSTIC_REASONS);
 const PHASE_HINTS = new Set(DIAGNOSTIC_PHASES);
 const TRANSPORT_STAGE_SET = new Set(TRANSPORT_STAGES);
 const TRANSPORT_OUTCOME_SET = new Set(TRANSPORT_OUTCOMES);
+const LIFECYCLE_OUTCOME_SET = new Set(LIFECYCLE_OUTCOMES);
 
 function boundedCounter(value, maximum) {
   return Number.isSafeInteger(value) && value >= 0 && value <= maximum ? value : 0;
@@ -113,6 +118,33 @@ function transportStage(value) {
 
 function transportOutcome(value) {
   return typeof value === 'string' && TRANSPORT_OUTCOME_SET.has(value) ? value : undefined;
+}
+
+function lifecycleOutcome(value) {
+  return typeof value === 'string' && LIFECYCLE_OUTCOME_SET.has(value) ? value : undefined;
+}
+
+/**
+ * Reduce Playwright/Node lifecycle signals to a closed vocabulary. Only
+ * fixed name/code markers are inspected; error messages never leave the
+ * process and are not used for classification.
+ */
+export function classifyNavigationLifecycle(error, observed) {
+  if (lifecycleOutcome(observed)) return observed;
+  const name = typeof error?.name === 'string' ? error.name : '';
+  const code = typeof error?.code === 'string' ? error.code.toUpperCase() : '';
+  if (name === 'TimeoutError' || code === 'ETIMEDOUT' || code === 'NAVIGATION_TIMEOUT') return 'timeout';
+  if (name === 'AbortError' || code === 'ERR_ABORTED') return 'aborted';
+  if (name === 'BrowserDisconnectedError' || name === 'TargetClosedError' || code === 'BROWSER_DISCONNECTED') return 'browser_disconnected';
+  if (name === 'PageClosedError' || code === 'PAGE_CLOSED') return 'page_closed';
+  if (name === 'PageCrashedError' || code === 'PAGE_CRASHED') return 'page_crashed';
+  return error ? 'rejected' : 'unknown';
+}
+
+export function classifyProcessTermination(hint) {
+  if (hint === 'signal') return 'process_signal';
+  if (hint === 'error' || hint === 'timeout' || hint === 'abort') return 'process_error';
+  return 'unknown';
 }
 
 function stageFor(phase, match, explicit) {
