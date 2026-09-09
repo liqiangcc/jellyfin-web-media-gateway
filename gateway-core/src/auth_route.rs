@@ -5,7 +5,7 @@
 //! contracts remain the only place that interprets a source.
 
 use crate::auth::{SessionVault, VaultError};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use crate::browser::FakeBrowserWorker;
 use crate::browser::{
     BrowserEvent, BrowserEventKind, BrowserInput, BrowserNavigationRequest,
@@ -57,13 +57,13 @@ pub(crate) struct AuthRouteCoordinator {
 #[derive(Clone)]
 enum AuthRuntime {
     Chromium(BrowserAuthRuntime<ChromiumBrowserWorker>),
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     Fake(BrowserAuthRuntime<FakeBrowserWorker>),
 }
 
 enum AuthAttempt {
     Chromium(BrowserAuthAttempt<ChromiumBrowserWorker>),
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     Fake(BrowserAuthAttempt<FakeBrowserWorker>),
 }
 
@@ -108,7 +108,7 @@ impl AuthRouteCoordinator {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn fake_for_tests(vault: SessionVault) -> Self {
         Self {
             runtime: AuthRuntime::Fake(BrowserAuthRuntime::new(
@@ -184,7 +184,7 @@ impl AuthRouteCoordinator {
                 .start(site_id.to_owned(), account_ref.to_owned())
                 .await
                 .map(AuthAttempt::Chromium),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             AuthRuntime::Fake(runtime) => runtime
                 .start(site_id.to_owned(), account_ref.to_owned())
                 .await
@@ -503,7 +503,7 @@ impl AttemptRecord {
                 attempt: AuthAttempt::Chromium(attempt),
                 ..
             } => attempt.state(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             Self {
                 attempt: AuthAttempt::Fake(attempt),
                 ..
@@ -514,7 +514,7 @@ impl AttemptRecord {
     fn expires_in(&self) -> u64 {
         match &self.attempt {
             AuthAttempt::Chromium(attempt) => attempt.expires_in().as_secs(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             AuthAttempt::Fake(attempt) => attempt.expires_in().as_secs(),
         }
     }
@@ -522,7 +522,7 @@ impl AttemptRecord {
     fn is_expired(&self) -> bool {
         match &self.attempt {
             AuthAttempt::Chromium(attempt) => attempt.is_expired(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             AuthAttempt::Fake(attempt) => attempt.is_expired(),
         }
     }
@@ -530,7 +530,7 @@ impl AttemptRecord {
     fn expire(&mut self) {
         match &mut self.attempt {
             AuthAttempt::Chromium(attempt) => attempt.expire(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             AuthAttempt::Fake(attempt) => attempt.expire(),
         }
     }
@@ -538,7 +538,7 @@ impl AttemptRecord {
     fn auth_events_after(&self, after: u64) -> Vec<crate::browser_auth::BrowserAuthEvent> {
         match &self.attempt {
             AuthAttempt::Chromium(attempt) => attempt.events_after(after),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             AuthAttempt::Fake(attempt) => attempt.events_after(after),
         }
     }
@@ -549,7 +549,7 @@ impl AttemptRecord {
     ) -> Result<Vec<BrowserEvent>, BrowserAuthRuntimeError> {
         match &mut self.attempt {
             AuthAttempt::Chromium(attempt) => attempt.browser_events_after(after),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             AuthAttempt::Fake(attempt) => attempt.browser_events_after(after),
         }
     }
@@ -561,7 +561,7 @@ impl AttemptRecord {
     ) -> Result<BrowserOperationId, BrowserAuthRuntimeError> {
         match &mut self.attempt {
             AuthAttempt::Chromium(attempt) => attempt.navigate(request, policy).await,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             AuthAttempt::Fake(attempt) => attempt.navigate(request, policy).await,
         }
     }
@@ -569,7 +569,7 @@ impl AttemptRecord {
     async fn request_input(&mut self, input: BrowserInput) -> Result<(), BrowserAuthRuntimeError> {
         match &mut self.attempt {
             AuthAttempt::Chromium(attempt) => attempt.request_input(input).await,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             AuthAttempt::Fake(attempt) => attempt.request_input(input).await,
         }
     }
@@ -577,7 +577,7 @@ impl AttemptRecord {
     fn cancel(&mut self) -> Result<(), BrowserAuthRuntimeError> {
         match &mut self.attempt {
             AuthAttempt::Chromium(attempt) => attempt.cancel(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             AuthAttempt::Fake(attempt) => attempt.cancel(),
         }
     }
@@ -594,7 +594,7 @@ impl AttemptRecord {
                 BrowserOperationId::from_value(operation_id),
                 ttl,
             ),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             AuthAttempt::Fake(attempt) => attempt.take_observation_handoff(
                 locator,
                 BrowserOperationId::from_value(operation_id),
@@ -610,7 +610,7 @@ impl AttemptRecord {
     ) -> Result<AuthenticatedSessionHandoff, BrowserAuthRuntimeError> {
         match &mut self.attempt {
             AuthAttempt::Chromium(attempt) => attempt.accept_candidate_ref(candidate, observation),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-support"))]
             AuthAttempt::Fake(attempt) => attempt.accept_candidate_ref(candidate, observation),
         }
     }

@@ -679,9 +679,9 @@ impl GatewayService {
             .register_account(site_id, account_ref, label)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-support"))]
     #[allow(dead_code)]
-    pub(crate) fn with_fake_auth_routes(
+    pub fn with_fake_auth_routes(
         max_capabilities: usize,
         registry: Arc<SiteAdapterRegistry>,
     ) -> Self {
