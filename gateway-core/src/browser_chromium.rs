@@ -1063,7 +1063,7 @@ fn configure_chromium_environment(command: &mut tokio::process::Command, profile
 /// Only regular files below the already-created worker profile are accepted;
 /// symlinks and paths escaping that directory fail closed. The snapshot is an
 /// internal value and never enters events, HTTP DTOs, logs, or artifacts.
-fn snapshot_profile(profile_dir: &Path) -> Result<Vec<u8>, BrowserError> {
+fn snapshot_profile(profile_dir: &Path) -> Result<BrowserCandidateMaterial, BrowserError> {
     let mut files = Vec::new();
     collect_profile_files(profile_dir, profile_dir, &mut files)?;
     if files.is_empty() || files.len() > MAX_CANDIDATE_PROFILE_FILES {

@@ -400,9 +400,10 @@ impl<W: BrowserWorker> BrowserAuthAttempt<W> {
         observation: BrowserAuthObservation,
     ) -> Result<AuthenticatedSessionHandoff, BrowserAuthRuntimeError> {
         self.ensure_live()?;
-        if let Some(captured) = self.candidate_capture.as_ref()
-            && (captured.candidate != candidate || captured.observation != observation)
-        {
+        let captured_mismatch = self.candidate_capture.as_ref().is_some_and(|captured| {
+            captured.candidate != candidate || captured.observation != observation
+        });
+        if captured_mismatch {
             self.reject_candidate_if_present(&candidate);
             return Err(BrowserAuthRuntimeError::InvalidCandidate);
         }
@@ -430,7 +431,10 @@ impl<W: BrowserWorker> BrowserAuthAttempt<W> {
             candidate.session_id().to_owned(),
             observation,
         )
-        .map_err(|_| BrowserAuthRuntimeError::InvalidObservation)?;
+        .map_err(|_| {
+            self.reject_candidate_if_present(&candidate);
+            BrowserAuthRuntimeError::InvalidObservation
+        })?;
         self.vault
             .validate_and_swap(&candidate, CandidateValidation::Valid)
             .map_err(|error| {
@@ -574,8 +578,15 @@ impl<W: BrowserWorker> BrowserAuthAttempt<W> {
         self.cleanup_worker();
     }
 
-    fn reject_candidate_if_present(&self, candidate: &SiteSessionRef) {
+    fn reject_candidate_if_present(&mut self, candidate: &SiteSessionRef) {
         let _ = self.vault.cancel_candidate(candidate);
+        if self
+            .candidate_capture
+            .as_ref()
+            .is_some_and(|captured| captured.candidate == *candidate)
+        {
+            self.candidate_capture = None;
+        }
     }
 
     fn discard_uncommitted_candidate(&mut self) {
@@ -797,5 +808,49 @@ mod tests {
         attempt.cancel().unwrap();
         assert!(!vault.has_session(&candidate));
         assert_eq!(vault.active_session(SITE, ACCOUNT).unwrap(), Some(old));
+    }
+
+    #[tokio::test]
+    async fn rejected_capture_is_not_replayed_by_duplicate_request() {
+        let vault = SessionVault::isolated_test();
+        vault.register_account(SITE, ACCOUNT, "fixture").unwrap();
+        let old = vault
+            .create_fixture_candidate_session(SITE, ACCOUNT, "old")
+            .unwrap();
+        vault
+            .validate_and_swap(&old, CandidateValidation::Valid)
+            .unwrap();
+        let worker = FakeBrowserWorker::new();
+        let runtime = BrowserAuthRuntime::new(worker.clone(), vault.clone());
+        let mut attempt = runtime.start(SITE, ACCOUNT).await.unwrap();
+        worker
+            .set_candidate_material(
+                attempt.session().id(),
+                BrowserCandidateMaterial::fixture("reject"),
+            )
+            .unwrap();
+        let observation = ready_observation();
+        let candidate = attempt
+            .capture_candidate("capture-reject", observation)
+            .await
+            .unwrap();
+        let stale = BrowserAuthObservation {
+            sequence: observation.sequence + 1,
+            ..observation
+        };
+        assert_eq!(
+            attempt.accept_candidate_ref(candidate.session_id(), stale),
+            Err(BrowserAuthRuntimeError::InvalidCandidate)
+        );
+        assert!(!vault.has_session(&candidate));
+        assert_eq!(vault.active_session(SITE, ACCOUNT).unwrap(), Some(old));
+        assert_eq!(
+            attempt
+                .capture_candidate("capture-reject", observation)
+                .await,
+            Err(BrowserAuthRuntimeError::Browser(
+                BrowserError::CandidateCaptureUnavailable
+            ))
+        );
     }
 }
