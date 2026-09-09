@@ -48,7 +48,7 @@ test('response provenance and redirect metadata are finite and never inferred fr
   assert.deepEqual(RESPONSE_REDIRECT_CLASSES, ['none', 'redirect', 'unknown']);
   assert.deepEqual(RESPONSE_METADATA_CLASSES, ['none', 'status_only', 'safe_headers', 'unknown']);
   assert.deepEqual(classifyResponseMetadata({ response_origin: 'broker_policy', status: 403, request_count: 4, response_bytes: 20, metadata_bytes: 2 }), {
-    schema_version: 2, response_origin: 'broker_policy', status_class: '4xx', redirect_class: 'none', response_metadata_class: 'status_only',
+    schema_version: 2, response_origin: 'broker_policy', status_class: '4xx', redirect_class: 'none', response_metadata_class: 'safe_headers',
     request_count: 4, response_bytes: 20, metadata_bytes: 2,
   });
   assert.deepEqual(classifyResponseMetadata({ response_origin: 'upstream_http', status: 302 }), {
