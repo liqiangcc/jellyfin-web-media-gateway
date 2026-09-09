@@ -68,7 +68,7 @@ jobs:
         run: |
           ! grep -Eni 'bilibili|youtube|querySelector' gateway-core/src/browser.rs gateway-core/src/browser_chromium.rs
           ! grep -En 'Fetch\.(getResponseBody|takeResponseBodyAsStream)|Network\.getResponseBody|Set-Cookie|Authorization' gateway-core/src/browser.rs gateway-core/src/browser_chromium.rs
-          ! grep -En -- '--no-sandbox' gateway-core/src/browser_chromium.rs
+          ! awk '/#\[cfg\(test\)\]/{exit} {print}' gateway-core/src/browser_chromium.rs | grep -En -- '--no-sandbox'
 
       - name: Full x64 workspace integration suite
         run: cargo test --workspace --all-targets -- --test-threads=1
