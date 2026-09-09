@@ -108,34 +108,58 @@ export function normalizeStageMarker(input = {}, sequence = 1) {
   });
 }
 
-/** Create an append-only marker stream that can be sealed by the finalizer. */
+const POST_NAVIGATION_PRIORITY_EVENTS = Object.freeze([
+  'navigation_status', 'navigation_end', 'navigation_promise_result',
+  'page_lifecycle_result', 'browser_disconnect', 'process_termination',
+  'upstream_response_start', 'upstream_response_body_start', 'upstream_response_end',
+  'upstream_socket_close', 'upstream_timeout', 'upstream_abort', 'upstream_error',
+]);
+const evictableEvents = new Set(['broker_request_start', 'broker_request_result']);
+
+function reindexMarkers(markers) {
+  for (let index = 0; index < markers.length; index += 1) {
+    markers[index] = normalizeStageMarker(markers[index], index + 1);
+  }
+}
+
+function evictBrokerNoise(markers) {
+  const index = markers.findIndex(({ event }) => evictableEvents.has(event));
+  if (index < 0) return false;
+  markers.splice(index, 1);
+  reindexMarkers(markers);
+  return true;
+}
+
+/** Create a finite retained marker stream that can be sealed by the finalizer. */
 export function createStageTracker() {
   const markers = [];
   let sealed = false;
   let postNavigationReserve = false;
-  let reservedLifecycleMarkers = 0;
-  const reservedEvents = new Set([
-    'navigation_status', 'navigation_end', 'navigation_promise_result',
-    'page_lifecycle_result', 'browser_disconnect', 'process_termination',
-  ]);
+  let pendingPriorityEvents = new Set();
   return Object.freeze({
     record(event, fields = {}) {
-      // Keep the finalizer and the post-navigation lifecycle boundary
-      // observable even if a noisy broker fills the stream first. The
-      // reservation activates only after navigation_start, preserving the
-      // historical pre-navigation stream behavior while bounding output.
-      if (event === 'navigation_start') {
+      if (sealed) return false;
+      if (event === 'navigation_start' && !postNavigationReserve) {
         postNavigationReserve = true;
-        reservedLifecycleMarkers = reservedEvents.size;
+        pendingPriorityEvents = new Set(POST_NAVIGATION_PRIORITY_EVENTS);
       }
-      const priority = postNavigationReserve && reservedEvents.has(event);
-      const remaining = reservedLifecycleMarkers - (priority ? 1 : 0);
+      // Keep navigation, upstream response/socket and finalizer boundaries
+      // observable even if a noisy broker fills the stream first. Once
+      // navigation starts, only broker noise is evictable; the finite budget
+      // still rejects all other unreserved events.
+      const priority = event === 'navigation_start'
+        || (postNavigationReserve && pendingPriorityEvents.has(event));
+      const remaining = pendingPriorityEvents.size - (pendingPriorityEvents.has(event) ? 1 : 0);
       const reserve = event === 'finalizer_entry' ? 0 : 1 + (postNavigationReserve ? Math.max(0, remaining) : 0);
-      if (sealed || markers.length >= MAX_STAGE_MARKERS - reserve) return false;
+      if (priority || event === 'finalizer_entry') {
+        if (markers.length >= MAX_STAGE_MARKERS && !evictBrokerNoise(markers)) return false;
+      } else if (markers.length >= MAX_STAGE_MARKERS - reserve) {
+        return false;
+      }
       const marker = normalizeStageMarker({ ...fields, event }, markers.length + 1);
       if (!marker) return false;
       markers.push(marker);
-      if (priority) reservedLifecycleMarkers -= 1;
+      if (postNavigationReserve && pendingPriorityEvents.has(event)) pendingPriorityEvents.delete(event);
       return true;
     },
     snapshot() {

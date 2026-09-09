@@ -83,6 +83,34 @@ test('tracker reserves post-navigation lifecycle markers before sealing', () => 
   ]);
 });
 
+test('tracker retains upstream boundaries through noisy broker activity', () => {
+  const tracker = createStageTracker();
+  for (let index = 0; index < 24; index += 1) assert.equal(tracker.record('broker_request_start'), true);
+  assert.equal(tracker.record('navigation_start'), true);
+  const upstreamEvents = [
+    'upstream_response_start', 'upstream_response_body_start', 'upstream_response_end',
+    'upstream_socket_close', 'upstream_timeout', 'upstream_abort', 'upstream_error',
+  ];
+  for (const event of upstreamEvents) assert.equal(tracker.record(event), true);
+  for (const event of [
+    'navigation_promise_result', 'page_lifecycle_result', 'browser_disconnect',
+    'navigation_status', 'navigation_end', 'process_termination',
+  ]) assert.equal(tracker.record(event), true);
+  assert.equal(tracker.record('finalizer_entry'), true);
+
+  const markers = tracker.snapshot();
+  assert.equal(markers.length, MAX_STAGE_MARKERS);
+  assert.deepEqual(markers.filter(({ event }) => event.startsWith('upstream_')).map(({ event }) => event), upstreamEvents);
+  assert.deepEqual(markers.filter(({ event }) => event === 'navigation_start' || event === 'finalizer_entry').map(({ event }) => event), [
+    'navigation_start', 'finalizer_entry',
+  ]);
+  assert.deepEqual(markers.map(({ sequence }) => sequence), Array.from({ length: MAX_STAGE_MARKERS }, (_, index) => index + 1));
+  assert.equal(tracker.record('upstream_error'), false);
+  const sealed = tracker.seal();
+  assert.deepEqual(tracker.snapshot(), sealed);
+  assert.equal(tracker.record('upstream_socket_close'), false);
+});
+
 test('sanitizer drops malformed markers and reindexes bounded output', () => {
   const markers = sanitizeStageMarkers([
     { event: 'navigation_start', sequence: 99 },
