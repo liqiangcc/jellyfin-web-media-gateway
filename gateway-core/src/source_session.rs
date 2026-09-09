@@ -1155,7 +1155,10 @@ mod tests {
         let first = json(
             service.create_authenticated_playback_session(
                 request.clone(),
-                authenticated_browser_handoff("fixture://observation", std::time::Duration::from_secs(30)),
+                authenticated_browser_handoff(
+                    "fixture://observation",
+                    std::time::Duration::from_secs(30),
+                ),
                 authenticated_session(),
             ),
         )
@@ -1164,7 +1167,10 @@ mod tests {
         let replay = json(
             service.create_authenticated_playback_session(
                 request,
-                authenticated_browser_handoff("fixture://observation", std::time::Duration::from_secs(30)),
+                authenticated_browser_handoff(
+                    "fixture://observation",
+                    std::time::Duration::from_secs(30),
+                ),
                 authenticated_session(),
             ),
         )

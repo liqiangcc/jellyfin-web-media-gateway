@@ -7,8 +7,8 @@
 
 use crate::auth::{CandidateValidation, SessionVault, SiteSessionRef, VaultError};
 use crate::browser::{
-    BrowserAuthMode, BrowserError, BrowserEvent, BrowserNavigationRequest, BrowserObservationHandoff,
-    BrowserOperationId, BrowserSession, BrowserWorker,
+    BrowserAuthMode, BrowserError, BrowserEvent, BrowserNavigationRequest,
+    BrowserObservationHandoff, BrowserOperationId, BrowserSession, BrowserWorker,
     R008NavigationPolicy,
 };
 use site_adapter_api::{
