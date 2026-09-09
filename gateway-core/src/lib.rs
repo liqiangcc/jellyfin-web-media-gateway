@@ -13,6 +13,8 @@ use axum::{Json, Router};
 use bytes::Bytes;
 use futures_util::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use site_adapter_api::ResolveContext;
 use site_adapter_api::{ResolvedStream, ResolvedSubtitle, SiteAdapterRegistry, StreamProtocol};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -675,6 +677,21 @@ impl GatewayService {
             &self.state.control,
             &self.state.display_sessions,
             request,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn create_session_with_context(
+        &self,
+        request: CreateSessionRequest,
+        context: ResolveContext<'_>,
+    ) -> source_session::CreationOutcome {
+        self.state.source_sessions.create_with_context(
+            self,
+            &self.state.control,
+            &self.state.display_sessions,
+            request,
+            context,
         )
     }
 

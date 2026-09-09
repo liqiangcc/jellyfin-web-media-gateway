@@ -15,8 +15,8 @@ use crate::{Binding, EgressScope, GatewayError, GatewayService};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use site_adapter_api::{
-    AdapterError, MediaProtection, NavigationDirection, ResolvedMedia, SiteAdapterRegistry,
-    StreamProtocol,
+    AdapterError, MediaProtection, NavigationDirection, ResolveContext, ResolvedMedia,
+    SiteAdapterRegistry, StreamProtocol,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -163,6 +163,27 @@ impl SourceSessionService {
         displays: &DisplaySessionService,
         request: CreateSessionRequest,
     ) -> CreationOutcome {
+        self.create_with_context(
+            gateway,
+            control,
+            displays,
+            request,
+            ResolveContext::default(),
+        )
+    }
+
+    /// Server-side acquisition handoff used by the browser/plugin integration.
+    /// The HTTP request surface does not accept this context; callers must
+    /// obtain it from the bounded Browser Worker and server-owned capability
+    /// path before entering SourceSession.
+    pub(crate) fn create_with_context(
+        &self,
+        gateway: &GatewayService,
+        control: &ControlService,
+        displays: &DisplaySessionService,
+        request: CreateSessionRequest,
+        context: ResolveContext<'_>,
+    ) -> CreationOutcome {
         if let Err(error) = validate_request(&request) {
             return CreationOutcome::Failure {
                 status: axum::http::StatusCode::BAD_REQUEST,
@@ -197,7 +218,7 @@ impl SourceSessionService {
             };
         }
 
-        let outcome = self.create_fresh(gateway, control, displays, &request);
+        let outcome = self.create_fresh(gateway, control, displays, &request, context);
         creations.insert(
             request.request_id,
             CreationRecord {
@@ -214,6 +235,7 @@ impl SourceSessionService {
         control: &ControlService,
         displays: &DisplaySessionService,
         request: &CreateSessionRequest,
+        context: ResolveContext<'_>,
     ) -> CreationOutcome {
         if let Err(error) = displays.validate_live_selector(&request.display_id) {
             return failure_for_display(error);
@@ -223,7 +245,7 @@ impl SourceSessionService {
             Ok(locator) => locator,
             Err(error) => return failure_for_adapter(error),
         };
-        let media = match self.registry.resolve(&locator) {
+        let media = match self.registry.resolve_with_context(&locator, context) {
             Ok(media) => media,
             Err(error) => return failure_for_adapter(error),
         };
@@ -668,10 +690,14 @@ mod tests {
     use crate::GatewayService;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode, header};
+    use axum::response::IntoResponse;
     use generic_direct::GenericDirectAdapter;
     use site_adapter_api::{
-        AdapterError, MediaProtection, RecognizeResult, ResolvedMedia, ResolvedStream, SiteAdapter,
-        SiteAdapterRegistry, SourceLocator, StreamProtocol,
+        AdapterError, BROWSER_OBSERVATION_VERSION, BrowserExpiryHint, BrowserMediaCandidate,
+        BrowserMediaKind, BrowserObservation, BrowserRangeSupport, BrowserStatusClass,
+        MediaProtection, RecognizeResult, ResolveContext, ResolvedMedia, ResolvedStream,
+        ServerOwnedMedia, ServerOwnedObservation, SiteAdapter, SiteAdapterRegistry, SourceLocator,
+        StreamProtocol,
     };
     use std::collections::BTreeMap;
     use std::sync::Arc;
@@ -689,6 +715,7 @@ mod tests {
         Rollback,
         SecretReference,
         Navigation,
+        Observation,
     }
 
     struct FixtureAdapter {
@@ -771,6 +798,19 @@ mod tests {
             })
         }
 
+        fn resolve_with_context(
+            &self,
+            locator: &SourceLocator,
+            context: ResolveContext<'_>,
+        ) -> Result<ResolvedMedia, AdapterError> {
+            if matches!(self.mode, FixtureMode::Observation)
+                && (context.browser_observation.is_none() || context.server_observation.is_none())
+            {
+                return Err(AdapterError::ObservationRequired);
+            }
+            self.resolve(locator)
+        }
+
         fn navigation(
             &self,
             locator: &SourceLocator,
@@ -808,6 +848,41 @@ mod tests {
             .configure_http_authority(Url::parse(ORIGIN).unwrap())
             .unwrap();
         service
+    }
+
+    fn observation_context() -> (BrowserObservation, ServerOwnedObservation) {
+        let observation = BrowserObservation {
+            schema_version: BROWSER_OBSERVATION_VERSION,
+            observation_id: "source-session-observation".into(),
+            page_url: "https://example.test/fixture".into(),
+            page_title: "Source Session Observation Fixture".into(),
+            part_match: true,
+            event_count: 2,
+            resource_count: 1,
+            candidates: vec![BrowserMediaCandidate {
+                id: "primary".into(),
+                kind: BrowserMediaKind::Muxed,
+                protocol: StreamProtocol::HttpFile,
+                status: BrowserStatusClass::Success,
+                range: BrowserRangeSupport::Supported,
+                egress_allowed: true,
+                access_ref: "source-session-ref".into(),
+                expiry: BrowserExpiryHint::NoneObserved,
+            }],
+        };
+        let server = ServerOwnedObservation {
+            schema_version: BROWSER_OBSERVATION_VERSION,
+            observation_id: "source-session-observation".into(),
+            media: vec![ServerOwnedMedia {
+                observation_id: "source-session-observation".into(),
+                candidate_id: "primary".into(),
+                access_ref: "source-session-ref".into(),
+                protocol: StreamProtocol::HttpFile,
+                url: Url::parse("https://media.example.invalid/fixture.mp4").unwrap(),
+                public_headers: BTreeMap::new(),
+            }],
+        };
+        (observation, server)
     }
 
     async fn json(response: axum::response::Response) -> serde_json::Value {
@@ -896,6 +971,40 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(command.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn browser_observation_handoff_enters_source_session_without_secret_projection() {
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(FixtureAdapter {
+                plugin: "fixture-observation",
+                priority: 10,
+                mode: FixtureMode::Observation,
+            }))
+            .unwrap();
+        let service = service_with_registry(registry);
+        register_display(&service).await;
+        let (observation, server_observation) = observation_context();
+        let response = service
+            .create_session_with_context(
+                super::CreateSessionRequest {
+                    request_id: "observation-fixture-create".into(),
+                    source: "fixture://observation".into(),
+                    display_id: "display-a".into(),
+                },
+                ResolveContext {
+                    browser_observation: Some(&observation),
+                    server_observation: Some(&server_observation),
+                },
+            )
+            .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json(response).await;
+        assert_eq!(body["source_site"], "fixture");
+        assert!(body.to_string().contains("/stream/"));
+        assert!(!body.to_string().contains("source-session-ref"));
+        assert!(!body.to_string().contains("media.example.invalid"));
     }
 
     #[tokio::test]

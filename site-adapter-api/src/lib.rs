@@ -14,6 +14,221 @@ pub struct SourceLocator {
     pub opaque_payload: String,
 }
 
+/// Version of the generic, redacted handoff emitted by a Site Browser Worker.
+/// Concrete sites interpret these facts in their own plugin; the worker never
+/// needs to know what a candidate means for a particular site.
+pub const BROWSER_OBSERVATION_VERSION: u32 = 1;
+
+const MAX_OBSERVATION_ID_BYTES: usize = 128;
+const MAX_PAGE_URL_BYTES: usize = 2048;
+const MAX_OBSERVATION_CANDIDATES: usize = 16;
+const MAX_CANDIDATE_ID_BYTES: usize = 128;
+const MAX_ACCESS_REF_BYTES: usize = 256;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrowserMediaKind {
+    Muxed,
+    Video,
+    Audio,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrowserStatusClass {
+    Success,
+    Redirect,
+    ClientError,
+    ServerError,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrowserRangeSupport {
+    Supported,
+    Unsupported,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrowserExpiryHint {
+    NoneObserved,
+    ShortLived,
+    Expired,
+    Unknown,
+}
+
+/// Generic facts safe to cross the Browser Worker boundary.  It intentionally
+/// contains no response URL, Cookie, Authorization value, DOM selector, or
+/// site-specific identity.  `page_url` is the generic page navigation fact;
+/// a Site Plugin may interpret it after binding it to its own locator.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BrowserMediaCandidate {
+    pub id: String,
+    pub kind: BrowserMediaKind,
+    pub protocol: StreamProtocol,
+    pub status: BrowserStatusClass,
+    pub range: BrowserRangeSupport,
+    pub egress_allowed: bool,
+    /// Opaque reference to server-owned media state, never a URL or secret.
+    pub access_ref: String,
+    pub expiry: BrowserExpiryHint,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BrowserObservation {
+    pub schema_version: u32,
+    pub observation_id: String,
+    pub page_url: String,
+    pub page_title: String,
+    pub part_match: bool,
+    pub event_count: u16,
+    pub resource_count: u16,
+    pub candidates: Vec<BrowserMediaCandidate>,
+}
+
+/// Server-owned handoff for a redacted observation.  This is deliberately not
+/// serializable and its Debug output omits the URL, headers, and access ref.
+/// The short-lived URL exists only in this bounded server-side object until
+/// the normal Gateway capability boundary consumes the resulting media.
+#[derive(Clone, Eq, PartialEq)]
+pub struct ServerOwnedMedia {
+    pub observation_id: String,
+    pub candidate_id: String,
+    pub access_ref: String,
+    pub protocol: StreamProtocol,
+    pub url: Url,
+    pub public_headers: BTreeMap<String, String>,
+}
+
+impl fmt::Debug for ServerOwnedMedia {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ServerOwnedMedia")
+            .field("observation_id", &self.observation_id)
+            .field("candidate_id", &self.candidate_id)
+            .field("access_ref", &"<redacted>")
+            .field("protocol", &self.protocol)
+            .field("url", &"<redacted>")
+            .field("public_headers", &"<redacted>")
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ServerOwnedObservation {
+    pub schema_version: u32,
+    pub observation_id: String,
+    pub media: Vec<ServerOwnedMedia>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ResolveContext<'a> {
+    pub browser_observation: Option<&'a BrowserObservation>,
+    pub server_observation: Option<&'a ServerOwnedObservation>,
+}
+
+pub fn validate_browser_observation(observation: &BrowserObservation) -> Result<(), AdapterError> {
+    if observation.schema_version != BROWSER_OBSERVATION_VERSION
+        || !bounded_text(&observation.observation_id, MAX_OBSERVATION_ID_BYTES)
+        || observation.page_url.is_empty()
+        || observation.page_url.len() > MAX_PAGE_URL_BYTES
+        || observation.page_url.chars().any(char::is_control)
+        || !bounded_text(&observation.page_title, 512)
+        || contains_secret_marker(&observation.page_title)
+        || observation.event_count > 200
+        || observation.resource_count > 64
+        || observation.candidates.len() > MAX_OBSERVATION_CANDIDATES
+        || observation.resource_count as usize != observation.candidates.len()
+    {
+        return Err(AdapterError::InvalidObservation);
+    }
+    if observation.page_url.starts_with("blob:")
+        || observation.page_url.starts_with("file:")
+        || contains_secret_marker(&observation.page_url)
+        || Url::parse(&observation.page_url)
+            .ok()
+            .is_none_or(|url| !matches!(url.scheme(), "http" | "https"))
+    {
+        return Err(AdapterError::InvalidObservation);
+    }
+    for candidate in &observation.candidates {
+        if !bounded_text(&candidate.id, MAX_CANDIDATE_ID_BYTES)
+            || contains_secret_marker(&candidate.id)
+            || !bounded_opaque_ref(&candidate.access_ref)
+        {
+            return Err(AdapterError::InvalidObservation);
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_server_owned_observation(
+    observation: &ServerOwnedObservation,
+) -> Result<(), AdapterError> {
+    if observation.schema_version != BROWSER_OBSERVATION_VERSION
+        || !bounded_text(&observation.observation_id, MAX_OBSERVATION_ID_BYTES)
+        || observation.media.len() > MAX_OBSERVATION_CANDIDATES
+    {
+        return Err(AdapterError::InvalidObservation);
+    }
+    for media in &observation.media {
+        if media.observation_id != observation.observation_id
+            || !bounded_text(&media.candidate_id, MAX_CANDIDATE_ID_BYTES)
+            || !bounded_opaque_ref(&media.access_ref)
+            || !matches!(media.url.scheme(), "http" | "https")
+            || media.url.host_str().is_none()
+            || !media.url.username().is_empty()
+            || media.url.password().is_some()
+            || media.public_headers.len() > 16
+        {
+            return Err(AdapterError::InvalidObservation);
+        }
+        for (name, value) in &media.public_headers {
+            if name.is_empty()
+                || name.len() > 128
+                || !name.chars().all(is_http_token_character)
+                || value.len() > 4096
+                || value.chars().any(char::is_control)
+                || security::is_secret_header(name, value)
+            {
+                return Err(AdapterError::InvalidObservation);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn bounded_text(value: &str, max: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max
+        && value.chars().all(|character| !character.is_control())
+}
+
+fn bounded_opaque_ref(value: &str) -> bool {
+    bounded_text(value, MAX_ACCESS_REF_BYTES)
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || ".:_-".contains(character))
+        && !contains_secret_marker(value)
+}
+
+fn is_http_token_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(character)
+}
+
+fn contains_secret_marker(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    [
+        "cookie",
+        "authorization",
+        "bearer",
+        "sessdata",
+        "token",
+        "signed-url",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
 const MAX_LOCATOR_FIELD_BYTES: usize = 128;
 const MAX_OPAQUE_PAYLOAD_BYTES: usize = 16 * 1024;
 const MAX_COLLECTION_ID_BYTES: usize = 256;
@@ -105,6 +320,15 @@ pub enum AdapterError {
     PluginNotFound,
     UnsupportedNavigation,
     InvalidNavigation,
+    InvalidObservation,
+    AccessRequired,
+    ObservationRequired,
+    ObservationExpired,
+    ContentNotFound,
+    UpstreamDenied,
+    UnsupportedMedia,
+    EgressRejected,
+    SecretMaterial,
 }
 
 impl fmt::Display for AdapterError {
@@ -120,6 +344,17 @@ pub trait SiteAdapter: Send + Sync {
     fn plugin_id(&self) -> &'static str;
     fn recognize(&self, input: &str) -> Result<RecognizeResult, AdapterError>;
     fn resolve(&self, locator: &SourceLocator) -> Result<ResolvedMedia, AdapterError>;
+
+    /// Resolve using a generic redacted observation plus a server-owned
+    /// handoff. Existing adapters remain compatible and ignore the optional
+    /// context; adapters that need browser acquisition must opt in.
+    fn resolve_with_context(
+        &self,
+        locator: &SourceLocator,
+        _context: ResolveContext<'_>,
+    ) -> Result<ResolvedMedia, AdapterError> {
+        self.resolve(locator)
+    }
 
     /// Return opaque neighbouring locators.  Adapters that do not expose a
     /// collection/navigation model fail closed without changing their
@@ -181,6 +416,31 @@ impl SiteAdapterRegistry {
             return Err(AdapterError::InvalidLocatorOwnership);
         }
         let media = adapter.resolve(locator)?;
+        conformance::validate_resolved_media(&media)
+            .map_err(|_| AdapterError::InvalidResolvedMedia)?;
+        Ok(media)
+    }
+
+    pub fn resolve_with_context(
+        &self,
+        locator: &SourceLocator,
+        context: ResolveContext<'_>,
+    ) -> Result<ResolvedMedia, AdapterError> {
+        let adapter = self
+            .adapters
+            .iter()
+            .find(|a| a.plugin_id() == locator.plugin_id)
+            .ok_or(AdapterError::PluginNotFound)?;
+        if locator.site_id != adapter.site_id() {
+            return Err(AdapterError::InvalidLocatorOwnership);
+        }
+        if let Some(observation) = context.browser_observation {
+            validate_browser_observation(observation)?;
+        }
+        if let Some(observation) = context.server_observation {
+            validate_server_owned_observation(observation)?;
+        }
+        let media = adapter.resolve_with_context(locator, context)?;
         conformance::validate_resolved_media(&media)
             .map_err(|_| AdapterError::InvalidResolvedMedia)?;
         Ok(media)
