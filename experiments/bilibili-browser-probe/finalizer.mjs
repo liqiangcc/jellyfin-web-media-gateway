@@ -32,6 +32,7 @@ function safeDiagnostic(input = {}) {
     request_count: value.request_count,
     response_bytes: value.response_bytes,
     metadata_bytes: value.metadata_bytes,
+    lifecycle_outcome: value.lifecycle_outcome,
   });
   return Object.freeze({
     schema_version: 2,

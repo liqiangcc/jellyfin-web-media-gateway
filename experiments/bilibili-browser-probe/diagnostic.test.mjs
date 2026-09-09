@@ -67,3 +67,22 @@ test('post-navigation lifecycle markers reduce to finite classes without raw err
   ]);
   assert.doesNotMatch(JSON.stringify(outputs), /https?:\/\/|secret|token/i);
 });
+
+test('classifies an observed generic navigation rejection without inventing a cause', () => {
+  const result = classifyError(
+    { name: 'Error', message: 'opaque rejection at https://secret.invalid/?token=sentinel' },
+    'chromium_navigation',
+    { lifecycle_outcome: 'rejected', request_count: 13, response_bytes: 15224 },
+  );
+  assert.equal(result.phase, 'chromium_navigation');
+  assert.equal(result.reason, 'navigation_promise_rejected');
+  assert.equal(result.transport_stage, 'downstream_close');
+  assert.equal(result.transport_outcome, 'failure');
+  assert.equal(result.request_count, 13);
+  assert.equal(result.response_bytes, 15224);
+  assert.doesNotMatch(JSON.stringify(result), /https?:\/\/|secret|token|sentinel/i);
+  assert.equal(classifyError({ name: 'TimeoutError' }, 'chromium_navigation').reason, 'navigation_timeout');
+  assert.equal(classifyError({ name: 'AbortError' }, 'chromium_navigation').reason, 'navigation_aborted');
+  assert.equal(classifyError({ name: 'TargetClosedError' }, 'chromium_navigation').reason, 'navigation_browser_disconnected');
+  assert.equal(classifyFailure({ phase_hint: 'chromium_navigation', lifecycle_outcome: 'unknown' }).reason, 'chromium_navigation_failed');
+});

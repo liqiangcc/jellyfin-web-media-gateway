@@ -81,9 +81,10 @@ function recordFailure(state, error, phaseHint, status, transportStage, lifecycl
   // callback belongs to the already observed transport outcome. The explicit
   // response-budget path is the only failure that may supersede it before the
   // tunnel cleanup callback runs.
-  if (state.failure || state.transportFinalized || state.transport && !state.responseLimitTriggered) return state.failure;
+  if (state.failure || state.transportFinalized ||
+      (state.transport && !state.responseLimitTriggered && phaseHint !== 'chromium_navigation')) return state.failure;
   const counters = diagnosticCounters(state);
-  state.failure = { ...classifyError(error, phaseHint, { ...counters, status, transport_stage: transportStage }), lifecycle_outcome: lifecycleOutcome || 'unknown' };
+  state.failure = { ...classifyError(error, phaseHint, { ...counters, status, transport_stage: transportStage, lifecycle_outcome: lifecycleOutcome }), lifecycle_outcome: lifecycleOutcome || 'unknown' };
   return state.failure;
 }
 
