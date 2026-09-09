@@ -40,6 +40,7 @@ pub use auth::{
     PendingPlaybackAction, PendingSourceLocator, ScopedHttpResponse, ScopedSiteHttpClient,
     SessionSwapResult, SessionVault, SiteAccessContext, SiteAccount, SiteSessionRef, VaultError,
 };
+pub use browser::{BrowserObservationHandoff, BrowserOperationId, BrowserSessionId};
 pub use browser_auth::{
     AUTH_ATTEMPT_TTL, AUTH_EVENT_VERSION, BrowserAuthAttempt, BrowserAuthEvent, BrowserAuthRuntime,
     BrowserAuthRuntimeError, MAX_AUTH_EVENTS,
@@ -683,6 +684,30 @@ impl GatewayService {
             &self.state.display_sessions,
             request,
         )
+    }
+
+    /// Production server-side seam for authenticated browser playback. The
+    /// caller supplies only the bounded Browser Worker observation and the
+    /// opaque Vault-issued auth handoff; SourceSession then uses the same
+    /// PlaybackSession, capability, and Web Display publication path as a
+    /// normal source create.
+    pub fn create_authenticated_playback_session(
+        &self,
+        request: CreateSessionRequest,
+        browser_handoff: BrowserObservationHandoff,
+        authenticated_session: site_adapter_api::AuthenticatedSessionHandoff,
+    ) -> axum::response::Response {
+        self.state
+            .source_sessions
+            .create_authenticated(
+                self,
+                &self.state.control,
+                &self.state.display_sessions,
+                request,
+                browser_handoff,
+                authenticated_session,
+            )
+            .into_response()
     }
 
     #[cfg(test)]

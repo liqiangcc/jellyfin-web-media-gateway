@@ -128,6 +128,10 @@ pub struct ServerOwnedObservation {
 pub struct ResolveContext<'a> {
     pub browser_observation: Option<&'a BrowserObservation>,
     pub server_observation: Option<&'a ServerOwnedObservation>,
+    /// An optional server-owned authenticated session handoff.  Core only
+    /// transports this opaque proof; the owning Site Plugin decides whether
+    /// the source requires it and how to interpret its generic auth facts.
+    pub authenticated_session: Option<&'a AuthenticatedSessionHandoff>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -259,16 +263,9 @@ fn bounded_auth_ref(value: &str, max: usize) -> bool {
 
 fn contains_auth_secret_marker(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
-    [
-        "cookie",
-        "authorization",
-        "bearer",
-        "password",
-        "sessdata",
-        "token",
-    ]
-    .iter()
-    .any(|marker| lower.contains(marker))
+    ["cookie", "authorization", "bearer", "password", "token"]
+        .iter()
+        .any(|marker| lower.contains(marker))
 }
 
 pub fn validate_browser_observation(observation: &BrowserObservation) -> Result<(), AdapterError> {

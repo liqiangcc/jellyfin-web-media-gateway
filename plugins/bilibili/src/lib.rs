@@ -94,6 +94,7 @@ impl BilibiliAdapter {
             ResolveContext {
                 browser_observation: Some(observation),
                 server_observation: Some(server_observation),
+                authenticated_session: None,
             },
         )
     }
@@ -151,7 +152,14 @@ impl BilibiliAdapter {
         if !interpretation.session_ready {
             return Err(AdapterError::AccessRequired);
         }
-        self.resolve_observation(locator, observation, server_observation)
+        self.resolve_with_context(
+            locator,
+            ResolveContext {
+                browser_observation: Some(observation),
+                server_observation: Some(server_observation),
+                authenticated_session: Some(handoff),
+            },
+        )
     }
 }
 
@@ -238,6 +246,13 @@ impl SiteAdapter for BilibiliAdapter {
         let server_observation = context
             .server_observation
             .ok_or(AdapterError::ObservationRequired)?;
+        if let Some(authenticated_session) = context.authenticated_session {
+            if authenticated_session.site_id() != SITE_ID
+                || authenticated_session.observation().state != BrowserAuthState::CandidateReady
+            {
+                return Err(AdapterError::AccessRequired);
+            }
+        }
         validate_browser_observation(observation)?;
         validate_server_owned_observation(server_observation)?;
         if server_observation.observation_id != observation.observation_id {
