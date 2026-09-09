@@ -71,6 +71,7 @@ function statusClass(status) {
   return `${Math.floor(status / 100)}xx`;
 }
 
+// Process-level failures are published by probe.mjs using the same finite process_termination marker.
 function recordStage(state, event, fields = {}) {
   state.stages?.record(event, { ...diagnosticCounters(state), ...fields });
 }
