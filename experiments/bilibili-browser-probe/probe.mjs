@@ -6,6 +6,9 @@ import { once } from 'node:events';
 import { chromium } from 'playwright-core';
 import { summarizeObservation, rejectSensitiveInput, SCHEMA_VERSION } from '../../plugins/bilibili/experimental_probe.mjs';
 import { runLive } from './live.mjs';
+import { classifyError } from './diagnostic.mjs';
+import { finalizeResult, terminationClass } from './finalizer.mjs';
+import { createStageTracker } from './stage-markers.mjs';
 
 const TIMEOUT_MS = 15_000;
 const MAX_REQUESTS = 200;
@@ -146,17 +149,30 @@ async function runSynthetic() {
   const fixturePort = await listen(fixtures);
   const { server: broker, requests } = brokerServer(fixturePort);
   const brokerPort = await listen(broker);
+  const stages = createStageTracker();
   const profile = `/tmp/bilibili-probe-profile-${process.pid}`;
   let browser;
   try {
-    browser = await chromium.launch({ executablePath: browserPath, headless: true, timeout: TIMEOUT_MS, args: [
-      `--proxy-server=http://127.0.0.1:${brokerPort}`, '--proxy-bypass-list=<-loopback>',
-      '--disable-quic', '--disable-features=WebTransport', '--disable-background-networking',
-      '--no-first-run', '--no-default-browser-check',
-    ] });
+    stages.record('browser_launch_start');
+    try {
+      browser = await chromium.launch({ executablePath: browserPath, headless: true, timeout: TIMEOUT_MS, args: [
+        `--proxy-server=http://127.0.0.1:${brokerPort}`, '--proxy-bypass-list=<-loopback>',
+        '--disable-quic', '--disable-features=WebTransport', '--disable-background-networking',
+        '--no-first-run', '--no-default-browser-check',
+      ] });
+      stages.record('browser_launch_result', { status_class: '2xx', transport_outcome: 'success' });
+    } catch (error) {
+      stages.record('browser_launch_result', { transport_outcome: 'failure' });
+      throw error;
+    }
     const context = await browser.newContext({ serviceWorkers: 'block' });
     const page = await context.newPage();
-    await page.goto('http://fixture.test/page', { waitUntil: 'domcontentloaded', timeout: TIMEOUT_MS });
+    stages.record('navigation_start');
+    const navigationResponse = await page.goto('http://fixture.test/page', { waitUntil: 'domcontentloaded', timeout: TIMEOUT_MS });
+    const navigationStatus = navigationResponse?.status();
+    const navigationClass = Number.isInteger(navigationStatus) ? `${Math.floor(navigationStatus / 100)}xx` : 'unknown';
+    stages.record('navigation_status', { status_class: navigationClass });
+    stages.record('navigation_end', { status_class: navigationClass, transport_outcome: 'success' });
     const raw = await page.evaluate(() => window.__probeObservation);
     const observation = summarizeObservation(raw);
     // Start a second worker from the harness with the handler installed in the
@@ -169,6 +185,8 @@ async function runSynthetic() {
       setTimeout(() => resolve(false), 1000);
     }));
     await page.waitForTimeout(1000);
+    stages.record('broker_request_start', { request_count: requests.length });
+    stages.record('broker_request_result', { status_class: requests.length ? '2xx' : 'unknown', transport_outcome: requests.length ? 'success' : 'unknown' });
     if (requests.length > MAX_REQUESTS) throw new Error('request budget exceeded');
     const denied = requests.filter((item) => !item.allowed);
     if (!requests.some((item) => item.allowed && item.host === 'fixture.test')) throw new Error('broker did not mediate allowed fixture');
@@ -193,7 +211,8 @@ async function runSynthetic() {
     const independent = await fetchIndependent(fixturePort);
     observation.independent_consumer = independent;
     observation.cleanup = { browser_exit: 'complete', temporary_profile: 'removed-by-finalizer' };
-    process.stdout.write(`${JSON.stringify({ schema_version: SCHEMA_VERSION, observation, broker_requests: requests.map(({ host, path, method, allowed, redirected }) => ({ host, path, method, allowed, redirected })) }, null, 2)}\n`);
+    stages.record('finalizer_entry');
+    return { schema_version: SCHEMA_VERSION, observation, broker_requests: requests.map(({ host, path, method, allowed, redirected }) => ({ host, path, method, allowed, redirected })), stage_markers: stages.seal() };
   } finally {
     if (browser) await browser.close().catch(() => {});
     fixtures.close(); broker.close();
@@ -222,10 +241,62 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.mode === 'live') {
     if (process.env.BILIBILI_PROBE_ALLOW_LIVE !== '1') throw new Error('live mode is disabled unless explicitly enabled by the target runbook');
-    await runLive(args);
-    return;
+    return runLive(args);
   }
-  await runSynthetic();
+  return runSynthetic();
 }
 
-main().catch((error) => { process.stderr.write(`probe failed: ${error.message}\n`); process.exitCode = 1; });
+let resultPublished = false;
+const processStages = createStageTracker();
+const writeStdout = process.stdout.write.bind(process.stdout);
+
+function publishResult(result, exitCode = 0) {
+  if (resultPublished) return false;
+  resultPublished = true;
+  const payload = `${JSON.stringify(result, null, 2)}\n`;
+  if (exitCode === 0) {
+    writeStdout(payload);
+    return true;
+  }
+  // A process-level failure may leave browser/broker handles in an
+  // unobservable state. Emit the bounded result, then force a bounded exit so
+  // those handles cannot keep the diagnostic process alive indefinitely.
+  let exited = false;
+  const forceExit = setTimeout(() => {
+    if (!exited) { exited = true; process.exit(exitCode); }
+  }, 2_000);
+  writeStdout(payload, () => {
+    if (exited) return;
+    exited = true;
+    clearTimeout(forceExit);
+    process.exit(exitCode);
+  });
+  return true;
+}
+
+function publishProcessFailure(reason, termination = 'error') {
+  if (resultPublished) return;
+  const error = reason instanceof Error ? reason : undefined;
+  processStages.record('finalizer_entry');
+  // Process-level failures can bypass the promise returned by main(). Keep
+  // their evidence finite and make cleanup uncertainty explicit.
+  const result = finalizeResult({ result: 'failure', termination: terminationClass(error, termination), diagnostic: { ...classifyError(error, 'unknown'), stage_markers: processStages.seal() }, activity: { page_navigation: false }, cleanup: {
+    browser_exit: 'unknown', broker_close: 'unknown', temporary_profile: 'unknown', ephemeral_candidates: 'unknown', dns_pins: 'unknown', staging: 'unknown',
+  } });
+  publishResult(result, 1);
+}
+
+// These handlers cover errors/rejections and observable signals raised after
+// the normal promise path has been lost. They intentionally publish only the
+// same bounded result shape and never copy the process error text.
+process.once('uncaughtException', (error) => publishProcessFailure(error, 'error'));
+process.once('unhandledRejection', (reason) => publishProcessFailure(reason, 'error'));
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, () => publishProcessFailure(undefined, 'signal'));
+}
+
+main().then((result) => {
+  if (result) publishResult(result);
+}, (error) => {
+  publishProcessFailure(error, terminationClass(error));
+});
