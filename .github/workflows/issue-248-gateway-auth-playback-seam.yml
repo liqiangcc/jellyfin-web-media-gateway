@@ -62,7 +62,7 @@ jobs:
       - name: Architecture and secret-boundary guards
         shell: bash --noprofile --norc -euo pipefail {0}
         run: |
-          bash scripts/check-core-site-boundary.sh
+          bash scripts/check-core-site-boundary.sh --self-test
           if git grep -n -i -E 'bilibili|sessdata|BV[0-9A-Za-z]{10,}' -- gateway-core/src; then
             echo 'concrete site knowledge leaked into Gateway Core' >&2
             exit 1
