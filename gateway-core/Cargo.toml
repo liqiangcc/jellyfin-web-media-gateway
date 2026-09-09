@@ -8,6 +8,7 @@ publish = false
 
 [features]
 control-ui-harness = []
+test-support = []
 
 [[bin]]
 name = "r001-server"

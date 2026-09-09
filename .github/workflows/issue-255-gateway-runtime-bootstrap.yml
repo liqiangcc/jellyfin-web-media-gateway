@@ -1,0 +1,145 @@
+name: issue-255-gateway-runtime-bootstrap
+
+on:
+  push:
+    branches:
+      - "worker/issue-255-gateway-runtime"
+  pull_request:
+    paths:
+      - "gateway-runtime/**"
+      - "gateway-core/**"
+      - "plugins/bilibili/**"
+      - "plugins/generic-direct/**"
+      - "plugins/generic-ytdlp/**"
+      - "site-adapter-api/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/issue-255-gateway-runtime-bootstrap.yml"
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: "Exact candidate commit to verify"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: issue-255-gateway-runtime-bootstrap-${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+
+jobs:
+  j1-hosted-x64:
+    name: J1 hosted x64 fmt clippy tests and guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: '[[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]'
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: Assert exact candidate SHA and hosted x64
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(uname -m)" = x86_64
+          rustc -vV | grep -q 'host: x86_64-unknown-linux-gnu'
+      - name: Format check
+        run: cargo fmt --all -- --check
+      - name: Clippy check
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Workspace and runtime tests
+        run: cargo test --workspace --all-targets -- --test-threads=1
+      - name: Architecture and secret-boundary guards
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          bash scripts/check-core-site-boundary.sh --self-test
+          if git grep -n -i -E 'GATEWAY_[A-Z0-9_]*(COOKIE|AUTHORIZATION|PASSWORD|TOKEN|SECRET|PROFILE)' -- gateway-runtime; then
+            echo 'runtime source contains an unbounded Secret configuration path' >&2
+            exit 1
+          fi
+
+  j2-build-package:
+    name: J2 exact-Candidate hosted x64 build and package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: '[[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]'
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Assert exact candidate SHA and hosted x64
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(uname -m)" = x86_64
+      - name: Build production runtime
+        run: cargo build --locked --release -p gateway-runtime --bin gateway-server
+      - name: Create bounded artifact manifest
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          package_dir="$RUNNER_TEMP/gateway-runtime-package"
+          mkdir -p "$package_dir"
+          cp target/release/gateway-server "$package_dir/gateway-server"
+          chmod 0555 "$package_dir/gateway-server"
+          (cd "$package_dir" && sha256sum gateway-server > gateway-server.sha256)
+          {
+            echo "candidate_sha=$CANDIDATE_SHA"
+            echo "git_head=$(git rev-parse HEAD)"
+            echo "runner_arch=$(uname -m)"
+            echo "artifact=gateway-server"
+            cat "$package_dir/gateway-server.sha256"
+          } > "$package_dir/manifest.txt"
+          tar -C "$package_dir" -czf "$RUNNER_TEMP/gateway-server-x86_64.tar.gz" gateway-server gateway-server.sha256 manifest.txt
+          cat "$package_dir/manifest.txt"
+      - name: Upload exact-Candidate package
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-255-gateway-server-x86_64-${{ env.CANDIDATE_SHA }}
+          path: |
+            ${{ runner.temp }}/gateway-server-x86_64.tar.gz
+            ${{ runner.temp }}/gateway-runtime-package/manifest.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  j3-artifact-consumer:
+    name: J3 exact-Candidate artifact consumer
+    needs: j2-build-package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: '[[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]'
+      - uses: actions/download-artifact@v4
+        with:
+          name: issue-255-gateway-server-x86_64-${{ env.CANDIDATE_SHA }}
+          path: artifact
+      - name: Verify bounded package provenance and digest
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test -f artifact/manifest.txt
+          grep -Fx "candidate_sha=$CANDIDATE_SHA" artifact/manifest.txt
+          test "$(awk -F= '$1 == "git_head" {print $2}' artifact/manifest.txt)" = "$CANDIDATE_SHA"
+          mkdir -p artifact/extracted
+          tar -xzf artifact/gateway-server-x86_64.tar.gz -C artifact/extracted
+          test -x artifact/extracted/gateway-server
+          sha256sum --check artifact/extracted/gateway-server.sha256
+          grep -Fx "candidate_sha=$CANDIDATE_SHA" artifact/extracted/manifest.txt
