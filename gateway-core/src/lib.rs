@@ -25,6 +25,7 @@ use url::Url;
 use uuid::Uuid;
 
 pub mod auth;
+mod auth_route;
 pub mod browser;
 pub mod browser_auth;
 pub mod browser_chromium;
@@ -235,6 +236,7 @@ struct GatewayState {
     control: ControlService,
     display_sessions: DisplaySessionService,
     source_sessions: source_session::SourceSessionService,
+    auth_routes: auth_route::AuthRouteCoordinator,
 }
 
 #[derive(Clone)]
@@ -487,6 +489,7 @@ impl GatewayService {
                 control: ControlService::default(),
                 display_sessions: DisplaySessionService::default(),
                 source_sessions: source_session::SourceSessionService::new(registry),
+                auth_routes: auth_route::AuthRouteCoordinator::new(SessionVault::default()),
             }),
         }
     }
@@ -657,6 +660,50 @@ impl GatewayService {
             .expect("subtitle fixture path poisoned") = path;
     }
 
+    /// Register a server-owned source-site account for the authenticated
+    /// Browser Worker route. HTTP callers can only name an existing account;
+    /// they cannot create accounts or provide Vault material.
+    pub fn configure_auth_account(
+        &self,
+        site_id: impl Into<String>,
+        account_ref: impl Into<String>,
+        label: impl Into<String>,
+    ) -> Result<(), VaultError> {
+        self.state
+            .auth_routes
+            .register_account(site_id, account_ref, label)
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn with_fake_auth_routes(
+        max_capabilities: usize,
+        registry: Arc<SiteAdapterRegistry>,
+    ) -> Self {
+        let vault = SessionVault::default();
+        Self {
+            state: Arc::new(GatewayState {
+                store: Arc::new(CapabilityStore::new(max_capabilities)),
+                egress_policy: Arc::new(RwLock::new(EgressPolicy::default())),
+                http_authorities: Arc::new(RwLock::new(HttpAuthorityPolicy::default())),
+                active_streams: Arc::new(AtomicUsize::new(0)),
+                proof_paths: Arc::new(RwLock::new(ProofPaths {
+                    chain:
+                        "SiteAdapterRegistry -> BrowserAuthRuntime -> SourceSession -> WebDisplay"
+                            .into(),
+                    ..ProofPaths::default()
+                })),
+                fixture_mp4: Arc::new(RwLock::new(None)),
+                fixture_vtt: Arc::new(RwLock::new(None)),
+                probe: Arc::new(ProbeStore::default()),
+                control: ControlService::default(),
+                display_sessions: DisplaySessionService::default(),
+                source_sessions: source_session::SourceSessionService::new(registry),
+                auth_routes: auth_route::AuthRouteCoordinator::fake_for_tests(vault),
+            }),
+        }
+    }
+
     pub fn active_streams(&self) -> usize {
         self.state.active_streams.load(Ordering::SeqCst)
     }
@@ -697,17 +744,28 @@ impl GatewayService {
         browser_handoff: BrowserObservationHandoff,
         authenticated_session: site_adapter_api::AuthenticatedSessionHandoff,
     ) -> axum::response::Response {
-        self.state
-            .source_sessions
-            .create_authenticated(
-                self,
-                &self.state.control,
-                &self.state.display_sessions,
-                request,
-                browser_handoff,
-                authenticated_session,
-            )
-            .into_response()
+        self.create_authenticated_playback_session_outcome(
+            request,
+            browser_handoff,
+            authenticated_session,
+        )
+        .into_response()
+    }
+
+    pub(crate) fn create_authenticated_playback_session_outcome(
+        &self,
+        request: CreateSessionRequest,
+        browser_handoff: BrowserObservationHandoff,
+        authenticated_session: site_adapter_api::AuthenticatedSessionHandoff,
+    ) -> source_session::CreationOutcome {
+        self.state.source_sessions.create_authenticated(
+            self,
+            &self.state.control,
+            &self.state.display_sessions,
+            request,
+            browser_handoff,
+            authenticated_session,
+        )
     }
 
     #[cfg(test)]
@@ -758,6 +816,31 @@ impl GatewayService {
                 get(control_session_snapshot_handler),
             )
             .route("/api/v1/sessions", post(create_session_handler))
+            .route("/api/v1/auth/attempts", post(auth_route::start_handler))
+            .route(
+                "/api/v1/auth/attempts/{attempt_id}/events",
+                get(auth_route::events_handler),
+            )
+            .route(
+                "/api/v1/auth/attempts/{attempt_id}/navigation",
+                post(auth_route::navigation_handler),
+            )
+            .route(
+                "/api/v1/auth/attempts/{attempt_id}/input",
+                post(auth_route::input_handler),
+            )
+            .route(
+                "/api/v1/auth/attempts/{attempt_id}/cancel",
+                post(auth_route::cancel_handler),
+            )
+            .route(
+                "/api/v1/auth/attempts/{attempt_id}/candidate",
+                post(auth_route::candidate_handler),
+            )
+            .route(
+                "/api/v1/auth/attempts/{attempt_id}/playback",
+                post(auth_route::playback_handler),
+            )
             .route(
                 "/api/v1/sessions/{session_id}/commands",
                 post(control_session_command_handler),
