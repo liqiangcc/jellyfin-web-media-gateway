@@ -142,5 +142,7 @@ jobs:
           mkdir -p artifact/extracted
           tar -xzf artifact/gateway-server-x86_64.tar.gz -C artifact/extracted
           test -x artifact/extracted/gateway-server
-          (cd artifact/extracted && sha256sum --check gateway-server.sha256)
+          expected_digest="$(awk '{print $1}' artifact/extracted/gateway-server.sha256)"
+          actual_digest="$(sha256sum artifact/extracted/gateway-server | awk '{print $1}')"
+          test "$actual_digest" = "$expected_digest"
           grep -Fx "candidate_sha=$CANDIDATE_SHA" artifact/extracted/manifest.txt
