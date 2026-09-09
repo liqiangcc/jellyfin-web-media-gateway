@@ -9,7 +9,7 @@ Expected Worker: cloud-codex
 Expected environment: env:cloud
 Downstream handoff profile: docs/tasks/handoffs/cloud.md
 Requested model: gpt-5.6-luna, reasoning high
-Fast availability: record actual availability; originating runtime unavailable
+Fast mode: disabled by user; do not enable or select Fast
 ```
 
 Before any action, read `AGENTS.md`, live Issue #195 and all comments, the Task Contract above, `docs/tasks/README.md`, `docs/tasks/issue-lifecycle-protocol.md`, `docs/tasks/execution-anchor-recovery-protocol.md`, `docs/tasks/freshness-integration-protocol.md`, all canonical documents required by `AGENTS.md`, and the complete relevant histories of #193, #188 and #191 plus #157/#166/#182/#185.
