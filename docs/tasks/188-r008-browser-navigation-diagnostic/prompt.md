@@ -1,6 +1,6 @@
 # Session Bootstrap — R008 browser navigation fast path
 
-Routing: use gpt-5.6-luna with high reasoning. Fast is disabled by the user; do not enable or select Fast.
+Routing: use gpt-5.6-luna with high reasoning. Fast is enabled by the user and may be selected.
 
 You are executing `liqiangcc/jellyfin-web-media-gateway` Issue #188.
 
@@ -15,16 +15,16 @@ Confirm #188 is `status:ready`, `env:cloud`, and owner-free, then claim a new At
 Reuse the already accepted implementation/artifact unless real target evidence requires a focused correction:
 
 ```text
-Candidate: c8ff3f9e1b5f468e2b68d3f274da82eba0b9a76f
-PR: #209
-Hosted run: 34302593582
-Artifact: 10085488784
-Artifact size: 4,215,814 bytes
-Digest: sha256:9a074b534a4067e307d1e0108dfa66f6f296e6baeaf52e096ab8b01ee6957cb6
+Candidate: 8246c9f79db64b36b00c0b9a938569b28c55bc29
+PR: #213
+Hosted run: 34305340293
+Artifact: 10086463816
+Artifact size: 4,215,888 bytes
+Digest: sha256:3bed203c49a1d5edf815633e390147236cb814083ead242bd049077c87af1bde
 Selector: bilibili:BV14V411W7r5:part-2
 ```
 
-The implementation anchor includes accepted Issue #199 stage markers, Issue #203 post-navigation lifecycle classification, and Issue #207 finite navigation-rejection classification (PR #209 merged to `main` at `c3bfad69565423e4cae82b47143344e10bd89f19`). It records only finite navigation-promise, allowlisted rejection, page/browser lifecycle, process termination and finalizer markers; no target evidence is reused.
+The implementation anchor includes accepted Issue #199 stage markers, Issue #203 post-navigation lifecycle classification, Issue #207 finite navigation-rejection classification, and Issue #211 transport/failure-precedence correction (PR #213 merged to `main` at `06dc9b63f05a8c4c9e316d277c627549a4119c03`). It records only finite navigation-promise, allowlisted rejection, page/browser lifecycle, process termination and finalizer markers; no target evidence is reused.
 
 ## Target rule
 
