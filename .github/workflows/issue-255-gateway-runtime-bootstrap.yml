@@ -136,11 +136,16 @@ jobs:
       - name: Verify bounded package provenance and digest
         shell: bash --noprofile --norc -euo pipefail {0}
         run: |
-          test -f artifact/manifest.txt
-          grep -Fx "candidate_sha=$CANDIDATE_SHA" artifact/manifest.txt
-          test "$(awk -F= '$1 == "git_head" {print $2}' artifact/manifest.txt)" = "$CANDIDATE_SHA"
+          mapfile -t manifests < <(find artifact -type f -name manifest.txt -print)
+          test "${#manifests[@]}" -eq 1
+          manifest_path="${manifests[0]}"
+          mapfile -t packages < <(find artifact -type f -name gateway-server-x86_64.tar.gz -print)
+          test "${#packages[@]}" -eq 1
+          package_path="${packages[0]}"
+          grep -Fx "candidate_sha=$CANDIDATE_SHA" "$manifest_path"
+          test "$(awk -F= '$1 == "git_head" {print $2}' "$manifest_path")" = "$CANDIDATE_SHA"
           mkdir -p artifact/extracted
-          tar -xzf artifact/gateway-server-x86_64.tar.gz -C artifact/extracted
+          tar -xzf "$package_path" -C artifact/extracted
           test -x artifact/extracted/gateway-server
           expected_digest="$(awk '{print $1}' artifact/extracted/gateway-server.sha256)"
           actual_digest="$(sha256sum artifact/extracted/gateway-server | awk '{print $1}')"
