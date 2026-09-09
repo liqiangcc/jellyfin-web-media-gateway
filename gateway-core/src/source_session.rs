@@ -855,7 +855,6 @@ mod tests {
             observation_id: "source-session-observation".into(),
             page_url: "https://example.test/fixture".into(),
             page_title: "Source Session Observation Fixture".into(),
-            part_match: true,
             event_count: 2,
             resource_count: 1,
             candidates: vec![BrowserMediaCandidate {

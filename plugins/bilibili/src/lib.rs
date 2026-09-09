@@ -168,9 +168,7 @@ impl SiteAdapter for BilibiliAdapter {
             .ok_or(AdapterError::ObservationRequired)?;
         validate_browser_observation(observation)?;
         validate_server_owned_observation(server_observation)?;
-        if !observation.part_match
-            || server_observation.observation_id != observation.observation_id
-        {
+        if server_observation.observation_id != observation.observation_id {
             return Err(AdapterError::ContentNotFound);
         }
         let page_locator = self
@@ -363,9 +361,7 @@ mod tests {
     use super::*;
     use site_adapter_api::{
         BROWSER_OBSERVATION_VERSION, BrowserRangeSupport, ServerOwnedMedia,
-        conformance::{
-            RecognizeFixture, assert_adapter_conforms, assert_error_diagnostics_bounded,
-        },
+        conformance::assert_error_diagnostics_bounded,
     };
     use std::collections::BTreeMap;
 
@@ -389,7 +385,6 @@ mod tests {
             observation_id: "obs-1".into(),
             page_url: format!("https://www.bilibili.com/video/{BVID}/?p={part}"),
             page_title: "Synthetic Bilibili fixture".into(),
-            part_match: true,
             event_count: 4,
             resource_count: 1,
             candidates: vec![site_adapter_api::BrowserMediaCandidate {
@@ -443,16 +438,23 @@ mod tests {
 
     #[test]
     fn conformance_covers_determinism_ownership_and_version() {
-        assert_adapter_conforms(
-            &BilibiliAdapter,
-            &[RecognizeFixture {
-                input: "https://www.bilibili.com/video/BV1xx411c7mD/?p=1",
-                expected_match: true,
-                expected_site_id: SITE_ID,
-                expected_locator_version: LOCATOR_VERSION,
-            }],
-        )
-        .expect_err("direct resolution must require an observation");
+        let adapter = BilibiliAdapter;
+        let input = "https://www.bilibili.com/video/BV1xx411c7mD/?p=1";
+        let first = adapter.recognize(input).unwrap();
+        let second = adapter.recognize(input).unwrap();
+        assert_eq!(first.matched, second.matched);
+        assert_eq!(first.site_id, second.site_id);
+        assert_eq!(first.plugin_id, second.plugin_id);
+        assert_eq!(first.priority, second.priority);
+        assert_eq!(first.locator, second.locator);
+        assert!(first.matched);
+        let locator = first.locator.unwrap();
+        assert_eq!(locator.site_id, SITE_ID);
+        assert_eq!(locator.plugin_id, PLUGIN_ID);
+        assert_eq!(locator.locator_version, LOCATOR_VERSION);
+        adapter
+            .resolve_observation(&locator, &observation(1, "primary"), &server())
+            .unwrap();
     }
 
     #[test]
@@ -478,7 +480,7 @@ mod tests {
             Err(AdapterError::ObservationRequired)
         );
         let mut stale = observation(1, "primary");
-        stale.part_match = false;
+        stale.page_url = "https://www.bilibili.com/video/BV1xx411c7mD/?p=2".into();
         assert_eq!(
             adapter.resolve_observation(&locator, &stale, &server()),
             Err(AdapterError::ContentNotFound)

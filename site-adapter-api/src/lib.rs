@@ -79,7 +79,6 @@ pub struct BrowserObservation {
     pub observation_id: String,
     pub page_url: String,
     pub page_title: String,
-    pub part_match: bool,
     pub event_count: u16,
     pub resource_count: u16,
     pub candidates: Vec<BrowserMediaCandidate>,
