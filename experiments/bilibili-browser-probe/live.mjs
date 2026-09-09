@@ -8,7 +8,6 @@ import dns from 'node:dns/promises';
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
-import tls from 'node:tls';
 import { Transform } from 'node:stream';
 import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { once } from 'node:events';
@@ -141,7 +140,10 @@ async function publicAddressFor(host, pins) {
 export function brokerServer(state, overrides = {}) {
   const resolveAddress = overrides.resolveAddress || publicAddressFor;
   const makeRequest = overrides.request || https.request;
-  const makeConnect = overrides.connect || tls.connect;
+  // CONNECT is an end-to-end browser TLS tunnel. The broker pins the TCP
+  // destination, but must not terminate TLS and then forward the browser's
+  // TLS bytes into a second TLS wrapper.
+  const makeConnect = overrides.connect || net.connect;
   const onTunnelClosed = overrides.onTunnelClosed || (() => {});
   const server = http.createServer(async (req, res) => {
     recordStage(state, 'broker_request_start');
@@ -225,11 +227,33 @@ export function brokerServer(state, overrides = {}) {
       recordStage(state, 'broker_request_result', { status_class: '4xx', transport_stage: 'resolve_policy', transport_outcome: 'failure' });
       client.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return;
     }
-    const upstream = makeConnect({ host: address, port, servername: host, rejectUnauthorized: true });
-    upstream.once('secureConnect', () => {
+    const upstream = makeConnect({ host: address, port });
+    let connected = false;
+    let connectTimer;
+    const connectTimeout = Number.isSafeInteger(state.connectTimeout) && state.connectTimeout > 0 ? state.connectTimeout : 15000;
+    const failBeforeConnect = (error) => {
+      if (connected || state.transportFinalized) return;
+      if (connectTimer) clearTimeout(connectTimer);
+      recordFailure(state, error, 'broker_connect', undefined, 'tcp_connect');
+      recordStage(state, 'broker_request_result', { transport_stage: 'tcp_connect', transport_outcome: 'failure' });
+      recordStage(state, 'transport_outcome', { transport_stage: 'tcp_connect', transport_outcome: 'failure' });
+      upstream.destroy();
+      client.destroy();
+    };
+    connectTimer = setTimeout(() => {
+      recordUpstreamStage(state, 'upstream_timeout', 'timeout', 'timeout');
+      failBeforeConnect({ code: 'ETIMEDOUT' });
+    }, connectTimeout);
+    connectTimer.unref?.();
+    upstream.once('connect', () => {
+      connected = true;
+      clearTimeout(connectTimer);
       client.write('HTTP/1.1 200 Connection Established\r\nProxy-agent: bounded-bilibili-probe\r\n\r\n');
       recordStage(state, 'broker_request_result', { status_class: '2xx', transport_stage: 'proxy_response', transport_outcome: 'success' });
-      recordStage(state, 'transport_outcome', { status_class: '2xx', transport_stage: 'tls_handshake', transport_outcome: 'success' });
+      // Only the browser sees the origin TLS handshake. The broker has
+      // observed a policy-approved TCP connection and CONNECT response, not
+      // a TLS handshake, so do not publish a broker TLS success marker.
+      recordStage(state, 'transport_outcome', { status_class: '2xx', transport_stage: 'tcp_connect', transport_outcome: 'success' });
       recordTransportSuccess(state, 'proxy_response', 200);
       if (head?.length) upstream.write(head);
       let closed = false;
@@ -280,7 +304,14 @@ export function brokerServer(state, overrides = {}) {
       client.pipe(upstream);
       upstream.pipe(counted).pipe(client);
     });
-    upstream.on('error', (error) => { recordFailure(state, error, 'broker_connect'); recordStage(state, 'broker_request_result', { transport_outcome: 'failure' }); recordStage(state, 'transport_outcome', { transport_stage: 'tcp_connect', transport_outcome: 'failure' }); client.destroy(); });
+    upstream.on('error', (error) => {
+      if (!connected) { failBeforeConnect(error); return; }
+      recordUpstreamStage(state, 'upstream_error', 'error', classifyUpstreamError(error, 'unknown'));
+      recordFailure(state, error, 'broker_connect');
+      recordStage(state, 'broker_request_result', { transport_outcome: 'failure' });
+      recordStage(state, 'transport_outcome', { transport_stage: 'downstream_close', transport_outcome: 'failure' });
+      client.destroy();
+    });
     client.on('error', () => upstream.destroy());
   });
   server.on('upgrade', (req, socket) => {

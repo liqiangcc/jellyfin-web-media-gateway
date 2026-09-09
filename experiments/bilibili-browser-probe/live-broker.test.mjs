@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
-import { PassThrough, Readable } from 'node:stream';
+import { Duplex, PassThrough, Readable } from 'node:stream';
 import { once } from 'node:events';
 import {
   brokerServer, consumeResponseBody, createDisposableProfile, removeDisposableProfile, LIVE_BROWSER_ARGS,
@@ -107,7 +107,7 @@ test('CONNECT uses the same broker byte budget and denies private DNS', async (t
     connect: () => {
       upstream = new PassThrough();
       setImmediate(() => {
-        upstream.emit('secureConnect');
+        upstream.emit('connect');
         setImmediate(() => { upstream.push(Buffer.alloc(32, 7)); upstream.push(null); });
       });
       return upstream;
@@ -161,7 +161,7 @@ test('late upstream errors cannot replace a finalized successful CONNECT outcome
     resolveAddress: async () => '127.0.0.1',
     connect: () => {
       upstream = new PassThrough();
-      setImmediate(() => upstream.emit('secureConnect'));
+      setImmediate(() => upstream.emit('connect'));
       return upstream;
     },
   });
@@ -176,6 +176,81 @@ test('late upstream errors cannot replace a finalized successful CONNECT outcome
   assert.equal(state.failure, undefined);
   assert.equal(state.transport.transport_outcome, 'success');
   client.destroy();
+});
+
+test('CONNECT forwards browser TLS bytes over policy-pinned TCP without a broker TLS wrapper', async (t) => {
+  const state = { requests: 0, responseBytes: 0, denied: [], pins: new Map(), connectTimeout: 1000 };
+  let upstream;
+  const browserBytes = Buffer.from([0x16, 0x03, 0x03, 0xde, 0xad, 0xbe, 0xef]);
+  const upstreamBytes = Buffer.from('upstream-bytes');
+  const received = [];
+  let connectOptions;
+  const broker = brokerServer(state, {
+    resolveAddress: async () => '198.51.100.10',
+    connect: (options) => {
+      connectOptions = options;
+      const writes = [];
+      upstream = new Duplex({
+        read() {},
+        write(chunk, encoding, callback) { writes.push(Buffer.from(chunk, encoding)); callback(); },
+      });
+      upstream.writes = writes;
+      setImmediate(() => upstream.emit('connect'));
+      return upstream;
+    },
+  });
+  const port = await listen(broker);
+  t.after(() => { broker.closeAllConnections?.(); return broker.close(); });
+  const client = net.connect(port, '127.0.0.1');
+  client.on('data', (chunk) => received.push(Buffer.from(chunk)));
+  await once(client, 'connect');
+  client.write('CONNECT www.bilibili.com:443 HTTP/1.1\r\nHost: www.bilibili.com:443\r\n\r\n');
+  await waitForEvent(client, 'data', 'connect response');
+  client.write(browserBytes);
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('upstream byte forwarding timeout')), 1000);
+    const check = () => {
+      if (upstream?.writes?.some((chunk) => chunk.equals(browserBytes))) { clearTimeout(timer); resolve(); return; }
+      setImmediate(check);
+    };
+    check();
+  });
+  upstream.push(upstreamBytes);
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('downstream byte forwarding timeout')), 1000);
+    const check = () => {
+      if (Buffer.concat(received).includes(upstreamBytes)) { clearTimeout(timer); resolve(); return; }
+      setImmediate(check);
+    };
+    check();
+  });
+  assert.ok(upstream.writes.some((chunk) => chunk.equals(browserBytes)));
+  assert.ok(Buffer.concat(received).includes(upstreamBytes));
+  assert.deepEqual(connectOptions, { host: '198.51.100.10', port: 443 });
+  assert.equal(state.failure, undefined);
+  client.destroy();
+});
+
+test('CONNECT timeout fails before handshake and cleans the pending TCP attempt', async (t) => {
+  const state = { requests: 0, responseBytes: 0, denied: [], pins: new Map(), connectTimeout: 20 };
+  let upstream;
+  const broker = brokerServer(state, {
+    resolveAddress: async () => '198.51.100.10',
+    connect: () => {
+      upstream = new PassThrough();
+      return upstream;
+    },
+  });
+  const port = await listen(broker);
+  t.after(() => { broker.closeAllConnections?.(); return broker.close(); });
+  const client = net.connect(port, '127.0.0.1');
+  await once(client, 'connect');
+  client.write('CONNECT www.bilibili.com:443 HTTP/1.1\r\nHost: www.bilibili.com:443\r\n\r\n');
+  await waitForEvent(client, 'close', 'pending CONNECT cleanup');
+  assert.equal(state.failure.reason, 'connection_timeout');
+  assert.equal(state.failure.transport_stage, 'tcp_connect');
+  assert.equal(state.failure.transport_outcome, 'failure');
+  assert.equal(upstream.destroyed, true);
 });
 
 test('transport success admits only an explicitly settled navigation failure', () => {
