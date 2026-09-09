@@ -334,11 +334,23 @@ impl<W: BrowserWorker> BrowserAuthAttempt<W> {
         if observation.state != BrowserAuthState::CandidateReady {
             return Err(BrowserAuthRuntimeError::InvalidCandidate);
         }
-        if let Some(previous) = self.candidate_capture.as_ref() {
-            if previous.request_id == request_id && previous.observation == observation {
-                return Ok(previous.candidate.clone());
+        if let Some((previous_request_id, previous_observation, previous_candidate)) =
+            self.candidate_capture.as_ref().map(|previous| {
+                (
+                    previous.request_id.clone(),
+                    previous.observation,
+                    previous.candidate.clone(),
+                )
+            })
+        {
+            if !self.vault.has_session(&previous_candidate) {
+                self.candidate_capture = None;
+            } else {
+                if previous_request_id == request_id && previous_observation == observation {
+                    return Ok(previous_candidate);
+                }
+                return Err(BrowserAuthRuntimeError::CandidateCaptureRequestMismatch);
             }
-            return Err(BrowserAuthRuntimeError::CandidateCaptureRequestMismatch);
         }
         if self.committed_candidate.is_some() {
             return Err(BrowserAuthRuntimeError::CandidateCaptureAlreadyConsumed);
@@ -438,6 +450,7 @@ impl<W: BrowserWorker> BrowserAuthAttempt<W> {
         self.vault
             .validate_and_swap(&candidate, CandidateValidation::Valid)
             .map_err(|error| {
+                self.reject_candidate_if_present(&candidate);
                 self.emit(
                     BrowserAuthState::CandidateReady,
                     BrowserAuthDiagnostic::CandidateRejected,
@@ -468,9 +481,7 @@ impl<W: BrowserWorker> BrowserAuthAttempt<W> {
         if candidate.site_id() != self.site_id || candidate.account_ref() != self.account_ref {
             return Err(BrowserAuthRuntimeError::InvalidCandidate);
         }
-        let _ = self
-            .vault
-            .validate_and_swap(candidate, CandidateValidation::Invalid);
+        self.reject_candidate_if_present(candidate);
         self.emit(
             BrowserAuthState::CandidateReady,
             BrowserAuthDiagnostic::CandidateRejected,
