@@ -54,7 +54,8 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           test "$(uname -m)" = x86_64
-          rustc -vV | grep -q 'host: x86_64-unknown-linux-gnu'
+          rustc_info="$(rustc -vV)"
+          [[ "$rustc_info" == *'host: x86_64-unknown-linux-gnu'* ]]
       - name: Format check
         run: cargo fmt --all -- --check
       - name: Clippy check
