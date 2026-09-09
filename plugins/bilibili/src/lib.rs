@@ -119,10 +119,13 @@ impl SiteAdapter for BilibiliAdapter {
         {
             return Ok(unmatched());
         }
-        let segments: Vec<_> = url
+        let mut segments: Vec<_> = url
             .path_segments()
             .map(|segments| segments.collect())
             .unwrap_or_default();
+        if segments.last() == Some(&"") {
+            segments.pop();
+        }
         if segments.len() != 2 || segments[0] != "video" || !is_bvid(segments[1]) {
             return Ok(unmatched());
         }
