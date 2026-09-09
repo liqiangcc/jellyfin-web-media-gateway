@@ -1071,6 +1071,33 @@ impl BrowserWorker for ChromiumBrowserWorker {
         Box::pin(async { Err(BrowserError::ProfileAttachFailed) })
     }
 
+    fn attach_profile_with_materializer(
+        &self,
+        session: &BrowserSessionId,
+        profile: crate::browser::ProfileAttachmentRef,
+        materializer: Arc<dyn crate::browser::ProfileMaterializer>,
+    ) -> BrowserFuture<'_, ()> {
+        let session = session.clone();
+        Box::pin(async move {
+            let handle = self.session_handle(&session)?;
+            let profile_dir = {
+                let mut state = handle.lock().await;
+                Self::session_error(&mut state)?;
+                state.profile_dir.clone()
+            };
+
+            // The destination belongs to this already-fresh, mode-700 worker
+            // profile. The Vault consumes the opaque capability exactly once;
+            // this worker never receives a Vault path or raw capability data.
+            materializer.materialize(&profile, &profile_dir)?;
+
+            let mut state = handle.lock().await;
+            Self::session_error(&mut state)?;
+            Self::push_event(&mut state, BrowserEventKind::ProfileAttached);
+            Ok(())
+        })
+    }
+
     fn detach_profile(&self, session: &BrowserSessionId) -> BrowserFuture<'_, ()> {
         let session = session.clone();
         Box::pin(async move {

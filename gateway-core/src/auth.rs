@@ -7,7 +7,7 @@
 //! capabilities.  In particular, `SiteAccessCapability` never contains the
 //! `SecretMaterial` stored here.
 
-use crate::browser::ProfileAttachmentRef;
+use crate::browser::{BrowserError, ProfileAttachmentRef, ProfileMaterializer};
 use crate::security::{
     EgressPolicy, EgressPolicyError, EgressScope, SiteAccessCapability, SiteAccessError,
     is_secret_header,
@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 use site_adapter_api::SourceLocator;
 use std::collections::HashMap;
 use std::fmt;
+use std::fs;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
@@ -170,7 +172,12 @@ pub enum VaultError {
     CandidateCancelled,
     SessionNotActive,
     EmptySecretMaterial,
+    ProfileUnavailable,
+    ProfileAttachmentNotFound,
+    ProfileAttachmentExpired,
 }
+
+const PROFILE_ATTACHMENT_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CandidateValidation {
@@ -201,12 +208,18 @@ struct VaultInner {
     accounts: HashMap<(String, String), SiteAccount>,
     sessions: HashMap<String, StoredSession>,
     active_account_by_site: HashMap<String, String>,
+    profile_attachments: HashMap<String, ProfileAttachmentRecord>,
 }
 
 struct StoredSession {
     reference: SiteSessionRef,
     material: SecretMaterial,
     candidate: bool,
+}
+
+struct ProfileAttachmentRecord {
+    session: SiteSessionRef,
+    expires_at: std::time::Instant,
 }
 
 impl Default for SessionVault {
@@ -475,6 +488,93 @@ impl SessionVault {
         &self,
         session: &SiteSessionRef,
     ) -> Result<ProfileAttachmentRef, VaultError> {
+        let mut inner = self.inner.lock().expect("session vault poisoned");
+        inner
+            .profile_attachments
+            .retain(|_, record| record.expires_at > std::time::Instant::now());
+        let reference = inner
+            .sessions
+            .get(session.session_id())
+            .filter(|stored| !stored.candidate && stored.reference == *session)
+            .map(|stored| stored.reference.clone())
+            .ok_or(VaultError::SessionNotActive)?;
+        let account = inner
+            .accounts
+            .get(&(reference.site_id.clone(), reference.account_ref.clone()))
+            .ok_or(VaultError::AccountNotFound)?;
+        if account.active_session.as_ref() != Some(&reference)
+            || account.state != AccountState::Valid
+        {
+            return Err(VaultError::SessionNotActive);
+        }
+        if inner
+            .sessions
+            .get(reference.session_id())
+            .and_then(|stored| stored.material.browser_profile.as_ref())
+            .is_none()
+        {
+            return Err(VaultError::ProfileUnavailable);
+        }
+        let token = Uuid::new_v4().simple().to_string();
+        inner.profile_attachments.insert(
+            token.clone(),
+            ProfileAttachmentRecord {
+                session: reference,
+                expires_at: std::time::Instant::now() + PROFILE_ATTACHMENT_TTL,
+            },
+        );
+        Ok(ProfileAttachmentRef::from_vault_issued(token))
+    }
+
+    pub(crate) fn profile_materializer(&self) -> Arc<dyn ProfileMaterializer> {
+        Arc::new(VaultProfileMaterializer {
+            vault: self.clone(),
+        })
+    }
+
+    fn materialize_profile(
+        &self,
+        attachment: &ProfileAttachmentRef,
+        destination: &Path,
+    ) -> Result<(), BrowserError> {
+        let mut inner = self.inner.lock().expect("session vault poisoned");
+        let record = inner
+            .profile_attachments
+            .remove(attachment.token())
+            .ok_or(BrowserError::ProfileAttachFailed)?;
+        if record.expires_at <= std::time::Instant::now() {
+            return Err(BrowserError::SessionExpired);
+        }
+        let stored = inner
+            .sessions
+            .get(record.session.session_id())
+            .filter(|stored| !stored.candidate && stored.reference == record.session)
+            .ok_or(BrowserError::ProfileAttachFailed)?;
+        let profile = stored
+            .material
+            .browser_profile
+            .as_ref()
+            .ok_or(BrowserError::ProfileAttachFailed)?;
+        fs::create_dir_all(destination).map_err(|_| BrowserError::ProfileAttachFailed)?;
+        let profile_file = destination.join("VaultProfileState");
+        fs::write(&profile_file, profile).map_err(|_| BrowserError::ProfileAttachFailed)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&profile_file, fs::Permissions::from_mode(0o600))
+                .map_err(|_| BrowserError::ProfileAttachFailed)?;
+        }
+        Ok(())
+    }
+
+    /// Issue a capability only for a currently active server-owned session.
+    /// Callers receive metadata-only scope; raw material remains in the Vault.
+    pub fn issue_site_access_capability(
+        &self,
+        session: &SiteSessionRef,
+        allowed_hosts: impl IntoIterator<Item = String>,
+        ttl: Duration,
+    ) -> Result<SiteAccessCapability, VaultError> {
         let inner = self.inner.lock().expect("session vault poisoned");
         if inner
             .sessions
@@ -484,8 +584,21 @@ impl SessionVault {
         {
             return Err(VaultError::SessionNotActive);
         }
-        Ok(ProfileAttachmentRef::from_vault_issued(
+        let account = inner
+            .accounts
+            .get(&(session.site_id.clone(), session.account_ref.clone()))
+            .ok_or(VaultError::AccountNotFound)?;
+        if account.active_session.as_ref() != Some(session) || account.state != AccountState::Valid
+        {
+            return Err(VaultError::SessionNotActive);
+        }
+        Ok(SiteAccessCapability::issue_for_session(
+            session.site_id.clone(),
+            session.account_ref.clone(),
+            allowed_hosts,
             Uuid::new_v4().simple().to_string(),
+            session.session_id.clone(),
+            ttl,
         ))
     }
 
@@ -536,6 +649,20 @@ impl SessionVault {
             return Err(AuthBoundaryError::Capability(SiteAccessError::StaleSession));
         }
         Ok(stored.reference.clone())
+    }
+}
+
+struct VaultProfileMaterializer {
+    vault: SessionVault,
+}
+
+impl ProfileMaterializer for VaultProfileMaterializer {
+    fn materialize(
+        &self,
+        attachment: &ProfileAttachmentRef,
+        destination: &Path,
+    ) -> Result<(), BrowserError> {
+        self.vault.materialize_profile(attachment, destination)
     }
 }
 
@@ -796,6 +923,7 @@ fn safe_response_headers(headers: &HeaderMap) -> HeaderMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::browser::BrowserWorker;
 
     #[test]
     fn secret_material_debug_is_redacted_inside_the_vault_boundary() {
@@ -825,5 +953,44 @@ mod tests {
         let profile = vault.issue_profile_attachment_ref(&candidate).unwrap();
         let diagnostic = format!("{profile:?}");
         assert!(!diagnostic.contains("profile"));
+    }
+
+    #[tokio::test]
+    async fn profile_attachment_is_consumed_once_by_a_fresh_worker_profile() {
+        let vault = SessionVault::isolated_test();
+        vault
+            .register_account("site-a", "account-a", "fixture")
+            .unwrap();
+        let candidate = vault
+            .create_fixture_candidate_session("site-a", "account-a", "profile")
+            .unwrap();
+        vault
+            .validate_and_swap(&candidate, CandidateValidation::Valid)
+            .unwrap();
+
+        let worker = crate::browser::FakeBrowserWorker::new();
+        let session = worker
+            .open_session(crate::browser::BrowserAuthMode::Interactive)
+            .await
+            .unwrap();
+        let attachment = vault.issue_profile_attachment_ref(&candidate).unwrap();
+        worker
+            .attach_profile_with_materializer(
+                session.id(),
+                attachment.clone(),
+                vault.profile_materializer(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            worker
+                .attach_profile_with_materializer(
+                    session.id(),
+                    attachment,
+                    vault.profile_materializer(),
+                )
+                .await,
+            Err(crate::browser::BrowserError::ProfileAttachFailed)
+        );
     }
 }

@@ -14,6 +14,7 @@ use site_adapter_api::{
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
+use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use url::Url;
@@ -102,6 +103,10 @@ impl ProfileAttachmentRef {
     #[allow(dead_code)]
     pub(crate) fn from_vault_issued(token: impl Into<String>) -> Self {
         Self(token.into())
+    }
+
+    pub(crate) fn token(&self) -> &str {
+        &self.0
     }
 }
 
@@ -1028,6 +1033,20 @@ pub trait BrowserWorker: Send + Sync {
         session: &BrowserSessionId,
         profile: ProfileAttachmentRef,
     ) -> BrowserFuture<'_, ()>;
+
+    /// Attach a Vault-owned profile capability after materializing it into the
+    /// worker's already-fresh disposable profile directory.  Implementations
+    /// that do not need a filesystem-backed profile may use the legacy
+    /// `attach_profile` path; real runtimes must consume the capability once.
+    fn attach_profile_with_materializer(
+        &self,
+        session: &BrowserSessionId,
+        profile: ProfileAttachmentRef,
+        materializer: Arc<dyn ProfileMaterializer>,
+    ) -> BrowserFuture<'_, ()> {
+        let _ = materializer;
+        self.attach_profile(session, profile)
+    }
     fn detach_profile(&self, session: &BrowserSessionId) -> BrowserFuture<'_, ()>;
     fn navigate<'a>(
         &'a self,
@@ -1053,6 +1072,17 @@ pub trait BrowserWorker: Send + Sync {
         operation_id: BrowserOperationId,
     ) -> Result<(), BrowserError>;
     fn close(&self, session: &BrowserSessionId) -> Result<(), BrowserError>;
+}
+
+/// Server-side profile materialization seam.  The reference is opaque and the
+/// destination is owned by a disposable worker runtime; neither is exposed to
+/// plugins, Control, Display, or ordinary browser events.
+pub trait ProfileMaterializer: Send + Sync {
+    fn materialize(
+        &self,
+        attachment: &ProfileAttachmentRef,
+        destination: &Path,
+    ) -> Result<(), BrowserError>;
 }
 
 impl BrowserWorker for FakeBrowserWorker {
@@ -1100,6 +1130,32 @@ impl BrowserWorker for FakeBrowserWorker {
                 state.profiles.remove(&profile);
                 return Err(BrowserError::SessionExpired);
             }
+            let session_state = Self::session_mut(&mut state, &session)?;
+            Self::ensure_open(session_state)?;
+            session_state.profile = Some(profile);
+            Self::push_event(session_state, BrowserEventKind::ProfileAttached);
+            Ok(())
+        })
+    }
+
+    fn attach_profile_with_materializer(
+        &self,
+        session: &BrowserSessionId,
+        profile: ProfileAttachmentRef,
+        materializer: Arc<dyn ProfileMaterializer>,
+    ) -> BrowserFuture<'_, ()> {
+        let session = session.clone();
+        Box::pin(async move {
+            let destination = std::env::temp_dir().join(format!(
+                "web-media-gateway-fake-profile-{}",
+                Uuid::new_v4().simple()
+            ));
+            std::fs::create_dir(&destination).map_err(|_| BrowserError::ProfileAttachFailed)?;
+            let result = materializer.materialize(&profile, &destination);
+            let _ = std::fs::remove_dir_all(&destination);
+            result?;
+
+            let mut state = self.lock_state()?;
             let session_state = Self::session_mut(&mut state, &session)?;
             Self::ensure_open(session_state)?;
             session_state.profile = Some(profile);
