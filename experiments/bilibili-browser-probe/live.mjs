@@ -87,6 +87,30 @@ export function shouldRecordFailure(state, phaseHint, lifecycleOutcome) {
     (state.transport && !state.responseLimitTriggered && !explicitNavigationLifecycle));
 }
 
+/**
+ * Reduce Playwright's main-navigation request failure to a useful, closed
+ * diagnostic class. An unrecognised error is deliberately ignored so the
+ * later navigation promise settlement remains the source of the generic
+ * `navigation_promise_rejected` result.
+ */
+export function classifyNavigationRequestFailure(errorText, counters = {}) {
+  if (typeof errorText !== 'string' || errorText.length === 0 || errorText.length > 256) return undefined;
+  const classified = classifyError({ code: errorText }, 'chromium_navigation', counters);
+  return classified.reason === 'chromium_navigation_failed' || classified.reason === 'unclassified_failure'
+    ? undefined
+    : classified;
+}
+
+/** Commit one sanitized request failure without replacing an earlier result. */
+export function commitNavigationRequestFailure(state, failure, lifecycleOutcome) {
+  if (state.failure || !failure) return state.failure;
+  state.failure = {
+    ...failure,
+    lifecycle_outcome: classifyNavigationLifecycle(undefined, lifecycleOutcome),
+  };
+  return state.failure;
+}
+
 function recordFailure(state, error, phaseHint, status, transportStage, lifecycleOutcome) {
   // Once the broker has emitted a successful CONNECT response, a later socket
   // callback belongs to the already observed transport outcome. The explicit
@@ -349,6 +373,8 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
       await route.continue({ headers });
     });
     const page = await context.newPage();
+    let navigationRequest;
+    let navigationRequestFailure;
     const observeLifecycle = (event, lifecycleOutcome) => {
       if (!navigationActive || state.lifecycleOutcome) return;
       state.lifecycleOutcome = lifecycleOutcome;
@@ -358,6 +384,20 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
     context.on('close', () => observeLifecycle('page_lifecycle_result', 'page_closed'));
     page.on('close', () => observeLifecycle('page_lifecycle_result', 'page_closed'));
     page.on('crash', () => observeLifecycle('page_lifecycle_result', 'page_crashed'));
+    page.on('request', (request) => {
+      if (!navigationActive || !request.isNavigationRequest()) return;
+      try {
+        if (request.frame() === page.mainFrame()) navigationRequest = request;
+      } catch {
+        navigationRequest = undefined;
+      }
+    });
+    page.on('requestfailed', (request) => {
+      if (!navigationActive || request !== navigationRequest) return;
+      const failure = request.failure?.();
+      const classified = classifyNavigationRequestFailure(failure?.errorText, diagnosticCounters(state));
+      if (classified) navigationRequestFailure = classified;
+    });
     const pendingObservations = new Set();
     page.on('response', async (response) => {
       const task = (async () => {
@@ -394,7 +434,9 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
       const lifecycleOutcome = state.lifecycleOutcome || classifyNavigationLifecycle(error);
       navigationActive = false;
       recordStage(state, 'navigation_promise_result', { lifecycle_outcome: lifecycleOutcome, transport_outcome: 'failure' });
-      recordFailure(state, error, 'chromium_navigation', undefined, undefined, lifecycleOutcome);
+      if (!commitNavigationRequestFailure(state, navigationRequestFailure, lifecycleOutcome)) {
+        recordFailure(state, error, 'chromium_navigation', undefined, undefined, lifecycleOutcome);
+      }
       recordStage(state, 'navigation_status', { transport_stage: state.failure?.transport_stage, transport_outcome: 'failure' });
       recordStage(state, 'navigation_end', { transport_stage: state.failure?.transport_stage, transport_outcome: 'failure' });
       throw error;

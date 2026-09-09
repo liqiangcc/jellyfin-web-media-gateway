@@ -6,7 +6,7 @@ import { PassThrough, Readable } from 'node:stream';
 import { once } from 'node:events';
 import {
   brokerServer, consumeResponseBody, createDisposableProfile, removeDisposableProfile, LIVE_BROWSER_ARGS,
-  shouldRecordFailure,
+  shouldRecordFailure, classifyNavigationRequestFailure, commitNavigationRequestFailure,
 } from './live.mjs';
 import { createStageTracker } from './stage-markers.mjs';
 
@@ -185,6 +185,37 @@ test('transport success admits only an explicitly settled navigation failure', (
   assert.equal(shouldRecordFailure(state, 'chromium_navigation', 'unknown'), false);
   assert.equal(shouldRecordFailure(state, 'chromium_navigation', 'rejected'), true);
   assert.equal(shouldRecordFailure({ ...state, responseLimitTriggered: true }, 'broker_connect'), true);
+});
+
+test('main-navigation request failures keep only allowlisted browser classes', () => {
+  const classified = classifyNavigationRequestFailure(
+    'net::ERR_HTTP2_PROTOCOL_ERROR at https://secret.invalid/?token=sentinel',
+    { request_count: 13, response_bytes: 15224 },
+  );
+  assert.equal(classified.reason, 'http2_protocol_error');
+  assert.equal(classified.phase, 'chromium_navigation');
+  assert.equal(classified.transport_stage, 'downstream_close');
+  assert.equal(classified.request_count, 13);
+  assert.equal(classified.response_bytes, 15224);
+  assert.doesNotMatch(JSON.stringify(classified), /https?:\/\/|secret|token|sentinel/i);
+
+  // Unknown browser text must leave the navigation promise as the explicit
+  // rejection evidence instead of manufacturing a transport cause.
+  assert.equal(classifyNavigationRequestFailure('net::ERR_FAILED'), undefined);
+  assert.equal(classifyNavigationRequestFailure(''), undefined);
+  assert.equal(classifyNavigationRequestFailure('x'.repeat(257)), undefined);
+});
+
+test('a request failure keeps navigation lifecycle and cannot replace prior failure', () => {
+  const state = {};
+  const failure = classifyNavigationRequestFailure('net::ERR_CONNECTION_CLOSED', { request_count: 13 });
+  const committed = commitNavigationRequestFailure(state, failure, 'rejected');
+  assert.equal(committed.reason, 'connection_closed');
+  assert.equal(committed.lifecycle_outcome, 'rejected');
+  const original = state.failure;
+  const later = classifyNavigationRequestFailure('net::ERR_HTTP2_PROTOCOL_ERROR');
+  assert.strictEqual(commitNavigationRequestFailure(state, later, 'browser_disconnected'), original);
+  assert.strictEqual(state.failure, original);
 });
 
 test('independent body reader counts success/error/over-budget bytes and cancellation', async () => {
