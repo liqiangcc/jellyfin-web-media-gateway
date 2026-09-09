@@ -322,6 +322,7 @@ mod tests {
         let registered = app.clone().oneshot(
             Request::post("/api/v1/auth/attempts")
                 .header("host", "127.0.0.1:8787")
+                .header("origin", "http://127.0.0.1:8787")
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"request_id":"req-1","site_id":"bilibili","account_ref":"home-bilibili"}"#))
                 .unwrap(),
@@ -331,6 +332,7 @@ mod tests {
         let unregistered = app.oneshot(
             Request::post("/api/v1/auth/attempts")
                 .header("host", "127.0.0.1:8787")
+                .header("origin", "http://127.0.0.1:8787")
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"request_id":"req-2","site_id":"bilibili","account_ref":"other-account"}"#))
                 .unwrap(),
