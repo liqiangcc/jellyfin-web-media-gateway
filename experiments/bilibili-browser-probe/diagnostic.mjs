@@ -36,6 +36,12 @@ export const UPSTREAM_ERROR_CLASSES = Object.freeze([
   'timeout', 'aborted', 'connection_reset', 'connection_refused', 'tls_failure',
   'response_closed_early', 'unknown',
 ]);
+// Response provenance is intentionally an observation class rather than an
+// authority. A status alone never proves that a site policy was applied.
+export const RESPONSE_ORIGINS = Object.freeze([
+  'broker_policy', 'upstream_http', 'navigation_status', 'unknown',
+]);
+export const RESPONSE_REDIRECT_CLASSES = Object.freeze(['none', 'redirect', 'unknown']);
 
 const MAX_REQUESTS = 200;
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
@@ -94,6 +100,8 @@ const TRANSPORT_STAGE_SET = new Set(TRANSPORT_STAGES);
 const TRANSPORT_OUTCOME_SET = new Set(TRANSPORT_OUTCOMES);
 const LIFECYCLE_OUTCOME_SET = new Set(LIFECYCLE_OUTCOMES);
 const UPSTREAM_ERROR_CLASS_SET = new Set(UPSTREAM_ERROR_CLASSES);
+const RESPONSE_ORIGIN_SET = new Set(RESPONSE_ORIGINS);
+const RESPONSE_REDIRECT_CLASS_SET = new Set(RESPONSE_REDIRECT_CLASSES);
 
 function boundedCounter(value, maximum) {
   return Number.isSafeInteger(value) && value >= 0 && value <= maximum ? value : 0;
@@ -131,6 +139,16 @@ function transportOutcome(value) {
 
 function lifecycleOutcome(value) {
   return typeof value === 'string' && LIFECYCLE_OUTCOME_SET.has(value) ? value : undefined;
+}
+
+function responseOrigin(value) {
+  return typeof value === 'string' && RESPONSE_ORIGIN_SET.has(value) ? value : undefined;
+}
+
+function responseRedirectClass(value, status) {
+  if (typeof value === 'string' && RESPONSE_REDIRECT_CLASS_SET.has(value)) return value;
+  const statusClassValue = statusClass(status);
+  return statusClassValue === '3xx' ? 'redirect' : statusClassValue === 'unknown' ? 'unknown' : 'none';
 }
 
 /**
@@ -207,6 +225,8 @@ export function classifyFailure(input = {}) {
     phase,
     reason,
     status_class: statusClass(value.status),
+    response_origin: responseOrigin(value.response_origin) || 'unknown',
+    redirect_class: responseRedirectClass(value.redirect_class, value.status),
     transport_stage: stageFor(phase, match, value.transport_stage),
     transport_outcome: transportOutcome(value.transport_outcome) || 'failure',
     request_count: boundedCounter(value.request_count, MAX_REQUESTS),
@@ -235,8 +255,28 @@ export function classifyError(error, phaseHint, counters = {}) {
     response_bytes: counters.response_bytes,
     metadata_bytes: counters.metadata_bytes,
     status: counters.status,
+    response_origin: counters.response_origin,
+    redirect_class: counters.redirect_class,
     transport_stage: counters.transport_stage,
     lifecycle_outcome: observedLifecycle,
+  });
+}
+
+/**
+ * Normalize only coarse response metadata. The caller may provide a
+ * provenance label, but it cannot add an authority, status text, URL, header,
+ * redirect target, body, or error message to the returned DTO.
+ */
+export function classifyResponseMetadata(input = {}) {
+  const value = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  return Object.freeze({
+    schema_version: DIAGNOSTIC_SCHEMA_VERSION,
+    response_origin: responseOrigin(value.response_origin) || 'unknown',
+    status_class: statusClass(value.status),
+    redirect_class: responseRedirectClass(value.redirect_class, value.status),
+    request_count: boundedCounter(value.request_count, MAX_REQUESTS),
+    response_bytes: boundedCounter(value.response_bytes, MAX_RESPONSE_BYTES),
+    metadata_bytes: boundedCounter(value.metadata_bytes, MAX_METADATA_BYTES),
   });
 }
 

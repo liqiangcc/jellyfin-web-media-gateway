@@ -6,7 +6,7 @@
  * errors, authorities, URLs, headers, or paths to diagnostic evidence.
  */
 
-export const STAGE_MARKER_SCHEMA_VERSION = 1;
+export const STAGE_MARKER_SCHEMA_VERSION = 2;
 export const MAX_STAGE_MARKERS = 32;
 export const STAGE_MARKER_EVENTS = Object.freeze([
   'browser_launch_start',
@@ -47,6 +47,10 @@ export const STAGE_MARKER_UPSTREAM_ERROR_CLASSES = Object.freeze([
   'timeout', 'aborted', 'connection_reset', 'connection_refused', 'tls_failure',
   'response_closed_early', 'unknown',
 ]);
+export const STAGE_MARKER_RESPONSE_ORIGINS = Object.freeze([
+  'broker_policy', 'upstream_http', 'navigation_status', 'unknown',
+]);
+export const STAGE_MARKER_REDIRECT_CLASSES = Object.freeze(['none', 'redirect', 'unknown']);
 
 const eventSet = new Set(STAGE_MARKER_EVENTS);
 const statusSet = new Set(STAGE_MARKER_STATUS_CLASSES);
@@ -55,6 +59,8 @@ const transportOutcomeSet = new Set(STAGE_MARKER_TRANSPORT_OUTCOMES);
 const lifecycleOutcomeSet = new Set(STAGE_MARKER_LIFECYCLE_OUTCOMES);
 const upstreamStateSet = new Set(STAGE_MARKER_UPSTREAM_STATES);
 const upstreamErrorClassSet = new Set(STAGE_MARKER_UPSTREAM_ERROR_CLASSES);
+const responseOriginSet = new Set(STAGE_MARKER_RESPONSE_ORIGINS);
+const redirectClassSet = new Set(STAGE_MARKER_REDIRECT_CLASSES);
 
 function bounded(value, maximum) {
   return Number.isSafeInteger(value) && value >= 0 && value <= maximum ? value : 0;
@@ -84,6 +90,15 @@ function upstreamErrorClass(value) {
   return typeof value === 'string' && upstreamErrorClassSet.has(value) ? value : 'unknown';
 }
 
+function responseOrigin(value) {
+  return typeof value === 'string' && responseOriginSet.has(value) ? value : 'unknown';
+}
+
+function redirectClass(value, status) {
+  if (typeof value === 'string' && redirectClassSet.has(value)) return value;
+  return status === '3xx' ? 'redirect' : status === 'unknown' ? 'unknown' : 'none';
+}
+
 /**
  * Normalize a marker into the closed durable DTO. Invalid event names are
  * rejected. Unknown fields are ignored and all bounded values have a safe
@@ -97,6 +112,8 @@ export function normalizeStageMarker(input = {}, sequence = 1) {
     sequence: bounded(sequence, MAX_STAGE_MARKERS),
     event: input.event,
     status_class: statusClass(input.status_class),
+    response_origin: responseOrigin(input.response_origin),
+    redirect_class: redirectClass(input.redirect_class, input.status_class),
     transport_stage: transportStage(input.transport_stage),
     transport_outcome: transportOutcome(input.transport_outcome),
     lifecycle_outcome: lifecycleOutcome(input.lifecycle_outcome),

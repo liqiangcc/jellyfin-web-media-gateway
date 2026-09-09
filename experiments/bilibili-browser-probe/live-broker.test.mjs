@@ -85,6 +85,11 @@ test('the live broker records bounded upstream response completion and socket cl
   assert.equal((await proxyGet(port, 'https://www.bilibili.com/redirect')).status, 302);
   assert.equal((await proxyGet(port, 'https://private.bilibili.com/final')).status, 403);
   assert.equal((await proxyGet(port, 'http://www.bilibili.com/plain')).status, 403);
+  const responseMarkers = state.stages.snapshot().filter(({ event }) => event === 'broker_request_result');
+  assert.equal(responseMarkers.find(({ status_class }) => status_class === '2xx')?.response_origin, 'upstream_http');
+  assert.equal(responseMarkers.find(({ status_class }) => status_class === '3xx')?.response_origin, 'upstream_http');
+  assert.equal(responseMarkers.find(({ status_class }) => status_class === '4xx')?.response_origin, 'broker_policy');
+  assert.equal(responseMarkers.find(({ status_class }) => status_class === '3xx')?.redirect_class, 'redirect');
 
   const socket = net.connect(port, '127.0.0.1');
   await once(socket, 'connect');

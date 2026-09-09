@@ -28,6 +28,8 @@ function safeDiagnostic(input = {}) {
   const classified = classifyFailure({
     phase_hint: phase,
     status: typeof value.status_class === 'string' && /^[1-5]xx$/.test(value.status_class) ? Number(value.status_class[0]) * 100 : undefined,
+    response_origin: value.response_origin,
+    redirect_class: value.redirect_class,
     transport_stage: value.transport_stage,
     request_count: value.request_count,
     response_bytes: value.response_bytes,
@@ -39,6 +41,8 @@ function safeDiagnostic(input = {}) {
     phase,
     reason: typeof value.reason === 'string' && reasonSet.has(value.reason) ? value.reason : classified.reason,
     status_class: classified.status_class,
+    response_origin: classified.response_origin,
+    redirect_class: classified.redirect_class,
     transport_stage: enumOr(value.transport_stage, stageSet, classified.transport_stage),
     transport_outcome: enumOr(value.transport_outcome, outcomeSet, classified.transport_outcome),
     lifecycle_outcome: enumOr(value.lifecycle_outcome, lifecycleSet, 'unknown'),
