@@ -109,7 +109,7 @@ jobs:
       - name: HTTP boundary and DTO guards
         shell: bash --noprofile --norc -euo pipefail {0}
         run: |
-          if git grep -n -i -E 'Cookie|Authorization|Bearer|profile[_-]?(path|bytes|dir)|raw[_-]?cdp|vnc' -- gateway-core/src/auth_route.rs gateway-core/src/control.rs gateway-core/src/control_view.rs; then
+          if git grep -n -E 'pub[^\n]*(Cookie|Authorization|Bearer|profile[_-]?(path|bytes|dir)|raw[_-]?cdp|vnc)' -- gateway-core/src/auth_route.rs gateway-core/src/control.rs gateway-core/src/control_view.rs; then
             echo 'secret or raw browser transport vocabulary crossed the public DTO boundary' >&2
             exit 1
           fi

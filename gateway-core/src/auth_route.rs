@@ -1542,10 +1542,7 @@ fn auth_json_rejection(rejection: JsonRejection) -> Response {
         .into_response()
 }
 
-fn capability_header<'a>(
-    headers: &'a HeaderMap,
-    kind: CapabilityKind,
-) -> Result<&'a str, ApiError> {
+fn capability_header(headers: &HeaderMap, kind: CapabilityKind) -> Result<&str, ApiError> {
     let name = match kind {
         CapabilityKind::View => VIEW_CAPABILITY_HEADER,
         CapabilityKind::Panel => PANEL_CAPABILITY_HEADER,
