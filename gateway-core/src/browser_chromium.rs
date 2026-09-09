@@ -1507,16 +1507,28 @@ mod tests {
         let events = worker.poll_events(session.id(), 0).unwrap();
         let diagnostics = format!("{events:?}");
         assert!(!diagnostics.contains("server-secret"));
-        assert!(events.iter().any(|event| matches!(
-            event.kind,
-            BrowserEventKind::ResourceObserved { .. }
-        )));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event.kind, BrowserEventKind::ResourceObserved { .. }))
+        );
         assert_eq!(payload.observation.resource_count, 1);
         assert_eq!(payload.observation.candidates.len(), 1);
-        assert_eq!(payload.observation.candidates[0].kind, BrowserMediaKind::Muxed);
-        assert_eq!(payload.observation.candidates[0].protocol, StreamProtocol::HttpFile);
+        assert_eq!(
+            payload.observation.candidates[0].kind,
+            BrowserMediaKind::Muxed
+        );
+        assert_eq!(
+            payload.observation.candidates[0].protocol,
+            StreamProtocol::HttpFile
+        );
         assert_eq!(payload.server_observation.media.len(), 1);
-        assert!(payload.server_observation.media[0].url.as_str().contains("server-secret"));
+        assert!(
+            payload.server_observation.media[0]
+                .url
+                .as_str()
+                .contains("server-secret")
+        );
         assert!(!format!("{payload:?}").contains("server-secret"));
         fixture_task.abort();
     }
