@@ -42,6 +42,7 @@ export const RESPONSE_ORIGINS = Object.freeze([
   'broker_policy', 'upstream_http', 'navigation_status', 'unknown',
 ]);
 export const RESPONSE_REDIRECT_CLASSES = Object.freeze(['none', 'redirect', 'unknown']);
+export const RESPONSE_METADATA_CLASSES = Object.freeze(['none', 'status_only', 'safe_headers', 'unknown']);
 
 const MAX_REQUESTS = 200;
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
@@ -102,6 +103,7 @@ const LIFECYCLE_OUTCOME_SET = new Set(LIFECYCLE_OUTCOMES);
 const UPSTREAM_ERROR_CLASS_SET = new Set(UPSTREAM_ERROR_CLASSES);
 const RESPONSE_ORIGIN_SET = new Set(RESPONSE_ORIGINS);
 const RESPONSE_REDIRECT_CLASS_SET = new Set(RESPONSE_REDIRECT_CLASSES);
+const RESPONSE_METADATA_CLASS_SET = new Set(RESPONSE_METADATA_CLASSES);
 
 function boundedCounter(value, maximum) {
   return Number.isSafeInteger(value) && value >= 0 && value <= maximum ? value : 0;
@@ -149,6 +151,13 @@ function responseRedirectClass(value, status) {
   if (typeof value === 'string' && RESPONSE_REDIRECT_CLASS_SET.has(value)) return value;
   const statusClassValue = statusClass(status);
   return statusClassValue === '3xx' ? 'redirect' : statusClassValue === 'unknown' ? 'unknown' : 'none';
+}
+
+function responseMetadataClass(value, metadataBytes, status) {
+  if (typeof value === 'string' && RESPONSE_METADATA_CLASS_SET.has(value)) return value;
+  if (statusClass(status) === 'unknown') return 'unknown';
+  if (Number.isSafeInteger(metadataBytes) && metadataBytes > 0) return 'safe_headers';
+  return 'status_only';
 }
 
 /**
@@ -227,6 +236,7 @@ export function classifyFailure(input = {}) {
     status_class: statusClass(value.status),
     response_origin: responseOrigin(value.response_origin) || 'unknown',
     redirect_class: responseRedirectClass(value.redirect_class, value.status),
+    response_metadata_class: responseMetadataClass(value.response_metadata_class, value.metadata_bytes, value.status),
     transport_stage: stageFor(phase, match, value.transport_stage),
     transport_outcome: transportOutcome(value.transport_outcome) || 'failure',
     request_count: boundedCounter(value.request_count, MAX_REQUESTS),
@@ -257,6 +267,7 @@ export function classifyError(error, phaseHint, counters = {}) {
     status: counters.status,
     response_origin: counters.response_origin,
     redirect_class: counters.redirect_class,
+    response_metadata_class: counters.response_metadata_class,
     transport_stage: counters.transport_stage,
     lifecycle_outcome: observedLifecycle,
   });
@@ -274,6 +285,7 @@ export function classifyResponseMetadata(input = {}) {
     response_origin: responseOrigin(value.response_origin) || 'unknown',
     status_class: statusClass(value.status),
     redirect_class: responseRedirectClass(value.redirect_class, value.status),
+    response_metadata_class: responseMetadataClass(value.response_metadata_class, value.metadata_bytes, value.status),
     request_count: boundedCounter(value.request_count, MAX_REQUESTS),
     response_bytes: boundedCounter(value.response_bytes, MAX_RESPONSE_BYTES),
     metadata_bytes: boundedCounter(value.metadata_bytes, MAX_METADATA_BYTES),

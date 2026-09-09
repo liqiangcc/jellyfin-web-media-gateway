@@ -90,6 +90,7 @@ test('the live broker records bounded upstream response completion and socket cl
   assert.equal(responseMarkers.find(({ status_class }) => status_class === '3xx')?.response_origin, 'upstream_http');
   assert.equal(responseMarkers.find(({ status_class }) => status_class === '4xx')?.response_origin, 'broker_policy');
   assert.equal(responseMarkers.find(({ status_class }) => status_class === '3xx')?.redirect_class, 'redirect');
+  assert.equal(responseMarkers.find(({ status_class }) => status_class === '3xx')?.response_metadata_class, 'safe_headers');
 
   const socket = net.connect(port, '127.0.0.1');
   await once(socket, 'connect');
