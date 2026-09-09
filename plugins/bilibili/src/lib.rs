@@ -12,7 +12,6 @@ use site_adapter_api::{
     ResolvedStream, ServerOwnedObservation, SiteAdapter, SiteAdapterRegistry, SourceLocator,
     StreamProtocol, validate_browser_observation, validate_server_owned_observation,
 };
-use std::collections::BTreeMap;
 use url::Url;
 
 pub const SITE_ID: &str = "bilibili";
@@ -157,7 +156,7 @@ impl SiteAdapter for BilibiliAdapter {
         locator: &SourceLocator,
         context: ResolveContext<'_>,
     ) -> Result<ResolvedMedia, AdapterError> {
-        let payload = decode_locator(locator)?;
+        let _ = decode_locator(locator)?;
         let observation = context
             .browser_observation
             .ok_or(AdapterError::ObservationRequired)?;
@@ -365,6 +364,7 @@ mod tests {
             RecognizeFixture, assert_adapter_conforms, assert_error_diagnostics_bounded,
         },
     };
+    use std::collections::BTreeMap;
 
     const BVID: &str = "BV1xx411c7mD";
 

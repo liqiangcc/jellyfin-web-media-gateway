@@ -72,12 +72,14 @@ jobs:
       - name: Core and Browser Worker remain site agnostic
         shell: bash
         run: |
-          if rg -n -i 'bilibili|sessdata|BV[0-9A-Za-z]{10}' gateway-core/src --glob '!**/*test*' --glob '!**/tests/**'; then
+          if git grep -n -i -E 'bilibili|sessdata|BV[0-9A-Za-z]{10}' -- gateway-core/src; then
             echo 'concrete Bilibili knowledge leaked into Core or Browser Worker' >&2
             exit 1
           fi
-          ! rg -n '^\s*pub\s+[A-Za-z0-9_]+\s*:\s*.*(resolved_media|upstream_access_ref|Cookie|Authorization|Bearer)' gateway-core/src/control_view.rs gateway-core/src/control.rs
+          if git grep -n -E '^\s*pub\s+[A-Za-z0-9_]+\s*:\s*.*(resolved_media|upstream_access_ref|Cookie|Authorization|Bearer)' -- gateway-core/src/control_view.rs gateway-core/src/control.rs; then
+            exit 1
+          fi
       - name: Plugin is the only owner of Bilibili semantics
         run: |
           test -f plugins/bilibili/src/lib.rs
-          rg -n 'BilibiliAdapter|LOCATOR_VERSION|BrowserObservation|ServerOwnedObservation' plugins/bilibili/src/lib.rs
+          git grep -n -E 'BilibiliAdapter|LOCATOR_VERSION|BrowserObservation|ServerOwnedObservation' -- plugins/bilibili/src/lib.rs
