@@ -31,6 +31,8 @@ pub enum BrowserAuthRuntimeError {
     CandidateRejected,
     InvalidCandidate,
     InvalidObservation,
+    CandidateCaptureRequestMismatch,
+    CandidateCaptureAlreadyConsumed,
 }
 
 impl fmt::Display for BrowserAuthRuntimeError {
@@ -41,6 +43,12 @@ impl fmt::Display for BrowserAuthRuntimeError {
             Self::CandidateRejected => formatter.write_str("CANDIDATE_REJECTED"),
             Self::InvalidCandidate => formatter.write_str("INVALID_CANDIDATE"),
             Self::InvalidObservation => formatter.write_str("INVALID_OBSERVATION"),
+            Self::CandidateCaptureRequestMismatch => {
+                formatter.write_str("CANDIDATE_CAPTURE_REQUEST_MISMATCH")
+            }
+            Self::CandidateCaptureAlreadyConsumed => {
+                formatter.write_str("CANDIDATE_CAPTURE_ALREADY_CONSUMED")
+            }
         }
     }
 }
@@ -148,6 +156,8 @@ impl<W: BrowserWorker + 'static> BrowserAuthRuntime<W> {
             events: VecDeque::new(),
             next_sequence: 0,
             closed: false,
+            candidate_capture: None,
+            committed_candidate: None,
         };
         attempt.emit(BrowserAuthState::Required, BrowserAuthDiagnostic::None);
         Ok(attempt)
@@ -165,6 +175,15 @@ pub struct BrowserAuthAttempt<W: BrowserWorker> {
     events: VecDeque<BrowserAuthEvent>,
     next_sequence: u64,
     closed: bool,
+    candidate_capture: Option<CandidateCaptureRecord>,
+    committed_candidate: Option<SiteSessionRef>,
+}
+
+#[derive(Clone)]
+struct CandidateCaptureRecord {
+    request_id: String,
+    observation: BrowserAuthObservation,
+    candidate: SiteSessionRef,
 }
 
 impl<W: BrowserWorker> fmt::Debug for BrowserAuthAttempt<W> {
@@ -295,6 +314,74 @@ impl<W: BrowserWorker> BrowserAuthAttempt<W> {
         .ok_or(BrowserAuthRuntimeError::InvalidObservation)
     }
 
+    /// Capture the worker-owned authenticated material exactly once for this
+    /// live attempt. The Vault receives the material through a crate-private
+    /// seam and returns only an opaque candidate session reference.
+    pub async fn capture_candidate(
+        &mut self,
+        request_id: &str,
+        observation: BrowserAuthObservation,
+    ) -> Result<SiteSessionRef, BrowserAuthRuntimeError> {
+        self.ensure_live()?;
+        if request_id.is_empty()
+            || request_id.len() > 128
+            || request_id.chars().any(char::is_control)
+        {
+            return Err(BrowserAuthRuntimeError::InvalidCandidate);
+        }
+        validate_browser_auth_observation(&observation)
+            .map_err(|_| BrowserAuthRuntimeError::InvalidObservation)?;
+        if observation.state != BrowserAuthState::CandidateReady {
+            return Err(BrowserAuthRuntimeError::InvalidCandidate);
+        }
+        if let Some((previous_request_id, previous_observation, previous_candidate)) =
+            self.candidate_capture.as_ref().map(|previous| {
+                (
+                    previous.request_id.clone(),
+                    previous.observation,
+                    previous.candidate.clone(),
+                )
+            })
+        {
+            if !self.vault.has_session(&previous_candidate) {
+                self.candidate_capture = None;
+            } else {
+                if previous_request_id == request_id && previous_observation == observation {
+                    return Ok(previous_candidate);
+                }
+                return Err(BrowserAuthRuntimeError::CandidateCaptureRequestMismatch);
+            }
+        }
+        if self.committed_candidate.is_some() {
+            return Err(BrowserAuthRuntimeError::CandidateCaptureAlreadyConsumed);
+        }
+
+        let material = match self
+            .worker
+            .capture_candidate_material(self.session.id())
+            .await
+        {
+            Ok(material) => material,
+            Err(error) => {
+                self.observe_worker_error(error);
+                return Err(error.into());
+            }
+        };
+        let candidate =
+            self.vault
+                .capture_candidate_material(&self.site_id, &self.account_ref, material)?;
+        self.candidate_capture = Some(CandidateCaptureRecord {
+            request_id: request_id.to_owned(),
+            observation,
+            candidate: candidate.clone(),
+        });
+        self.emit(
+            BrowserAuthState::CandidateReady,
+            BrowserAuthDiagnostic::CandidateAccepted,
+        );
+        Ok(candidate)
+    }
+
     /// Resolve an opaque candidate identity through the Vault and perform the
     /// existing atomic validation/swap.  Raw session material never leaves
     /// this runtime.
@@ -308,6 +395,11 @@ impl<W: BrowserWorker> BrowserAuthAttempt<W> {
             &self.account_ref,
             candidate_session_id,
         )?;
+        if let Some(captured) = self.candidate_capture.as_ref()
+            && captured.candidate != candidate
+        {
+            return Err(BrowserAuthRuntimeError::InvalidCandidate);
+        }
         self.accept_candidate(candidate, observation)
     }
 
@@ -320,6 +412,13 @@ impl<W: BrowserWorker> BrowserAuthAttempt<W> {
         observation: BrowserAuthObservation,
     ) -> Result<AuthenticatedSessionHandoff, BrowserAuthRuntimeError> {
         self.ensure_live()?;
+        let captured_mismatch = self.candidate_capture.as_ref().is_some_and(|captured| {
+            captured.candidate != candidate || captured.observation != observation
+        });
+        if captured_mismatch {
+            self.reject_candidate_if_present(&candidate);
+            return Err(BrowserAuthRuntimeError::InvalidCandidate);
+        }
         validate_browser_auth_observation(&observation).map_err(|_| {
             self.reject_candidate_if_present(&candidate);
             BrowserAuthRuntimeError::InvalidObservation
@@ -344,10 +443,14 @@ impl<W: BrowserWorker> BrowserAuthAttempt<W> {
             candidate.session_id().to_owned(),
             observation,
         )
-        .map_err(|_| BrowserAuthRuntimeError::InvalidObservation)?;
+        .map_err(|_| {
+            self.reject_candidate_if_present(&candidate);
+            BrowserAuthRuntimeError::InvalidObservation
+        })?;
         self.vault
             .validate_and_swap(&candidate, CandidateValidation::Valid)
             .map_err(|error| {
+                self.reject_candidate_if_present(&candidate);
                 self.emit(
                     BrowserAuthState::CandidateReady,
                     BrowserAuthDiagnostic::CandidateRejected,
@@ -362,6 +465,7 @@ impl<W: BrowserWorker> BrowserAuthAttempt<W> {
             BrowserAuthState::CandidateReady,
             BrowserAuthDiagnostic::CandidateAccepted,
         );
+        self.committed_candidate = Some(candidate.clone());
         Ok(handoff)
     }
 
@@ -377,9 +481,7 @@ impl<W: BrowserWorker> BrowserAuthAttempt<W> {
         if candidate.site_id() != self.site_id || candidate.account_ref() != self.account_ref {
             return Err(BrowserAuthRuntimeError::InvalidCandidate);
         }
-        let _ = self
-            .vault
-            .validate_and_swap(candidate, CandidateValidation::Invalid);
+        self.reject_candidate_if_present(candidate);
         self.emit(
             BrowserAuthState::CandidateReady,
             BrowserAuthDiagnostic::CandidateRejected,
@@ -483,11 +585,27 @@ impl<W: BrowserWorker> BrowserAuthAttempt<W> {
             _ => return,
         };
         self.emit(state, diagnostic);
+        self.discard_uncommitted_candidate();
         self.cleanup_worker();
     }
 
-    fn reject_candidate_if_present(&self, candidate: &SiteSessionRef) {
+    fn reject_candidate_if_present(&mut self, candidate: &SiteSessionRef) {
         let _ = self.vault.cancel_candidate(candidate);
+        if self
+            .candidate_capture
+            .as_ref()
+            .is_some_and(|captured| captured.candidate == *candidate)
+        {
+            self.candidate_capture = None;
+        }
+    }
+
+    fn discard_uncommitted_candidate(&mut self) {
+        if self.committed_candidate.is_none()
+            && let Some(captured) = self.candidate_capture.take()
+        {
+            self.reject_candidate_if_present(&captured.candidate);
+        }
     }
 
     fn emit(&mut self, state: BrowserAuthState, diagnostic: BrowserAuthDiagnostic) {
@@ -509,6 +627,7 @@ impl<W: BrowserWorker> BrowserAuthAttempt<W> {
 
     fn cleanup_worker(&mut self) {
         if !self.closed {
+            self.discard_uncommitted_candidate();
             let _ = self.worker.close(self.session.id());
             self.closed = true;
         }
@@ -519,7 +638,7 @@ impl<W: BrowserWorker> BrowserAuthAttempt<W> {
 mod tests {
     use super::*;
     use crate::CandidateValidation;
-    use crate::browser::{BrowserInput, FakeBrowserWorker};
+    use crate::browser::{BrowserCandidateMaterial, BrowserInput, FakeBrowserWorker};
 
     const SITE: &str = "site-a";
     const ACCOUNT: &str = "account-a";
@@ -623,6 +742,126 @@ mod tests {
                 .events_after(0)
                 .iter()
                 .any(|event| { event.observation.state == BrowserAuthState::Expired })
+        );
+    }
+
+    #[tokio::test]
+    async fn candidate_capture_is_bound_one_shot_and_atomically_swapped() {
+        let vault = SessionVault::isolated_test();
+        vault.register_account(SITE, ACCOUNT, "fixture").unwrap();
+        let old = vault
+            .create_fixture_candidate_session(SITE, ACCOUNT, "old")
+            .unwrap();
+        vault
+            .validate_and_swap(&old, CandidateValidation::Valid)
+            .unwrap();
+        let worker = FakeBrowserWorker::new();
+        let runtime = BrowserAuthRuntime::new(worker.clone(), vault.clone());
+        let mut attempt = runtime.start(SITE, ACCOUNT).await.unwrap();
+        worker
+            .set_candidate_material(
+                attempt.session().id(),
+                BrowserCandidateMaterial::fixture("captured-secret"),
+            )
+            .unwrap();
+        let observation = ready_observation();
+        let candidate = attempt
+            .capture_candidate("capture-1", observation)
+            .await
+            .unwrap();
+        assert!(vault.has_session(&candidate));
+        assert_eq!(
+            attempt
+                .capture_candidate("capture-1", observation)
+                .await
+                .unwrap(),
+            candidate
+        );
+        assert_eq!(
+            attempt.capture_candidate("capture-2", observation).await,
+            Err(BrowserAuthRuntimeError::CandidateCaptureRequestMismatch)
+        );
+        let handoff = attempt
+            .accept_candidate_ref(candidate.session_id(), observation)
+            .unwrap();
+        assert_eq!(handoff.account_ref(), ACCOUNT);
+        assert_eq!(
+            vault.active_session(SITE, ACCOUNT).unwrap(),
+            Some(candidate)
+        );
+        assert!(!format!("{handoff:?}").contains("captured-secret"));
+    }
+
+    #[tokio::test]
+    async fn cancelled_capture_removes_only_new_candidate_and_preserves_old_session() {
+        let vault = SessionVault::isolated_test();
+        vault.register_account(SITE, ACCOUNT, "fixture").unwrap();
+        let old = vault
+            .create_fixture_candidate_session(SITE, ACCOUNT, "old")
+            .unwrap();
+        vault
+            .validate_and_swap(&old, CandidateValidation::Valid)
+            .unwrap();
+        let worker = FakeBrowserWorker::new();
+        let runtime = BrowserAuthRuntime::new(worker.clone(), vault.clone());
+        let mut attempt = runtime.start(SITE, ACCOUNT).await.unwrap();
+        worker
+            .set_candidate_material(
+                attempt.session().id(),
+                BrowserCandidateMaterial::fixture("new"),
+            )
+            .unwrap();
+        let candidate = attempt
+            .capture_candidate("capture-cancel", ready_observation())
+            .await
+            .unwrap();
+        assert!(vault.has_session(&candidate));
+        attempt.cancel().unwrap();
+        assert!(!vault.has_session(&candidate));
+        assert_eq!(vault.active_session(SITE, ACCOUNT).unwrap(), Some(old));
+    }
+
+    #[tokio::test]
+    async fn rejected_capture_is_not_replayed_by_duplicate_request() {
+        let vault = SessionVault::isolated_test();
+        vault.register_account(SITE, ACCOUNT, "fixture").unwrap();
+        let old = vault
+            .create_fixture_candidate_session(SITE, ACCOUNT, "old")
+            .unwrap();
+        vault
+            .validate_and_swap(&old, CandidateValidation::Valid)
+            .unwrap();
+        let worker = FakeBrowserWorker::new();
+        let runtime = BrowserAuthRuntime::new(worker.clone(), vault.clone());
+        let mut attempt = runtime.start(SITE, ACCOUNT).await.unwrap();
+        worker
+            .set_candidate_material(
+                attempt.session().id(),
+                BrowserCandidateMaterial::fixture("reject"),
+            )
+            .unwrap();
+        let observation = ready_observation();
+        let candidate = attempt
+            .capture_candidate("capture-reject", observation)
+            .await
+            .unwrap();
+        let stale = BrowserAuthObservation {
+            sequence: observation.sequence + 1,
+            ..observation
+        };
+        assert_eq!(
+            attempt.accept_candidate_ref(candidate.session_id(), stale),
+            Err(BrowserAuthRuntimeError::InvalidCandidate)
+        );
+        assert!(!vault.has_session(&candidate));
+        assert_eq!(vault.active_session(SITE, ACCOUNT).unwrap(), Some(old));
+        assert_eq!(
+            attempt
+                .capture_candidate("capture-reject", observation)
+                .await,
+            Err(BrowserAuthRuntimeError::Browser(
+                BrowserError::CandidateCaptureUnavailable
+            ))
         );
     }
 }

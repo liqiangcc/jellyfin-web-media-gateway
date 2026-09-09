@@ -4,10 +4,11 @@
 //! not know about sites, DOM selectors, accounts, media, or PlaybackSession.
 
 use crate::browser::{
-    BROWSER_EVENT_VERSION, BrowserAuthMode, BrowserError, BrowserEvent, BrowserEventKind,
-    BrowserFuture, BrowserInput, BrowserNavigationRequest, BrowserObservationPayload,
-    BrowserOperationId, BrowserSession, BrowserSessionId, BrowserStatus, BrowserWorker,
-    MAX_BROWSER_CANDIDATES, MAX_BROWSER_EVENTS, MAX_BROWSER_RESOURCES, NativePanelSession,
+    BROWSER_EVENT_VERSION, BrowserAuthMode, BrowserCandidateMaterial, BrowserError, BrowserEvent,
+    BrowserEventKind, BrowserFuture, BrowserInput, BrowserNavigationRequest,
+    BrowserObservationPayload, BrowserOperationId, BrowserSession, BrowserSessionId, BrowserStatus,
+    BrowserWorker, MAX_BROWSER_CANDIDATES, MAX_BROWSER_EVENTS, MAX_BROWSER_RESOURCES,
+    MAX_CANDIDATE_PROFILE_BYTES, MAX_CANDIDATE_PROFILE_FILES, NativePanelSession,
     R008NavigationPolicy, redacted_event_url, redacted_title,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -1058,6 +1059,86 @@ fn configure_chromium_environment(command: &mut tokio::process::Command, profile
         .env("PATH", CHILD_PATH);
 }
 
+/// Encode a bounded snapshot of the worker-owned profile for Vault storage.
+/// Only regular files below the already-created worker profile are accepted;
+/// symlinks and paths escaping that directory fail closed. The snapshot is an
+/// internal value and never enters events, HTTP DTOs, logs, or artifacts.
+fn snapshot_profile(profile_dir: &Path) -> Result<BrowserCandidateMaterial, BrowserError> {
+    let mut files = Vec::new();
+    collect_profile_files(profile_dir, profile_dir, &mut files)?;
+    if files.is_empty() || files.len() > MAX_CANDIDATE_PROFILE_FILES {
+        return Err(BrowserError::CandidateMaterialInvalid);
+    }
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut snapshot = Vec::new();
+    snapshot.extend_from_slice(b"WMG-PROFILE-1\0");
+    for (relative, bytes) in files {
+        let relative = relative
+            .to_str()
+            .ok_or(BrowserError::CandidateMaterialInvalid)?;
+        let path_bytes = relative.as_bytes();
+        if path_bytes.is_empty() || path_bytes.len() > 512 || path_bytes.contains(&0) {
+            return Err(BrowserError::CandidateMaterialInvalid);
+        }
+        let path_len =
+            u16::try_from(path_bytes.len()).map_err(|_| BrowserError::CandidateMaterialInvalid)?;
+        let byte_len =
+            u64::try_from(bytes.len()).map_err(|_| BrowserError::CandidateMaterialInvalid)?;
+        snapshot.extend_from_slice(&path_len.to_le_bytes());
+        snapshot.extend_from_slice(path_bytes);
+        snapshot.extend_from_slice(&byte_len.to_le_bytes());
+        snapshot.extend_from_slice(&bytes);
+        if snapshot.len() > MAX_CANDIDATE_PROFILE_BYTES {
+            return Err(BrowserError::CandidateMaterialInvalid);
+        }
+    }
+    BrowserCandidateMaterial::from_profile(snapshot)
+}
+
+fn collect_profile_files(
+    root: &Path,
+    current: &Path,
+    files: &mut Vec<(PathBuf, Vec<u8>)>,
+) -> Result<(), BrowserError> {
+    let metadata =
+        fs::symlink_metadata(current).map_err(|_| BrowserError::CandidateMaterialInvalid)?;
+    if metadata.file_type().is_symlink() {
+        return Err(BrowserError::CandidateMaterialInvalid);
+    }
+    if metadata.is_file() {
+        let relative = current
+            .strip_prefix(root)
+            .map_err(|_| BrowserError::CandidateMaterialInvalid)?
+            .to_path_buf();
+        let size =
+            usize::try_from(metadata.len()).map_err(|_| BrowserError::CandidateMaterialInvalid)?;
+        if size > MAX_CANDIDATE_PROFILE_BYTES {
+            return Err(BrowserError::CandidateMaterialInvalid);
+        }
+        let bytes = fs::read(current).map_err(|_| BrowserError::CandidateMaterialInvalid)?;
+        if bytes.len() != size {
+            return Err(BrowserError::CandidateMaterialInvalid);
+        }
+        files.push((relative, bytes));
+        return Ok(());
+    }
+    if !metadata.is_dir() || files.len() >= MAX_CANDIDATE_PROFILE_FILES {
+        return Err(BrowserError::CandidateMaterialInvalid);
+    }
+    let mut entries = fs::read_dir(current)
+        .map_err(|_| BrowserError::CandidateMaterialInvalid)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| BrowserError::CandidateMaterialInvalid)?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        collect_profile_files(root, &entry.path(), files)?;
+        if files.len() > MAX_CANDIDATE_PROFILE_FILES {
+            return Err(BrowserError::CandidateMaterialInvalid);
+        }
+    }
+    Ok(())
+}
+
 impl BrowserWorker for ChromiumBrowserWorker {
     fn open_session(&self, mode: BrowserAuthMode) -> BrowserFuture<'_, BrowserSession> {
         Box::pin(self.spawn_session(mode))
@@ -1095,6 +1176,22 @@ impl BrowserWorker for ChromiumBrowserWorker {
             Self::session_error(&mut state)?;
             Self::push_event(&mut state, BrowserEventKind::ProfileAttached);
             Ok(())
+        })
+    }
+
+    fn capture_candidate_material(
+        &self,
+        session: &BrowserSessionId,
+    ) -> BrowserFuture<'_, BrowserCandidateMaterial> {
+        let session = session.clone();
+        Box::pin(async move {
+            let handle = self.session_handle(&session)?;
+            let profile_dir = {
+                let mut state = handle.lock().await;
+                Self::session_error(&mut state)?;
+                state.profile_dir.clone()
+            };
+            snapshot_profile(&profile_dir)
         })
     }
 

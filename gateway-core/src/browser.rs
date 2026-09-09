@@ -44,6 +44,8 @@ pub enum BrowserError {
     OperationCancelled,
     InvalidSession,
     InvalidInput,
+    CandidateCaptureUnavailable,
+    CandidateMaterialInvalid,
 }
 
 impl BrowserError {
@@ -61,6 +63,8 @@ impl BrowserError {
             Self::OperationCancelled => "OPERATION_CANCELLED",
             Self::InvalidSession => "INVALID_SESSION",
             Self::InvalidInput => "INVALID_INPUT",
+            Self::CandidateCaptureUnavailable => "CANDIDATE_CAPTURE_UNAVAILABLE",
+            Self::CandidateMaterialInvalid => "CANDIDATE_MATERIAL_INVALID",
         }
     }
 }
@@ -117,6 +121,69 @@ impl fmt::Debug for ProfileAttachmentRef {
             .finish()
     }
 }
+
+/// Material returned only across the crate-private Browser Worker/Vault seam.
+/// It is intentionally not serializable and its debug output contains no
+/// session values or profile bytes.
+#[derive(Clone, Eq, PartialEq)]
+pub struct BrowserCandidateMaterial {
+    pub(crate) cookie_header: Option<String>,
+    pub(crate) authorization_header: Option<String>,
+    pub(crate) local_storage: Option<String>,
+    pub(crate) browser_profile: Option<Vec<u8>>,
+}
+
+impl BrowserCandidateMaterial {
+    pub(crate) fn from_profile(profile: Vec<u8>) -> Result<Self, BrowserError> {
+        if profile.is_empty() || profile.len() > MAX_CANDIDATE_PROFILE_BYTES {
+            return Err(BrowserError::CandidateMaterialInvalid);
+        }
+        Ok(Self {
+            cookie_header: None,
+            authorization_header: None,
+            local_storage: None,
+            browser_profile: Some(profile),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture(label: &str) -> Self {
+        Self {
+            cookie_header: Some(format!("cookie-{label}")),
+            authorization_header: Some(format!("Bearer authorization-{label}")),
+            local_storage: Some(format!("local-storage-{label}")),
+            browser_profile: Some(format!("profile-{label}").into_bytes()),
+        }
+    }
+}
+
+impl fmt::Debug for BrowserCandidateMaterial {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BrowserCandidateMaterial")
+            .field(
+                "cookie_header",
+                &self.cookie_header.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "authorization_header",
+                &self.authorization_header.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "local_storage",
+                &self.local_storage.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "browser_profile",
+                &self.browser_profile.as_ref().map(Vec::len),
+            )
+            .finish()
+    }
+}
+
+pub(crate) const MAX_CANDIDATE_PROFILE_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const MAX_CANDIDATE_SECRET_TEXT_BYTES: usize = 128 * 1024;
+pub(crate) const MAX_CANDIDATE_PROFILE_FILES: usize = 256;
 
 /// A generic worker mode.  Account/login success is interpreted by a Site
 /// Plugin, never by this contract or the fake worker.
@@ -768,6 +835,7 @@ struct FakeSession {
     current_page_url: Option<Url>,
     current_page_title: String,
     observations: HashMap<BrowserOperationId, BrowserObservationPayload>,
+    candidate_material: Option<BrowserCandidateMaterial>,
 }
 
 #[derive(Debug, Default)]
@@ -788,6 +856,21 @@ pub struct FakeBrowserWorker {
 impl FakeBrowserWorker {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Configure the next server-internal candidate capture for a fake
+    /// session. This helper is crate-visible test infrastructure only.
+    #[cfg(test)]
+    pub(crate) fn set_candidate_material(
+        &self,
+        session: &BrowserSessionId,
+        material: BrowserCandidateMaterial,
+    ) -> Result<(), BrowserError> {
+        let mut state = self.lock_state()?;
+        let session = Self::session_mut(&mut state, session)?;
+        Self::ensure_open(session)?;
+        session.candidate_material = Some(material);
+        Ok(())
     }
 
     /// Test-only issuance of an opaque profile reference.  Production refs
@@ -1056,6 +1139,14 @@ pub trait BrowserWorker: Send + Sync {
         let _ = materializer;
         self.attach_profile(session, profile)
     }
+    /// Capture bounded server-owned material from a live auth session. The
+    /// default is fail-closed for workers that do not implement auth capture.
+    fn capture_candidate_material(
+        &self,
+        _session: &BrowserSessionId,
+    ) -> BrowserFuture<'_, BrowserCandidateMaterial> {
+        Box::pin(async { Err(BrowserError::CandidateCaptureUnavailable) })
+    }
     fn detach_profile(&self, session: &BrowserSessionId) -> BrowserFuture<'_, ()>;
     fn navigate<'a>(
         &'a self,
@@ -1110,6 +1201,7 @@ impl BrowserWorker for FakeBrowserWorker {
                 current_page_url: None,
                 current_page_title: String::new(),
                 observations: HashMap::new(),
+                candidate_material: None,
             };
             Self::push_event(
                 &mut fake,
@@ -1170,6 +1262,22 @@ impl BrowserWorker for FakeBrowserWorker {
             session_state.profile = Some(profile);
             Self::push_event(session_state, BrowserEventKind::ProfileAttached);
             Ok(())
+        })
+    }
+
+    fn capture_candidate_material(
+        &self,
+        session: &BrowserSessionId,
+    ) -> BrowserFuture<'_, BrowserCandidateMaterial> {
+        let session = session.clone();
+        Box::pin(async move {
+            let mut state = self.lock_state()?;
+            let session = Self::session_mut(&mut state, &session)?;
+            Self::ensure_open(session)?;
+            session
+                .candidate_material
+                .take()
+                .ok_or(BrowserError::CandidateCaptureUnavailable)
         })
     }
 

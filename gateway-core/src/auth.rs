@@ -7,7 +7,10 @@
 //! capabilities.  In particular, `SiteAccessCapability` never contains the
 //! `SecretMaterial` stored here.
 
-use crate::browser::{BrowserError, ProfileAttachmentRef, ProfileMaterializer};
+use crate::browser::{
+    BrowserCandidateMaterial, BrowserError, MAX_CANDIDATE_PROFILE_BYTES,
+    MAX_CANDIDATE_SECRET_TEXT_BYTES, ProfileAttachmentRef, ProfileMaterializer,
+};
 use crate::security::{
     EgressPolicy, EgressPolicyError, EgressScope, SiteAccessCapability, SiteAccessError,
     is_secret_header,
@@ -36,11 +39,22 @@ pub enum AccountState {
     Error,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SiteSessionRef {
     site_id: String,
     account_ref: String,
     session_id: String,
+}
+
+impl fmt::Debug for SiteSessionRef {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SiteSessionRef")
+            .field("site_id", &self.site_id)
+            .field("account_ref", &"[opaque]")
+            .field("session_id", &"[opaque]")
+            .finish()
+    }
 }
 
 impl SiteSessionRef {
@@ -172,12 +186,43 @@ pub enum VaultError {
     CandidateCancelled,
     SessionNotActive,
     EmptySecretMaterial,
+    InvalidCandidateMaterial,
     ProfileUnavailable,
     ProfileAttachmentNotFound,
     ProfileAttachmentExpired,
 }
 
 const PROFILE_ATTACHMENT_TTL: Duration = Duration::from_secs(60);
+
+fn validate_candidate_material(material: &BrowserCandidateMaterial) -> Result<(), VaultError> {
+    let mut has_material = false;
+    for value in [
+        material.cookie_header.as_deref(),
+        material.authorization_header.as_deref(),
+        material.local_storage.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if value.is_empty()
+            || value.len() > MAX_CANDIDATE_SECRET_TEXT_BYTES
+            || value.chars().any(char::is_control)
+        {
+            return Err(VaultError::InvalidCandidateMaterial);
+        }
+        has_material = true;
+    }
+    if let Some(profile) = material.browser_profile.as_ref() {
+        if profile.is_empty() || profile.len() > MAX_CANDIDATE_PROFILE_BYTES {
+            return Err(VaultError::InvalidCandidateMaterial);
+        }
+        has_material = true;
+    }
+    if !has_material {
+        return Err(VaultError::EmptySecretMaterial);
+    }
+    Ok(())
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CandidateValidation {
@@ -315,6 +360,28 @@ impl SessionVault {
             },
         );
         Ok(reference)
+    }
+
+    /// Capture material from the trusted Browser Worker/Vault seam. The
+    /// material is validated and immediately becomes Vault-owned; callers only
+    /// receive an opaque session reference.
+    pub(crate) fn capture_candidate_material(
+        &self,
+        site_id: &str,
+        account_ref: &str,
+        material: BrowserCandidateMaterial,
+    ) -> Result<SiteSessionRef, VaultError> {
+        validate_candidate_material(&material)?;
+        self.create_candidate_session(
+            site_id,
+            account_ref,
+            SecretMaterial::new(
+                material.cookie_header,
+                material.authorization_header,
+                material.local_storage,
+                material.browser_profile,
+            ),
+        )
     }
 
     /// Creates a deterministic fake session for contract tests without

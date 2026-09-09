@@ -951,6 +951,12 @@ impl ApiError {
             BrowserAuthRuntimeError::CandidateRejected => "AUTH_CANDIDATE_REJECTED",
             BrowserAuthRuntimeError::InvalidCandidate => "AUTH_CANDIDATE_INVALID",
             BrowserAuthRuntimeError::InvalidObservation => "AUTH_OBSERVATION_INVALID",
+            BrowserAuthRuntimeError::CandidateCaptureRequestMismatch => {
+                "AUTH_CANDIDATE_CAPTURE_REQUEST_MISMATCH"
+            }
+            BrowserAuthRuntimeError::CandidateCaptureAlreadyConsumed => {
+                "AUTH_CANDIDATE_CAPTURE_ALREADY_CONSUMED"
+            }
         };
         Self {
             status: StatusCode::CONFLICT,
