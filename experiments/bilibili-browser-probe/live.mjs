@@ -16,6 +16,8 @@ import { chromium } from 'playwright-core';
 import { navigationDescriptor, validateLiveInvocation } from '../../plugins/bilibili/live_selector.mjs';
 import { summarizeObservation, SCHEMA_VERSION } from '../../plugins/bilibili/experimental_probe.mjs';
 import { classifyError, classifyTransport, diagnosticCounters } from './diagnostic.mjs';
+import { createFinalizer, terminationClass } from './finalizer.mjs';
+import { createStageTracker } from './stage-markers.mjs';
 
 const MAX_REQUESTS = 200;
 const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
@@ -69,8 +71,16 @@ function statusClass(status) {
   return `${Math.floor(status / 100)}xx`;
 }
 
+function recordStage(state, event, fields = {}) {
+  state.stages?.record(event, { ...diagnosticCounters(state), ...fields });
+}
+
 function recordFailure(state, error, phaseHint, status, transportStage) {
-  if (state.failure || state.transportFinalized) return state.failure;
+  // Once the broker has emitted a successful CONNECT response, a later socket
+  // callback belongs to the already observed transport outcome. The explicit
+  // response-budget path is the only failure that may supersede it before the
+  // tunnel cleanup callback runs.
+  if (state.failure || state.transportFinalized || state.transport && !state.responseLimitTriggered) return state.failure;
   const counters = diagnosticCounters(state);
   state.failure = classifyError(error, phaseHint, { ...counters, status, transport_stage: transportStage });
   return state.failure;
@@ -98,18 +108,21 @@ export function brokerServer(state, overrides = {}) {
   const makeConnect = overrides.connect || tls.connect;
   const onTunnelClosed = overrides.onTunnelClosed || (() => {});
   const server = http.createServer(async (req, res) => {
-    if (state.requests++ >= MAX_REQUESTS) { res.writeHead(429); res.end(); return; }
+    recordStage(state, 'broker_request_start');
+    if (state.requests++ >= MAX_REQUESTS) { recordStage(state, 'broker_request_result', { status_class: '4xx', transport_outcome: 'failure' }); res.writeHead(429); res.end(); return; }
     let target;
-    try { target = new URL(req.url); } catch { res.writeHead(400); res.end(); return; }
+    try { target = new URL(req.url); } catch { recordStage(state, 'broker_request_result', { status_class: '4xx', transport_outcome: 'failure' }); res.writeHead(400); res.end(); return; }
     const host = target.hostname.toLowerCase();
     if (target.protocol !== 'https:' || target.port && target.port !== '443' || !allowedHost(host)) {
       state.denied.push({ kind: 'http', host: host || 'unknown', reason: 'host-or-scheme-policy' });
+      recordStage(state, 'broker_request_result', { status_class: '4xx', transport_outcome: 'failure' });
       res.writeHead(403); res.end('denied'); return;
     }
     let address;
     try { address = await resolveAddress(host, state.pins); } catch {
       recordFailure(state, { code: 'ERR_DNS_ADDRESS_POLICY' }, 'dns_address_policy', undefined, 'resolve_policy');
       state.denied.push({ kind: 'http', host, reason: 'dns-address-policy' });
+      recordStage(state, 'broker_request_result', { status_class: '4xx', transport_stage: 'resolve_policy', transport_outcome: 'failure' });
       res.writeHead(403); res.end('denied'); return;
     }
     const options = {
@@ -118,6 +131,7 @@ export function brokerServer(state, overrides = {}) {
       rejectUnauthorized: true,
     };
     const upstream = makeRequest(options, (reply) => {
+      recordStage(state, 'broker_request_result', { status_class: statusClass(reply.statusCode), transport_outcome: 'success' });
       res.writeHead(reply.statusCode || 502, reply.headers);
       reply.on('data', (chunk) => {
         state.responseBytes += chunk.length;
@@ -133,27 +147,33 @@ export function brokerServer(state, overrides = {}) {
     });
     upstream.on('error', (error) => {
       recordFailure(state, error, 'broker_connect');
+      recordStage(state, 'broker_request_result', { transport_outcome: 'failure' });
       if (!res.writableEnded) { res.writeHead(502); res.end(); }
     });
     req.pipe(upstream);
   });
   server.on('connect', async (req, client, head) => {
-    if (state.requests++ >= MAX_REQUESTS) { client.end('HTTP/1.1 429 Too Many Requests\r\n\r\n'); return; }
+    recordStage(state, 'broker_request_start');
+    if (state.requests++ >= MAX_REQUESTS) { recordStage(state, 'broker_request_result', { status_class: '4xx', transport_outcome: 'failure' }); client.end('HTTP/1.1 429 Too Many Requests\r\n\r\n'); return; }
     const [host, portText] = String(req.url).split(':');
     const port = Number(portText || 443);
     if (!allowedHost(host) || port !== 443) {
       state.denied.push({ kind: 'connect', host: String(host).toLowerCase(), reason: 'host-or-port-policy' });
+      recordStage(state, 'broker_request_result', { status_class: '4xx', transport_outcome: 'failure' });
       client.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return;
     }
     let address;
     try { address = await resolveAddress(host.toLowerCase(), state.pins); } catch {
       recordFailure(state, { code: 'ERR_DNS_ADDRESS_POLICY' }, 'dns_address_policy', undefined, 'resolve_policy');
       state.denied.push({ kind: 'connect', host: String(host).toLowerCase(), reason: 'dns-address-policy' });
+      recordStage(state, 'broker_request_result', { status_class: '4xx', transport_stage: 'resolve_policy', transport_outcome: 'failure' });
       client.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n'); return;
     }
     const upstream = makeConnect({ host: address, port, servername: host, rejectUnauthorized: true });
     upstream.once('secureConnect', () => {
       client.write('HTTP/1.1 200 Connection Established\r\nProxy-agent: bounded-bilibili-probe\r\n\r\n');
+      recordStage(state, 'broker_request_result', { status_class: '2xx', transport_stage: 'proxy_response', transport_outcome: 'success' });
+      recordStage(state, 'transport_outcome', { status_class: '2xx', transport_stage: 'tls_handshake', transport_outcome: 'success' });
       recordTransportSuccess(state, 'proxy_response', 200);
       if (head?.length) upstream.write(head);
       let closed = false;
@@ -163,6 +183,7 @@ export function brokerServer(state, overrides = {}) {
         client.unpipe(upstream); upstream.unpipe(counted);
         counted.destroy(); upstream.destroy(); client.destroy();
         if (!state.failure) state.transport = classifyTransport({ stage: 'downstream_close', outcome: 'success', ...diagnosticCounters(state) });
+        recordStage(state, 'transport_outcome', { transport_stage: 'downstream_close', transport_outcome: state.failure ? 'failure' : 'success' });
         state.transportFinalized = true;
         onTunnelClosed({ client_destroyed: client.destroyed, upstream_destroyed: upstream.destroyed, counter_destroyed: counted.destroyed });
       };
@@ -171,6 +192,7 @@ export function brokerServer(state, overrides = {}) {
         if (state.responseBytes > (state.responseLimit || MAX_RESPONSE_BYTES)) {
           state.responseLimitTriggered = true;
           recordFailure(state, { code: 'BROKER_CONNECT' }, 'broker_connect', undefined, 'downstream_close');
+          recordStage(state, 'transport_outcome', { transport_stage: 'downstream_close', transport_outcome: 'failure' });
           closeTunnel(); callback(new Error('response budget exceeded')); return;
         }
         callback(null, chunk, encoding);
@@ -181,12 +203,14 @@ export function brokerServer(state, overrides = {}) {
       client.pipe(upstream);
       upstream.pipe(counted).pipe(client);
     });
-    upstream.on('error', (error) => { recordFailure(state, error, 'broker_connect'); client.destroy(); });
+    upstream.on('error', (error) => { recordFailure(state, error, 'broker_connect'); recordStage(state, 'broker_request_result', { transport_outcome: 'failure' }); recordStage(state, 'transport_outcome', { transport_stage: 'tcp_connect', transport_outcome: 'failure' }); client.destroy(); });
     client.on('error', () => upstream.destroy());
   });
   server.on('upgrade', (req, socket) => {
+    recordStage(state, 'broker_request_start');
     state.requests += 1;
     state.denied.push({ kind: 'upgrade', host: String(req.headers.host || 'unknown').toLowerCase(), reason: 'upgrade-disabled' });
+    recordStage(state, 'broker_request_result', { status_class: '4xx', transport_outcome: 'failure' });
     socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
   });
   return server;
@@ -241,7 +265,7 @@ export function removeDisposableProfile(profile) {
 
 export async function runLive(invocation, browserPath = process.env.CHROME_PATH || '/usr/bin/google-chrome') {
   const admitted = validateLiveInvocation(invocation);
-  const state = { requests: 0, responseBytes: 0, metadataBytes: 0, denied: [], pins: new Map() };
+  const state = { requests: 0, responseBytes: 0, metadataBytes: 0, denied: [], pins: new Map(), stages: createStageTracker() };
   const candidates = new Map();
   const broker = brokerServer(state);
   const brokerPort = await listen(broker);
@@ -249,13 +273,22 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
   let context;
   let profile;
   let result;
+  let caughtError;
+  const finalizer = createFinalizer(state.stages);
   try {
     profile = await createDisposableProfile();
-    context = await chromium.launchPersistentContext(profile, { executablePath: browserPath, headless: true, timeout: admitted.timeout_ms, args: [
-      `--proxy-server=http://127.0.0.1:${brokerPort}`, '--proxy-bypass-list=<-loopback>',
-      ...LIVE_BROWSER_ARGS,
-      '--no-first-run', '--no-default-browser-check',
-    ], serviceWorkers: 'block' });
+    recordStage(state, 'browser_launch_start');
+    try {
+      context = await chromium.launchPersistentContext(profile, { executablePath: browserPath, headless: true, timeout: admitted.timeout_ms, args: [
+        `--proxy-server=http://127.0.0.1:${brokerPort}`, '--proxy-bypass-list=<-loopback>',
+        ...LIVE_BROWSER_ARGS,
+        '--no-first-run', '--no-default-browser-check',
+      ], serviceWorkers: 'block' });
+      recordStage(state, 'browser_launch_result', { status_class: '2xx', transport_outcome: 'success' });
+    } catch (error) {
+      recordStage(state, 'browser_launch_result', { transport_outcome: 'failure' });
+      throw error;
+    }
     browser = context.browser();
     await context.route('**/*', async (route) => {
       const headers = safeRequestHeaders(await route.request().allHeaders());
@@ -280,14 +313,21 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
       pendingObservations.add(task);
       task.finally(() => pendingObservations.delete(task));
     });
+    recordStage(state, 'navigation_start');
+    let navigationResponse;
     try {
-      const navigationResponse = await page.goto(admitted.navigation.url, { waitUntil: 'domcontentloaded', timeout: admitted.timeout_ms });
+      navigationResponse = await page.goto(admitted.navigation.url, { waitUntil: 'domcontentloaded', timeout: admitted.timeout_ms });
+      const navigationStatus = navigationResponse?.status();
+      recordStage(state, 'navigation_status', { status_class: statusClass(navigationStatus) });
       if (navigationResponse?.status() >= 300) {
         recordFailure(state, { code: 'ERR_HTTP_RESPONSE_CODE_FAILURE' }, 'http_status', navigationResponse.status());
         throw new Error('navigation returned a non-success status');
       }
+      recordStage(state, 'navigation_end', { status_class: statusClass(navigationStatus), transport_outcome: 'success' });
     } catch (error) {
       recordFailure(state, error, 'chromium_navigation');
+      recordStage(state, 'navigation_status', { transport_stage: state.failure?.transport_stage, transport_outcome: 'failure' });
+      recordStage(state, 'navigation_end', { transport_stage: state.failure?.transport_stage, transport_outcome: 'failure' });
       throw error;
     }
     await page.waitForTimeout(Math.min(3000, admitted.timeout_ms));
@@ -316,13 +356,10 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
     observation.containment = { broker: 'public-host-pinned', dns_pin: 'public-address-pinned', redirects: 'revalidated-per-hop', connect: 'public-host-only', websocket: 'no-upgrade-export', service_worker: 'disabled-for-observation', quic: 'disabled', secret_headers: 'stripped-and-not-exported' };
     observation.independent_consumer = { requests: independent.length, bytes: totalBytes, results: independent.map(({ role, status_class, bytes, content_type }) => ({ role, status_class, bytes, content_type })) };
     observation.cleanup = { browser_exit: 'complete', temporary_profile: 'removed-in-finally', ephemeral_candidates: 'cleared-in-finally' };
-    result = { schema_version: SCHEMA_VERSION, observation, denied_count: state.denied.length };
+    state.stages.record('finalizer_entry');
+    result = { schema_version: SCHEMA_VERSION, termination: 'normal', observation, denied_count: state.denied.length, stage_markers: state.stages.seal() };
   } catch (error) {
-    result = {
-      schema_version: SCHEMA_VERSION,
-      diagnostic: state.failure || recordFailure(state, error, 'chromium_navigation'),
-      cleanup: { browser_exit: 'pending', temporary_profile: 'pending', ephemeral_candidates: 'pending' },
-    };
+    caughtError = error;
   } finally {
     candidates.clear();
     if (context) await context.close().catch(() => {});
@@ -331,6 +368,11 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
     broker.close();
     state.pins.clear(); state.denied.length = 0;
   }
-  if (result?.diagnostic) result.cleanup = { browser_exit: 'complete', temporary_profile: 'removed-in-finally', ephemeral_candidates: 'cleared-in-finally' };
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  if (!result) {
+    const diagnostic = state.failure || recordFailure(state, caughtError, 'chromium_navigation') || classifyError(caughtError, 'unknown', diagnosticCounters(state));
+    result = finalizer.finalize({ result: 'failure', termination: terminationClass(caughtError), diagnostic, activity: { page_navigation: true }, cleanup: {
+      browser_exit: 'complete', broker_close: 'complete', temporary_profile: 'complete', ephemeral_candidates: 'complete', dns_pins: 'complete', staging: 'unknown',
+    } });
+  }
+  return result;
 }
