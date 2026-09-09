@@ -15,16 +15,16 @@ Confirm #188 is `status:ready`, `env:cloud`, and owner-free, then claim a new At
 Reuse the already accepted implementation/artifact unless real target evidence requires a focused correction:
 
 ```text
-Candidate: 47c000bd25abf22b4c759de36b50c2cf259a07a8
-PR: #217
-Hosted run: 34307216913
-Artifact: 10087091648
-Artifact size: 4,217,514 bytes
-Digest: sha256:3d30d09c74d071c51747088b90cfad88b37da3588ce07c7a6b87bdde28cee0f9
+Candidate: 4ffcb63ef156d042571c39d0fc15a5b4e30a8b54
+PR: #221
+Hosted run: 34309034915
+Artifact: 10087720720
+Artifact size: 4,218,043 bytes
+Digest: sha256:a5b9f07eb5ab7d81289539a90574d50a306353d80e4f37f7131e592ab555bcef
 Selector: bilibili:BV14V411W7r5:part-2
 ```
 
-The implementation anchor includes accepted Issue #199 stage markers, Issue #203 post-navigation lifecycle classification, Issue #207 finite navigation-rejection classification, Issue #211 transport/failure-precedence correction, and Issue #215 upstream response/socket lifecycle tracing (PR #217 merged to `main` at `2285eca6ba3dbce884ac2ba486bea5e000c6cd54`). It records only finite navigation-promise, allowlisted rejection, page/browser lifecycle, process termination, finalizer, upstream response and socket closure markers; no target evidence is reused.
+The implementation anchor includes accepted Issue #199 stage markers, Issue #203 post-navigation lifecycle classification, Issue #207 finite navigation-rejection classification, Issue #211 transport/failure-precedence correction, Issue #215 upstream response/socket lifecycle tracing, and Issue #219 bounded marker retention (PR #221 merged to `main` at `46d3a67588f066c8b6a8b9de0e6edf5391aa9ae7`). It records only finite navigation-promise, allowlisted rejection, page/browser lifecycle, process termination, finalizer, upstream response and socket closure markers; no target evidence is reused.
 
 ## Target rule
 
