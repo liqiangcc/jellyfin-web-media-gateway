@@ -283,7 +283,7 @@ impl AuthRouteCoordinator {
             .await;
         match result {
             Ok(operation) => {
-                record.last_operation = operation;
+                record.last_operation = operation.value();
                 record
                     .requests
                     .insert(request_id.to_owned(), request_fingerprint);
@@ -1055,6 +1055,11 @@ pub(crate) async fn navigation_handler(
         Ok(url) => url,
         Err(error) => return error.into_response(),
     };
+    let egress = state
+        .egress_policy
+        .read()
+        .expect("egress policy poisoned")
+        .clone();
     match state
         .auth_routes
         .navigate(
@@ -1062,11 +1067,7 @@ pub(crate) async fn navigation_handler(
             &request.request_id,
             request.operation_id,
             url,
-            state
-                .egress_policy
-                .read()
-                .expect("egress policy poisoned")
-                .clone(),
+            egress,
         )
         .await
     {
