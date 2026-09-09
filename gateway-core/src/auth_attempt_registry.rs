@@ -206,7 +206,8 @@ impl<W: BrowserWorker + 'static> BrowserAuthAttemptRegistry<W> {
                 .expect("browser auth attempt registry poisoned");
             let ids = attempts
                 .iter()
-                .filter_map(|(id, registered)| registered.attempt.is_expired().then(|| id.clone()))
+                .filter(|(_, registered)| registered.attempt.is_expired())
+                .map(|(id, _)| id.clone())
                 .collect::<Vec<_>>();
             ids.into_iter()
                 .filter_map(|id| attempts.remove(&id))
@@ -224,6 +225,10 @@ impl<W: BrowserWorker + 'static> BrowserAuthAttemptRegistry<W> {
             .lock()
             .expect("browser auth attempt registry poisoned")
             .len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     fn take(
