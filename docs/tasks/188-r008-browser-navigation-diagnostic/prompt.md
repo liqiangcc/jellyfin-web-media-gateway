@@ -1,23 +1,41 @@
-# Session Bootstrap — R008 browser navigation diagnostic
+# Session Bootstrap — R008 browser navigation fast path
 
-You are starting the independent `liqiangcc/jellyfin-web-media-gateway` Task for GitHub Issue #188.
+You are executing `liqiangcc/jellyfin-web-media-gateway` Issue #188.
 
-## Execution Context
+## Start
+
+Read Issue #188, its latest comments, and `docs/tasks/188-r008-browser-navigation-diagnostic/task.md`.
+
+Confirm #188 is `status:ready`, `env:cloud`, and owner-free, then claim a new Attempt according to the repository lifecycle protocol.
+
+## Existing accepted anchor
+
+Reuse the already accepted implementation/artifact unless real target evidence requires a focused correction:
 
 ```text
-GitHub Issue: #188
-Task Contract: docs/tasks/188-r008-browser-navigation-diagnostic/task.md
-Expected worker: cloud-codex (gpt-5.6-luna, reasoning high; record actual Fast availability)
-Expected environment label: env:cloud
-Downstream handoff profile: docs/tasks/handoffs/cloud.md
+Candidate: 77712ba7acdfd4083bc8e014db20a0a30d070e8c
+PR: #190
+Hosted run: 34250631237
+Artifact: 10065870674
+Digest: sha256:8a290032265a03553d654a20379b451b9ed07d013ec2c7dc76a33e229ab84a39
+Selector: bilibili:BV14V411W7r5:part-2
 ```
 
-## Start Protocol
+## Target rule
 
-Before claiming the Issue, read `AGENTS.md`, Issue #188 and all relevant comments, this Task Contract, `docs/tasks/issue-lifecycle-protocol.md`, `docs/tasks/execution-anchor-recovery-protocol.md`, `docs/tasks/freshness-integration-protocol.md`, the required canonical documents, the #166/#182/#185 Final Acceptance history, the accepted #187 refresh, and the current probe/diagnostic/runbook files.
+Do not require tx-node to be globally clean. The existing owner-controlled `source-runtime` may remain active and is not a blocker.
 
-Confirm from GitHub that #188 is `status:ready`, `env:cloud`, owner-free, and that the current Candidate/artifact dependencies are read back before any target action. Claim the Issue and set `status:in-progress` before writing code. Use the Task Contract as the only Scope/Claims/Success Criteria authority.
+Start a disposable browser runtime alongside it using only minimal separation:
 
-All build, test, package and artifact work belongs in GitHub-hosted Actions. Do not run local build/test/package/install. The tx-node route, if admitted by the Contract after exact-Candidate hosted checks, is only the existing authenticated Tailscale SSH control plane. Do not broaden it to a proxy, relay, phone, TV, VNC, CDP, production service or #166 mutation.
+- fresh temporary Chrome profile;
+- separate temporary display/Xvfb if needed;
+- separate non-conflicting local CDP/debugging endpoint if needed;
+- cleanup only processes/files created by this Attempt.
 
-On completion, post the required `[EXECUTION REPORT]` (or `[BLOCKER REPORT]`), transition to `status:review` or `status:blocked`, release ownership, and stop. Do not set `status:done`, close the Issue, start another Attempt, or run a later playback task.
+Do not wait for #191 or #195. Do not create a dedicated UID/GID, cgroup, network namespace, slot descriptor, or general browser-slot platform unless a concrete target failure proves one is necessary.
+
+Use the existing Tailscale SSH control path. Run the probe/browser as `gateway-verify` when practical. If a temporary port/display collides, choose another and continue instead of blocking.
+
+Run one navigation session first; use a second only if useful. A concrete navigation failure class is valid diagnostic evidence, not a blocker.
+
+On completion post `[EXECUTION REPORT]`, move #188 to `status:review`, release ownership, and stop. Use `[BLOCKER REPORT]` only if target access/artifact execution or starting the disposable runtime is genuinely impossible.
