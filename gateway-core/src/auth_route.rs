@@ -1265,7 +1265,7 @@ mod tests {
         assert!(replay.3);
         let cancelled = coordinator.cancel(&first.0, "cancel-1").unwrap();
         assert!(!cancelled.1);
-        assert_eq!(coordinator.cancel(&first.0, "cancel-1").unwrap().1, true);
+        assert!(coordinator.cancel(&first.0, "cancel-1").unwrap().1);
         assert!(matches!(
             coordinator.events(&first.0, 0),
             Err(ApiError {

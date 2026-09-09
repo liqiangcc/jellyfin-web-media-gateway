@@ -675,6 +675,7 @@ impl GatewayService {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn with_fake_auth_routes(
         max_capabilities: usize,
         registry: Arc<SiteAdapterRegistry>,
