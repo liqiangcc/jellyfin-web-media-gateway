@@ -232,7 +232,7 @@ jobs:
             try { parseSelector(value); throw new Error('caller authority accepted'); } catch (error) { if (error.message === 'caller authority accepted') throw error; }
           }
           const live = fs.readFileSync('experiments/bilibili-browser-probe/live.mjs', 'utf8');
-          for (const marker of ['publicAddressFor', 'MAX_REQUESTS', 'MAX_INDEPENDENT_BYTES', 'serviceWorkers', 'launchPersistentContext', 'mkdtemp', 'pendingObservations', 'onTunnelClosed', 'transportFinalized', 'candidates.clear', 'createStageTracker', 'recordStage', 'stage_markers', 'navigation_promise_result', 'page_lifecycle_result', 'browser_disconnect', 'process_termination', 'classifyNavigationLifecycle', 'finalizer_entry']) {
+          for (const marker of ['publicAddressFor', 'MAX_REQUESTS', 'MAX_INDEPENDENT_BYTES', 'serviceWorkers', 'launchPersistentContext', 'mkdtemp', 'pendingObservations', 'onTunnelClosed', 'transportFinalized', 'candidates.clear', 'createStageTracker', 'recordStage', 'stage_markers', 'navigation_promise_result', 'page_lifecycle_result', 'browser_disconnect', 'process_termination', 'classifyNavigationLifecycle', 'finalizer_entry', 'shouldRecordFailure', 'explicitNavigationLifecycle']) {
             if (!live.includes(marker)) throw new Error(`missing live boundary marker: ${marker}`);
           }
           const finalizer = fs.readFileSync('experiments/bilibili-browser-probe/finalizer.mjs', 'utf8');
@@ -243,7 +243,7 @@ jobs:
           for (const marker of ['NAVIGATION_LIFECYCLE_REASONS', 'navigation_promise_rejected', 'navigation_target_closed', 'navigation_target_crashed', 'navigation_browser_disconnected', 'lifecycle_outcome']) {
             if (!diagnostic.includes(marker)) throw new Error(`missing diagnostic classification marker: ${marker}`);
           }
-          if (!live.includes("phaseHint !== 'chromium_navigation'")) throw new Error('navigation failure precedence guard missing');
+          if (!live.includes("phaseHint === 'chromium_navigation'")) throw new Error('navigation failure precedence guard missing');
           const preflight = fs.readFileSync('experiments/bilibili-browser-probe/transport-preflight.mjs', 'utf8');
           for (const marker of ['PREFLIGHT_AUTHORITY', 'method: \'CONNECT\'', 'page_navigation: false', 'media_request: false', 'selector: false', 'consumer: false']) {
             if (!preflight.includes(marker)) throw new Error(`missing transport preflight boundary marker: ${marker}`);

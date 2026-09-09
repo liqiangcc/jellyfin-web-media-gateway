@@ -76,13 +76,19 @@ function recordStage(state, event, fields = {}) {
   state.stages?.record(event, { ...diagnosticCounters(state), ...fields });
 }
 
+export function shouldRecordFailure(state, phaseHint, lifecycleOutcome) {
+  const explicitNavigationLifecycle = phaseHint === 'chromium_navigation' &&
+    typeof lifecycleOutcome === 'string' && lifecycleOutcome !== 'unknown';
+  return !(state.failure || state.transportFinalized ||
+    (state.transport && !state.responseLimitTriggered && !explicitNavigationLifecycle));
+}
+
 function recordFailure(state, error, phaseHint, status, transportStage, lifecycleOutcome) {
   // Once the broker has emitted a successful CONNECT response, a later socket
   // callback belongs to the already observed transport outcome. The explicit
-  // response-budget path is the only failure that may supersede it before the
-  // tunnel cleanup callback runs.
-  if (state.failure || state.transportFinalized ||
-      (state.transport && !state.responseLimitTriggered && phaseHint !== 'chromium_navigation')) return state.failure;
+  // response-budget path or an explicitly settled navigation lifecycle is the
+  // only failure that may supersede it before the tunnel cleanup callback runs.
+  if (!shouldRecordFailure(state, phaseHint, lifecycleOutcome)) return state.failure;
   const counters = diagnosticCounters(state);
   state.failure = { ...classifyError(error, phaseHint, { ...counters, status, transport_stage: transportStage, lifecycle_outcome: lifecycleOutcome }), lifecycle_outcome: lifecycleOutcome || 'unknown' };
   return state.failure;

@@ -6,6 +6,7 @@ import { PassThrough, Readable } from 'node:stream';
 import { once } from 'node:events';
 import {
   brokerServer, consumeResponseBody, createDisposableProfile, removeDisposableProfile, LIVE_BROWSER_ARGS,
+  shouldRecordFailure,
 } from './live.mjs';
 
 async function listen(server) {
@@ -129,6 +130,15 @@ test('late upstream errors cannot replace a finalized successful CONNECT outcome
   assert.equal(state.failure, undefined);
   assert.equal(state.transport.transport_outcome, 'success');
   client.destroy();
+});
+
+test('transport success admits only an explicitly settled navigation failure', () => {
+  const state = { transport: { transport_outcome: 'success' } };
+  assert.equal(shouldRecordFailure(state, 'broker_connect'), false);
+  assert.equal(shouldRecordFailure(state, 'chromium_navigation'), false);
+  assert.equal(shouldRecordFailure(state, 'chromium_navigation', 'unknown'), false);
+  assert.equal(shouldRecordFailure(state, 'chromium_navigation', 'rejected'), true);
+  assert.equal(shouldRecordFailure({ ...state, responseLimitTriggered: true }, 'broker_connect'), true);
 });
 
 test('independent body reader counts success/error/over-budget bytes and cancellation', async () => {
