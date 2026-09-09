@@ -15,16 +15,16 @@ Confirm #188 is `status:ready`, `env:cloud`, and owner-free, then claim a new At
 Reuse the already accepted implementation/artifact unless real target evidence requires a focused correction:
 
 ```text
-Candidate: c95beda94c87f166a1dd5056efb1834bdb79cc10
-PR: #201
-Hosted run: 34297453241
-Artifact: 10083700408
-Artifact size: 4,212,729 bytes
-Digest: sha256:e0f289cff7852aad60300863d0a7c86f8840d6291a5511e9e70b85095894fbb2
+Candidate: e277220b625a2c4846ad3469a841398c685ad13b
+PR: #205
+Hosted run: 34300151962
+Artifact: 10084651588
+Artifact size: 4,215,293 bytes
+Digest: sha256:f58e4ece689595b4e73808e8a8843dca25becef738209644658f77cf22713e50
 Selector: bilibili:BV14V411W7r5:part-2
 ```
 
-The implementation anchor includes accepted Issue #199 stage-marker follow-up (PR #201 merged to `main` at `97b27f34dda868e352782fea1e6f9a1aa28be91a`).
+The implementation anchor includes accepted Issue #199 stage markers and Issue #203 post-navigation lifecycle classification (PR #205 merged to `main` at `4b2590bf24c445ee1366a4c1e2101a7830efa357`). It records only finite navigation-promise, page/browser lifecycle, process termination and finalizer markers; no target evidence is reused.
 
 ## Target rule
 
