@@ -1,0 +1,509 @@
+//! Production Bilibili SiteAdapter boundary.
+//!
+//! This crate owns Bilibili URL, BVID and part semantics.  Acquisition is
+//! intentionally mediated by the generic BrowserObservation plus a
+//! server-owned handoff; this adapter never performs network I/O or receives
+//! browser credentials.
+
+use serde::{Deserialize, Serialize};
+use site_adapter_api::{
+    AdapterError, BrowserExpiryHint, BrowserMediaKind, BrowserObservation, BrowserStatusClass,
+    MediaProtection, NavigationContext, RecognizeResult, ResolveContext, ResolvedMedia,
+    ResolvedStream, ServerOwnedObservation, SiteAdapter, SiteAdapterRegistry, SourceLocator,
+    StreamProtocol, validate_browser_observation, validate_server_owned_observation,
+};
+use url::Url;
+
+pub const SITE_ID: &str = "bilibili";
+pub const PLUGIN_ID: &str = "bilibili";
+pub const PLUGIN_VERSION: &str = "1.0.0";
+pub const LOCATOR_VERSION: u32 = 1;
+pub const RECOGNITION_PRIORITY: u16 = 100;
+
+const LOCATOR_SCHEMA: &str = "bilibili.source.v1";
+const MAX_INPUT_BYTES: usize = 2048;
+const MAX_LOCATOR_BYTES: usize = 1024;
+const MAX_BVID_BYTES: usize = 12;
+const MAX_TITLE_BYTES: usize = 512;
+
+#[derive(Clone, Debug, Default)]
+pub struct BilibiliAdapter;
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct LocatorPayload {
+    schema: String,
+    bvid: String,
+    part: u16,
+}
+
+impl BilibiliAdapter {
+    pub const fn new() -> Self {
+        Self
+    }
+
+    pub fn plugin_version(&self) -> &'static str {
+        PLUGIN_VERSION
+    }
+
+    /// Register the production adapter in a caller-owned registry.  The
+    /// registry remains the only routing authority and duplicate IDs fail
+    /// closed there.
+    pub fn register(registry: &mut SiteAdapterRegistry) -> Result<(), AdapterError> {
+        registry.register(std::sync::Arc::new(Self::new()))
+    }
+
+    pub fn page_url(&self, locator: &SourceLocator) -> Result<Url, AdapterError> {
+        let payload = decode_locator(locator)?;
+        let mut url = Url::parse(&format!("https://www.bilibili.com/video/{}/", payload.bvid))
+            .map_err(|_| AdapterError::InvalidInput)?;
+        if payload.part > 1 {
+            url.query_pairs_mut()
+                .append_pair("p", &payload.part.to_string());
+        }
+        Ok(url)
+    }
+
+    /// The direct method deliberately cannot acquire media.  Callers must
+    /// supply both the generic observation and server-owned handoff so a
+    /// plugin cannot invent an upstream URL or bypass the access boundary.
+    pub fn resolve_observation(
+        &self,
+        locator: &SourceLocator,
+        observation: &BrowserObservation,
+        server_observation: &ServerOwnedObservation,
+    ) -> Result<ResolvedMedia, AdapterError> {
+        self.resolve_with_context(
+            locator,
+            ResolveContext {
+                browser_observation: Some(observation),
+                server_observation: Some(server_observation),
+            },
+        )
+    }
+}
+
+impl SiteAdapter for BilibiliAdapter {
+    fn site_id(&self) -> &'static str {
+        SITE_ID
+    }
+
+    fn plugin_id(&self) -> &'static str {
+        PLUGIN_ID
+    }
+
+    fn recognize(&self, input: &str) -> Result<RecognizeResult, AdapterError> {
+        let unmatched = || RecognizeResult {
+            matched: false,
+            site_id: SITE_ID.into(),
+            plugin_id: PLUGIN_ID.into(),
+            priority: RECOGNITION_PRIORITY,
+            locator: None,
+        };
+        if input.is_empty() || input.len() > MAX_INPUT_BYTES || input.chars().any(char::is_control)
+        {
+            return Ok(unmatched());
+        }
+        let url = match Url::parse(input) {
+            Ok(url) => url,
+            Err(_) => return Ok(unmatched()),
+        };
+        if url.scheme() != "https"
+            || !matches!(
+                url.host_str(),
+                Some("www.bilibili.com") | Some("bilibili.com")
+            )
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.fragment().is_some()
+        {
+            return Ok(unmatched());
+        }
+        let mut segments: Vec<_> = url
+            .path_segments()
+            .map(|segments| segments.collect())
+            .unwrap_or_default();
+        if segments.last() == Some(&"") {
+            segments.pop();
+        }
+        if segments.len() != 2 || segments[0] != "video" || !is_bvid(segments[1]) {
+            return Ok(unmatched());
+        }
+        let mut part = 1_u16;
+        let mut seen_part = false;
+        for (key, value) in url.query_pairs() {
+            if key != "p" || seen_part {
+                return Ok(unmatched());
+            }
+            seen_part = true;
+            part = match value.parse::<u16>() {
+                Ok(value) if (1..=9999).contains(&value) => value,
+                _ => return Ok(unmatched()),
+            };
+        }
+        Ok(RecognizeResult {
+            matched: true,
+            site_id: SITE_ID.into(),
+            plugin_id: PLUGIN_ID.into(),
+            priority: RECOGNITION_PRIORITY,
+            locator: Some(encode_locator(segments[1], part)),
+        })
+    }
+
+    fn resolve(&self, _locator: &SourceLocator) -> Result<ResolvedMedia, AdapterError> {
+        Err(AdapterError::ObservationRequired)
+    }
+
+    fn resolve_with_context(
+        &self,
+        locator: &SourceLocator,
+        context: ResolveContext<'_>,
+    ) -> Result<ResolvedMedia, AdapterError> {
+        let _ = decode_locator(locator)?;
+        let observation = context
+            .browser_observation
+            .ok_or(AdapterError::ObservationRequired)?;
+        let server_observation = context
+            .server_observation
+            .ok_or(AdapterError::ObservationRequired)?;
+        validate_browser_observation(observation)?;
+        validate_server_owned_observation(server_observation)?;
+        if server_observation.observation_id != observation.observation_id {
+            return Err(AdapterError::ContentNotFound);
+        }
+        let page_locator = self
+            .recognize(&observation.page_url)?
+            .locator
+            .ok_or(AdapterError::ContentNotFound)?;
+        if page_locator != *locator {
+            return Err(AdapterError::ContentNotFound);
+        }
+
+        let mut candidate = None;
+        for observed in &observation.candidates {
+            if observed.kind != BrowserMediaKind::Muxed
+                || !matches!(
+                    observed.protocol,
+                    StreamProtocol::HttpFile | StreamProtocol::Hls
+                )
+                || observed.status != BrowserStatusClass::Success
+                || !observed.egress_allowed
+            {
+                continue;
+            }
+            if observed.expiry == BrowserExpiryHint::Expired {
+                continue;
+            }
+            let handoff = server_observation.media.iter().find(|media| {
+                media.observation_id == observation.observation_id
+                    && media.candidate_id == observed.id
+                    && media.access_ref == observed.access_ref
+                    && media.protocol == observed.protocol
+            });
+            if let Some(handoff) = handoff {
+                candidate = Some((observed, handoff));
+                break;
+            }
+        }
+        let (observed, handoff) = candidate.ok_or_else(|| {
+            if observation
+                .candidates
+                .iter()
+                .any(|candidate| candidate.expiry == BrowserExpiryHint::Expired)
+            {
+                AdapterError::ObservationExpired
+            } else if observation.candidates.iter().any(|candidate| {
+                matches!(
+                    candidate.kind,
+                    BrowserMediaKind::Video | BrowserMediaKind::Audio
+                )
+            }) {
+                AdapterError::UnsupportedMedia
+            } else if observation
+                .candidates
+                .iter()
+                .any(|candidate| !candidate.egress_allowed)
+            {
+                AdapterError::EgressRejected
+            } else {
+                AdapterError::UnsupportedMedia
+            }
+        })?;
+        if observed.expiry == BrowserExpiryHint::Expired {
+            return Err(AdapterError::ObservationExpired);
+        }
+        if handoff.url.host_str().is_none() {
+            return Err(AdapterError::InvalidObservation);
+        }
+        Ok(ResolvedMedia {
+            title: bounded_title(&observation.page_title),
+            source_site: SITE_ID.into(),
+            streams: vec![ResolvedStream {
+                id: observed.id.clone(),
+                protocol: handoff.protocol,
+                url: handoff.url.clone(),
+                public_headers: handoff.public_headers.clone(),
+                // The URL is already held in the server-owned handoff.  Do
+                // not copy the opaque capability reference into display media.
+                upstream_access_ref: None,
+            }],
+            subtitles: Vec::new(),
+            protection: MediaProtection::Clear,
+        })
+    }
+
+    fn navigation(&self, locator: &SourceLocator) -> Result<NavigationContext, AdapterError> {
+        let _ = decode_locator(locator)?;
+        Err(AdapterError::UnsupportedNavigation)
+    }
+}
+
+fn bounded_title(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(MAX_TITLE_BYTES)
+        .collect()
+}
+
+fn is_bvid(value: &str) -> bool {
+    value.len() == MAX_BVID_BYTES
+        && value.starts_with("BV")
+        && value[2..]
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric())
+}
+
+fn encode_locator(bvid: &str, part: u16) -> SourceLocator {
+    let payload = serde_json::to_vec(&LocatorPayload {
+        schema: LOCATOR_SCHEMA.into(),
+        bvid: bvid.into(),
+        part,
+    })
+    .expect("fixed locator payload serializes");
+    SourceLocator {
+        site_id: SITE_ID.into(),
+        plugin_id: PLUGIN_ID.into(),
+        locator_version: LOCATOR_VERSION,
+        opaque_payload: hex_encode(&payload),
+    }
+}
+
+fn decode_locator(locator: &SourceLocator) -> Result<LocatorPayload, AdapterError> {
+    if locator.site_id != SITE_ID
+        || locator.plugin_id != PLUGIN_ID
+        || locator.locator_version != LOCATOR_VERSION
+        || locator.opaque_payload.is_empty()
+        || locator.opaque_payload.len() > MAX_LOCATOR_BYTES
+    {
+        return Err(AdapterError::UnsupportedLocator);
+    }
+    let bytes = hex_decode(&locator.opaque_payload).ok_or(AdapterError::UnsupportedLocator)?;
+    let text = String::from_utf8(bytes).map_err(|_| AdapterError::UnsupportedLocator)?;
+    let lower = text.to_ascii_lowercase();
+    if [
+        "cookie",
+        "authorization",
+        "bearer",
+        "sessdata",
+        "token",
+        "password",
+        "secret",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+    {
+        return Err(AdapterError::SecretMaterial);
+    }
+    let payload: LocatorPayload =
+        serde_json::from_str(&text).map_err(|_| AdapterError::UnsupportedLocator)?;
+    if payload.schema != LOCATOR_SCHEMA
+        || !is_bvid(&payload.bvid)
+        || !(1..=9999).contains(&payload.part)
+    {
+        return Err(AdapterError::UnsupportedLocator);
+    }
+    Ok(payload)
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
+fn hex_decode(value: &str) -> Option<Vec<u8>> {
+    if value.is_empty() || value.len() % 2 != 0 {
+        return None;
+    }
+    value
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| Some((hex_digit(pair[0])? << 4) | hex_digit(pair[1])?))
+        .collect()
+}
+
+fn hex_digit(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use site_adapter_api::{
+        BROWSER_OBSERVATION_VERSION, BrowserRangeSupport, ServerOwnedMedia,
+        conformance::assert_error_diagnostics_bounded,
+    };
+    use std::collections::BTreeMap;
+
+    const BVID: &str = "BV1xx411c7mD";
+
+    fn registry() -> SiteAdapterRegistry {
+        let mut registry = SiteAdapterRegistry::default();
+        BilibiliAdapter::register(&mut registry).unwrap();
+        registry
+    }
+
+    fn locator(part: u16) -> SourceLocator {
+        registry()
+            .recognize(&format!("https://www.bilibili.com/video/{BVID}/?p={part}"))
+            .unwrap()
+    }
+
+    fn observation(part: u16, candidate: &str) -> BrowserObservation {
+        BrowserObservation {
+            schema_version: BROWSER_OBSERVATION_VERSION,
+            observation_id: "obs-1".into(),
+            page_url: format!("https://www.bilibili.com/video/{BVID}/?p={part}"),
+            page_title: "Synthetic Bilibili fixture".into(),
+            event_count: 4,
+            resource_count: 1,
+            candidates: vec![site_adapter_api::BrowserMediaCandidate {
+                id: candidate.into(),
+                kind: BrowserMediaKind::Muxed,
+                protocol: StreamProtocol::HttpFile,
+                status: BrowserStatusClass::Success,
+                range: BrowserRangeSupport::Supported,
+                egress_allowed: true,
+                access_ref: "media-ref-1".into(),
+                expiry: BrowserExpiryHint::NoneObserved,
+            }],
+        }
+    }
+
+    fn server() -> ServerOwnedObservation {
+        ServerOwnedObservation {
+            schema_version: BROWSER_OBSERVATION_VERSION,
+            observation_id: "obs-1".into(),
+            media: vec![ServerOwnedMedia {
+                observation_id: "obs-1".into(),
+                candidate_id: "primary".into(),
+                access_ref: "media-ref-1".into(),
+                protocol: StreamProtocol::HttpFile,
+                url: Url::parse("https://cdn.example.invalid/media.mp4?expires=4102444800")
+                    .unwrap(),
+                public_headers: BTreeMap::new(),
+            }],
+        }
+    }
+
+    #[test]
+    fn registry_recognizes_only_bounded_canonical_inputs() {
+        let registry = registry();
+        let locator = registry
+            .recognize(&format!("https://www.bilibili.com/video/{BVID}/?p=2"))
+            .unwrap();
+        assert_eq!(locator.site_id, SITE_ID);
+        assert_eq!(locator.plugin_id, PLUGIN_ID);
+        assert_eq!(locator.locator_version, LOCATOR_VERSION);
+        assert!(!locator.opaque_payload.contains(BVID));
+        for input in [
+            "http://www.bilibili.com/video/BV1xx411c7mD/",
+            "https://www.bilibili.com/",
+            "https://www.bilibili.com/video/BV1xx411c7mD/?p=0",
+            "https://www.bilibili.com/video/BV1xx411c7mD/?p=2&token=secret",
+        ] {
+            assert_eq!(registry.recognize(input), Err(AdapterError::NoMatch));
+        }
+    }
+
+    #[test]
+    fn conformance_covers_determinism_ownership_and_version() {
+        let adapter = BilibiliAdapter;
+        let input = "https://www.bilibili.com/video/BV1xx411c7mD/?p=1";
+        let first = adapter.recognize(input).unwrap();
+        let second = adapter.recognize(input).unwrap();
+        assert_eq!(first.matched, second.matched);
+        assert_eq!(first.site_id, second.site_id);
+        assert_eq!(first.plugin_id, second.plugin_id);
+        assert_eq!(first.priority, second.priority);
+        assert_eq!(first.locator, second.locator);
+        assert!(first.matched);
+        let locator = first.locator.unwrap();
+        assert_eq!(locator.site_id, SITE_ID);
+        assert_eq!(locator.plugin_id, PLUGIN_ID);
+        assert_eq!(locator.locator_version, LOCATOR_VERSION);
+        adapter
+            .resolve_observation(&locator, &observation(1, "primary"), &server())
+            .unwrap();
+    }
+
+    #[test]
+    fn deterministic_observation_handoff_resolves_without_secret_output() {
+        let adapter = BilibiliAdapter;
+        let locator = locator(1);
+        let media = adapter
+            .resolve_observation(&locator, &observation(1, "primary"), &server())
+            .unwrap();
+        assert_eq!(media.source_site, SITE_ID);
+        assert_eq!(media.protection, MediaProtection::Clear);
+        assert!(media.streams[0].public_headers.is_empty());
+        assert!(media.streams[0].upstream_access_ref.is_none());
+        assert!(!format!("{media:?}").contains("media-ref-1"));
+    }
+
+    #[test]
+    fn malformed_stale_and_secret_handoffs_fail_closed() {
+        let adapter = BilibiliAdapter;
+        let locator = locator(1);
+        assert_eq!(
+            adapter.resolve(&locator),
+            Err(AdapterError::ObservationRequired)
+        );
+        let mut stale = observation(1, "primary");
+        stale.page_url = "https://www.bilibili.com/video/BV1xx411c7mD/?p=2".into();
+        assert_eq!(
+            adapter.resolve_observation(&locator, &stale, &server()),
+            Err(AdapterError::ContentNotFound)
+        );
+        let mut secret = server();
+        secret.media[0]
+            .public_headers
+            .insert("Authorization".into(), "Bearer fixture-secret".into());
+        assert_eq!(
+            adapter.resolve_observation(&locator, &observation(1, "primary"), &secret),
+            Err(AdapterError::InvalidObservation)
+        );
+        let mut wrong_version = locator.clone();
+        wrong_version.locator_version = 2;
+        assert_eq!(
+            adapter.resolve_observation(&wrong_version, &observation(1, "primary"), &server()),
+            Err(AdapterError::UnsupportedLocator)
+        );
+    }
+
+    #[test]
+    fn error_diagnostics_do_not_echo_secret_sentinels() {
+        assert_error_diagnostics_bounded(&["fixture-secret", "media-ref-1", "cdn.example.invalid"])
+            .unwrap();
+    }
+}
