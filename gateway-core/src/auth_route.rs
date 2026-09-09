@@ -477,6 +477,7 @@ impl AuthRouteCoordinator {
             self.put(id.to_owned(), record);
             return Ok(response);
         }
+        let request_id = request.request_id.clone();
         let outcome = gateway.create_authenticated_playback_session_outcome(
             request,
             accepted.browser.clone(),
@@ -484,7 +485,7 @@ impl AuthRouteCoordinator {
         );
         let response = outcome.clone().into_response();
         record.playback_requests.insert(
-            request.request_id.clone(),
+            request_id,
             PlaybackRecord {
                 fingerprint: request_fingerprint,
                 outcome,
