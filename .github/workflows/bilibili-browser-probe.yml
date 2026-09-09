@@ -232,7 +232,7 @@ jobs:
             try { parseSelector(value); throw new Error('caller authority accepted'); } catch (error) { if (error.message === 'caller authority accepted') throw error; }
           }
           const live = fs.readFileSync('experiments/bilibili-browser-probe/live.mjs', 'utf8');
-          for (const marker of ['publicAddressFor', 'MAX_REQUESTS', 'MAX_INDEPENDENT_BYTES', 'serviceWorkers', 'launchPersistentContext', 'mkdtemp', 'pendingObservations', 'onTunnelClosed', 'transportFinalized', 'candidates.clear', 'createStageTracker', 'recordStage', 'stage_markers', 'navigation_promise_result', 'page_lifecycle_result', 'browser_disconnect', 'process_termination', 'classifyNavigationLifecycle', 'finalizer_entry']) {
+          for (const marker of ['publicAddressFor', 'MAX_REQUESTS', 'MAX_INDEPENDENT_BYTES', 'serviceWorkers', 'launchPersistentContext', 'mkdtemp', 'pendingObservations', 'onTunnelClosed', 'transportFinalized', 'candidates.clear', 'createStageTracker', 'recordStage', 'stage_markers', 'navigation_promise_result', 'page_lifecycle_result', 'browser_disconnect', 'process_termination', 'classifyNavigationLifecycle', 'finalizer_entry', 'shouldRecordFailure', 'explicitNavigationLifecycle']) {
             if (!live.includes(marker)) throw new Error(`missing live boundary marker: ${marker}`);
           }
           const finalizer = fs.readFileSync('experiments/bilibili-browser-probe/finalizer.mjs', 'utf8');
