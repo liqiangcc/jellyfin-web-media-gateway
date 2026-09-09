@@ -201,8 +201,12 @@ export function classifyFailure(input = {}) {
 export function classifyError(error, phaseHint, counters = {}) {
   const code = error && typeof error.code === 'string' ? error.code : '';
   const message = error && typeof error.message === 'string' ? error.message : '';
+  const inferredLifecycle = phaseHint === 'chromium_navigation' ? classifyNavigationLifecycle(error) : undefined;
+  // A generic Error only proves an explicit rejection when the navigation
+  // caller supplies that settled lifecycle marker. Known structured names and
+  // codes can be inferred locally; an opaque Error remains the unknown class.
   const observedLifecycle = lifecycleOutcome(counters.lifecycle_outcome) ||
-    (phaseHint === 'chromium_navigation' ? classifyNavigationLifecycle(error) : undefined);
+    (inferredLifecycle && inferredLifecycle !== 'rejected' ? inferredLifecycle : undefined);
   return classifyFailure({
     phase_hint: phaseHint,
     error_code: code || message,
