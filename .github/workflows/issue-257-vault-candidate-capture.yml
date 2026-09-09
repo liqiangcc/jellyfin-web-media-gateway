@@ -1,0 +1,88 @@
+name: issue-257-vault-candidate-capture
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "gateway-core/**"
+      - ".github/workflows/issue-257-vault-candidate-capture.yml"
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: "Exact candidate commit to verify"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: issue-257-vault-candidate-capture-${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+
+jobs:
+  hosted-x64:
+    name: J1 hosted x64 candidate capture contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Assert exact Candidate SHA
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(uname -m)" = "x86_64"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - name: Format and lint exact candidate
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+      - name: Candidate capture and Vault/auth regressions
+        run: |
+          cargo test -p gateway-core --lib browser_auth::tests::candidate_capture_is_bound_one_shot_and_atomically_swapped -- --exact --nocapture
+          cargo test -p gateway-core --lib browser_auth::tests::cancelled_capture_removes_only_new_candidate_and_preserves_old_session -- --exact --nocapture
+          cargo test -p gateway-core --lib browser_auth::tests -- --nocapture
+          cargo test -p gateway-core --test auth_contract -- --nocapture
+          cargo test -p gateway-core --test security_baseline -- --nocapture
+      - name: Architecture and secret-boundary guards
+        shell: bash
+        run: |
+          if git grep -n -E 'pub\s+.*(cookie_header|authorization_header|local_storage|browser_profile)' -- gateway-core/src; then
+            echo "candidate material became a public transport type" >&2
+            exit 1
+          fi
+          if git grep -n -E 'Serialize|serde::Serialize' -- gateway-core/src/browser.rs gateway-core/src/browser_auth.rs; then
+            echo "browser candidate material must not be serialized" >&2
+            exit 1
+          fi
+          if git grep -n -E 'profile(_dir|_path)|browser_profile|cookie_header|authorization_header' -- gateway-core/src/auth_route.rs gateway-core/src/control.rs gateway-core/src/control_view.rs; then
+            echo "profile or secret fields crossed a public boundary" >&2
+            exit 1
+          fi
+
+  hosted-x64-security:
+    name: J2 hosted x64 stale and cleanup guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Assert exact Candidate SHA
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Exact candidate security and HTTP regressions
+        run: |
+          cargo test -p gateway-core --test http_security -- --nocapture
+          cargo test -p gateway-core --test playback_concurrency -- --nocapture
+          cargo test -p gateway-core --test media_gateway -- --nocapture
