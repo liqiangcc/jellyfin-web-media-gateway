@@ -690,7 +690,6 @@ mod tests {
     use crate::GatewayService;
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode, header};
-    use axum::response::IntoResponse;
     use generic_direct::GenericDirectAdapter;
     use site_adapter_api::{
         AdapterError, BROWSER_OBSERVATION_VERSION, BrowserExpiryHint, BrowserMediaCandidate,
