@@ -43,6 +43,10 @@ pub struct SessionMediaStream {
     pub id: String,
     pub protocol: String,
     pub gateway_path: String,
+    pub kind: String,
+    pub group_id: Option<String>,
+    pub codec: Option<String>,
+    pub container: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -347,6 +351,23 @@ impl SourceSessionService {
                 id: stream.id.clone(),
                 protocol: protocol_name(stream.protocol).into(),
                 gateway_path,
+                kind: media
+                    .shape
+                    .track(&stream.id)
+                    .map(|track| track.kind.as_str().into())
+                    .unwrap_or_else(|| "muxed".into()),
+                group_id: media
+                    .shape
+                    .track(&stream.id)
+                    .and_then(|track| track.group_id.clone()),
+                codec: media
+                    .shape
+                    .track(&stream.id)
+                    .and_then(|track| track.codec.clone()),
+                container: media
+                    .shape
+                    .track(&stream.id)
+                    .and_then(|track| track.container.clone()),
             });
         }
 
@@ -539,6 +560,23 @@ fn prepare_media(
             id: stream.id.clone(),
             protocol: protocol_name(stream.protocol).into(),
             gateway_path,
+            kind: media
+                .shape
+                .track(&stream.id)
+                .map(|track| track.kind.as_str().into())
+                .unwrap_or_else(|| "muxed".into()),
+            group_id: media
+                .shape
+                .track(&stream.id)
+                .and_then(|track| track.group_id.clone()),
+            codec: media
+                .shape
+                .track(&stream.id)
+                .and_then(|track| track.codec.clone()),
+            container: media
+                .shape
+                .track(&stream.id)
+                .and_then(|track| track.container.clone()),
         });
     }
     let view = SessionMediaView {
@@ -626,6 +664,12 @@ fn validate_media(media: &ResolvedMedia) -> Result<(), CreateSessionErrorRespons
             message: "resolved media is not a supported clear stream",
         });
     }
+    if site_adapter_api::conformance::validate_media_shape(&media.shape, &media.streams).is_err() {
+        return Err(CreateSessionErrorResponse {
+            code: "MEDIA_INVALID",
+            message: "resolved media shape is invalid or mismatched",
+        });
+    }
     for stream in &media.streams {
         if stream.upstream_access_ref.is_some()
             || stream.id.is_empty()
@@ -648,6 +692,7 @@ fn protocol_name(protocol: StreamProtocol) -> &'static str {
     match protocol {
         StreamProtocol::HttpFile => "http_file",
         StreamProtocol::Hls => "hls",
+        StreamProtocol::Dash => "dash",
     }
 }
 
@@ -870,13 +915,13 @@ mod tests {
                 }],
                 _ => vec![stream("primary", BTreeMap::new())],
             };
-            Ok(ResolvedMedia {
-                title: "fixture media".into(),
-                source_site: self.site_id().into(),
+            Ok(ResolvedMedia::legacy(
+                "fixture media",
+                self.site_id(),
                 streams,
-                subtitles: vec![],
-                protection: MediaProtection::Clear,
-            })
+                vec![],
+                MediaProtection::Clear,
+            ))
         }
 
         fn resolve_with_context(
@@ -949,12 +994,21 @@ mod tests {
             candidates: vec![BrowserMediaCandidate {
                 id: "primary".into(),
                 kind: BrowserMediaKind::Muxed,
+                group_id: None,
+                codec: None,
+                container: Some("mp4".into()),
+                mime_type: Some("video/mp4".into()),
+                width: None,
+                height: None,
+                bitrate: None,
+                language: None,
                 protocol: StreamProtocol::HttpFile,
                 status: BrowserStatusClass::Success,
                 range: BrowserRangeSupport::Supported,
                 egress_allowed: true,
                 access_ref: "source-session-ref".into(),
                 expiry: BrowserExpiryHint::NoneObserved,
+                expires_at: None,
             }],
         };
         let server = ServerOwnedObservation {
