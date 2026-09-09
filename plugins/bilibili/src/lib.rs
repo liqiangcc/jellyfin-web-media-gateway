@@ -137,6 +137,7 @@ impl BilibiliAdapter {
         &self,
         locator: &SourceLocator,
         handoff: &AuthenticatedSessionHandoff,
+        observation: &BrowserObservation,
         server_observation: &ServerOwnedObservation,
     ) -> Result<ResolvedMedia, AdapterError> {
         if handoff.schema_version() != BROWSER_AUTH_OBSERVATION_VERSION
@@ -145,12 +146,12 @@ impl BilibiliAdapter {
         {
             return Err(AdapterError::InvalidObservation);
         }
-        let observation = handoff.observation();
-        let interpretation = self.interpret_auth_observation(&observation)?;
+        let auth_observation = handoff.observation();
+        let interpretation = self.interpret_auth_observation(&auth_observation)?;
         if !interpretation.session_ready {
             return Err(AdapterError::AccessRequired);
         }
-        self.resolve_observation(locator, &observation, server_observation)
+        self.resolve_observation(locator, observation, server_observation)
     }
 }
 
@@ -546,14 +547,14 @@ mod tests {
     fn generic_auth_observation_and_server_handoff_are_consumed_by_plugin() {
         let adapter = BilibiliAdapter;
         let locator = locator(1);
-        let observation = BrowserAuthObservation {
+        let auth_observation = BrowserAuthObservation {
             schema_version: BROWSER_AUTH_OBSERVATION_VERSION,
             sequence: 3,
             state: BrowserAuthState::CandidateReady,
             diagnostic: site_adapter_api::BrowserAuthDiagnostic::CandidateAccepted,
         };
         assert_eq!(
-            adapter.interpret_auth_observation(&observation),
+            adapter.interpret_auth_observation(&auth_observation),
             Ok(BilibiliAuthInterpretation {
                 account_state: BilibiliAccountState::Valid,
                 session_ready: true,
@@ -563,14 +564,14 @@ mod tests {
             SITE_ID,
             "fixture-account",
             "opaque-session-ref",
-            observation,
+            auth_observation,
         )
         .unwrap();
         adapter
-            .resolve_authenticated(&locator, &handoff, &server())
+            .resolve_authenticated(&locator, &handoff, &observation(1, "primary"), &server())
             .unwrap();
 
-        let mut pending = observation;
+        let mut pending = auth_observation;
         pending.state = BrowserAuthState::InputNeeded;
         let pending_handoff = AuthenticatedSessionHandoff::new_server_owned(
             SITE_ID,
@@ -580,7 +581,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            adapter.resolve_authenticated(&locator, &pending_handoff, &server()),
+            adapter.resolve_authenticated(
+                &locator,
+                &pending_handoff,
+                &observation(1, "primary"),
+                &server(),
+            ),
             Err(AdapterError::AccessRequired)
         );
     }

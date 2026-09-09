@@ -28,7 +28,7 @@ env:
 
 jobs:
   j1-auth-contract:
-    name: Issue #243 J1 hosted x64 auth contract
+    name: 'Issue #243 J1 hosted x64 auth contract'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -76,7 +76,7 @@ jobs:
         run: cargo test --workspace --all-targets -- --test-threads=1
 
   j2-auth-regressions:
-    name: Issue #243 J2 hosted x64 lifecycle and security regressions
+    name: 'Issue #243 J2 hosted x64 lifecycle and security regressions'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
