@@ -68,11 +68,20 @@ pub struct BrowserAuthEvent {
     pub observation: BrowserAuthObservation,
 }
 
-#[derive(Clone)]
 pub struct BrowserAuthRuntime<W: BrowserWorker> {
     worker: Arc<W>,
     vault: SessionVault,
     ttl: Duration,
+}
+
+impl<W: BrowserWorker> Clone for BrowserAuthRuntime<W> {
+    fn clone(&self) -> Self {
+        Self {
+            worker: Arc::clone(&self.worker),
+            vault: self.vault.clone(),
+            ttl: self.ttl,
+        }
+    }
 }
 
 impl<W: BrowserWorker + 'static> BrowserAuthRuntime<W> {
