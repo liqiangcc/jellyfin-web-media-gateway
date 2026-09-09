@@ -72,7 +72,13 @@ struct AttemptRecord {
     requests: HashMap<String, u64>,
     last_operation: u64,
     accepted: Option<AcceptedHandoff>,
-    playback_requests: HashMap<String, u64>,
+    playback_requests: HashMap<String, PlaybackRecord>,
+}
+
+#[derive(Clone)]
+struct PlaybackRecord {
+    fingerprint: u64,
+    outcome: crate::source_session::CreationOutcome,
 }
 
 #[derive(Clone)]
@@ -325,11 +331,12 @@ impl AuthRouteCoordinator {
         Ok(false)
     }
 
-    fn events(
+    async fn events(
         &self,
         id: &str,
         after: u64,
     ) -> Result<(Vec<AuthEventView>, Vec<BrowserEventView>, AuthRouteStatus), ApiError> {
+        let _operation_guard = self.operation_gate.lock().await;
         if after > MAX_CURSOR {
             return Err(ApiError::bad_request("AUTH_CURSOR_INVALID"));
         }
@@ -356,7 +363,12 @@ impl AuthRouteCoordinator {
         Ok((auth_events, browser_events, status))
     }
 
-    fn cancel(&self, id: &str, request_id: &str) -> Result<(AuthRouteStatus, bool), ApiError> {
+    async fn cancel(
+        &self,
+        id: &str,
+        request_id: &str,
+    ) -> Result<(AuthRouteStatus, bool), ApiError> {
+        let _operation_guard = self.operation_gate.lock().await;
         if self
             .cancelled_requests
             .lock()
@@ -380,13 +392,14 @@ impl AuthRouteCoordinator {
         Ok((status, false))
     }
 
-    fn candidate(
+    async fn candidate(
         &self,
         id: &str,
         request_id: &str,
         candidate: &CandidateRequest,
         locator: SourceLocator,
     ) -> Result<(bool, AuthRouteStatus), ApiError> {
+        let _operation_guard = self.operation_gate.lock().await;
         let mut record = self.take(id)?;
         let request_fingerprint = fingerprint(&(
             candidate.operation_id,
@@ -442,7 +455,7 @@ impl AuthRouteCoordinator {
         Ok((false, status))
     }
 
-    fn playback(
+    async fn playback(
         &self,
         gateway: &GatewayService,
         id: &str,
@@ -456,19 +469,26 @@ impl AuthRouteCoordinator {
         let request_fingerprint =
             fingerprint(&(request.source.as_str(), request.display_id.as_str()));
         if let Some(previous) = record.playback_requests.get(&request.request_id) {
-            if *previous != request_fingerprint {
+            if previous.fingerprint != request_fingerprint {
                 self.put(id.to_owned(), record);
                 return Err(ApiError::conflict("AUTH_REQUEST_ID_MISMATCH"));
             }
-        } else {
-            record
-                .playback_requests
-                .insert(request.request_id.clone(), request_fingerprint);
+            let response = previous.outcome.clone().into_response();
+            self.put(id.to_owned(), record);
+            return Ok(response);
         }
-        let response = gateway.create_authenticated_playback_session(
+        let outcome = gateway.create_authenticated_playback_session_outcome(
             request,
             accepted.browser.clone(),
             accepted.authenticated.clone(),
+        );
+        let response = outcome.clone().into_response();
+        record.playback_requests.insert(
+            request.request_id.clone(),
+            PlaybackRecord {
+                fingerprint: request_fingerprint,
+                outcome,
+            },
         );
         self.put(id.to_owned(), record);
         Ok(response)
@@ -1027,6 +1047,7 @@ pub(crate) async fn events_handler(
     match state
         .auth_routes
         .events(&attempt_id, query.after.unwrap_or(0))
+        .await
     {
         Ok((auth_events, browser_events, status)) => Json(EventResponse {
             attempt_id,
@@ -1124,7 +1145,11 @@ pub(crate) async fn cancel_handler(
     if !bounded_ref(&attempt_id, 128) || !bounded_ref(&request.request_id, MAX_REQUEST_ID) {
         return ApiError::bad_request("AUTH_REQUEST_INVALID").into_response();
     }
-    match state.auth_routes.cancel(&attempt_id, &request.request_id) {
+    match state
+        .auth_routes
+        .cancel(&attempt_id, &request.request_id)
+        .await
+    {
         Ok((_status, duplicate)) => Json(OperationResponse {
             attempt_id,
             operation_id: None,
@@ -1161,6 +1186,7 @@ pub(crate) async fn candidate_handler(
     match state
         .auth_routes
         .candidate(&attempt_id, &request.request_id, &request, locator)
+        .await
     {
         Ok((duplicate, status)) => Json(AcceptedResponse {
             attempt_id,
@@ -1189,13 +1215,17 @@ pub(crate) async fn playback_handler(
     {
         return ApiError::bad_request("AUTH_REQUEST_INVALID").into_response();
     }
-    match state.auth_routes.playback(
-        &GatewayService {
-            state: Arc::clone(&state),
-        },
-        &attempt_id,
-        request,
-    ) {
+    match state
+        .auth_routes
+        .playback(
+            &GatewayService {
+                state: Arc::clone(&state),
+            },
+            &attempt_id,
+            request,
+        )
+        .await
+    {
         Ok(response) => response,
         Err(error) => error.into_response(),
     }
@@ -1263,11 +1293,11 @@ mod tests {
         assert_eq!(first.0, replay.0);
         assert!(!first.3);
         assert!(replay.3);
-        let cancelled = coordinator.cancel(&first.0, "cancel-1").unwrap();
+        let cancelled = coordinator.cancel(&first.0, "cancel-1").await.unwrap();
         assert!(!cancelled.1);
-        assert!(coordinator.cancel(&first.0, "cancel-1").unwrap().1);
+        assert!(coordinator.cancel(&first.0, "cancel-1").await.unwrap().1);
         assert!(matches!(
-            coordinator.events(&first.0, 0),
+            coordinator.events(&first.0, 0).await,
             Err(ApiError {
                 code: "AUTH_ATTEMPT_NOT_FOUND",
                 ..

@@ -744,17 +744,28 @@ impl GatewayService {
         browser_handoff: BrowserObservationHandoff,
         authenticated_session: site_adapter_api::AuthenticatedSessionHandoff,
     ) -> axum::response::Response {
-        self.state
-            .source_sessions
-            .create_authenticated(
-                self,
-                &self.state.control,
-                &self.state.display_sessions,
-                request,
-                browser_handoff,
-                authenticated_session,
-            )
-            .into_response()
+        self.create_authenticated_playback_session_outcome(
+            request,
+            browser_handoff,
+            authenticated_session,
+        )
+        .into_response()
+    }
+
+    pub(crate) fn create_authenticated_playback_session_outcome(
+        &self,
+        request: CreateSessionRequest,
+        browser_handoff: BrowserObservationHandoff,
+        authenticated_session: site_adapter_api::AuthenticatedSessionHandoff,
+    ) -> source_session::CreationOutcome {
+        self.state.source_sessions.create_authenticated(
+            self,
+            &self.state.control,
+            &self.state.display_sessions,
+            request,
+            browser_handoff,
+            authenticated_session,
+        )
     }
 
     #[cfg(test)]
