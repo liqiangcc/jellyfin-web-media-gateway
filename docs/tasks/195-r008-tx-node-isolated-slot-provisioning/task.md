@@ -15,7 +15,7 @@ Preferred Worker: cloud-codex
 Eligible environment: env:cloud
 Required capabilities: github-read-write, code-authoring, cloud-interactive, interactive-linux-debug, lan-access, remote-control, repository-static-analysis
 Requested model: gpt-5.6-luna, reasoning high
-Fast availability: unavailable in the originating runtime; future Worker records actual availability
+Fast mode: disabled by user; do not enable or select Fast
 ```
 
 > This is a future provisioning Task. It is not authorized while Issue #195 is `status:draft`, and it cannot start until the Coordinator has independently read back written owner/admin authorization, a low-privilege target access route, and a sanitized slot descriptor. The existing `source-runtime` session remains outside this Task's ownership.
@@ -150,7 +150,7 @@ Every report must record:
 
 ```text
 Task / Claim / Attempt: #195 / C1–C5 / N
-Worker / Orchestrator: cloud-codex / gpt-5.6-luna high; actual Fast availability
+Worker / Orchestrator: cloud-codex / gpt-5.6-luna high; Fast disabled by user; do not enable or select Fast
 Execution plane: GitHub-hosted Actions and/or approved external-codex control plane
 Runner / Target: exact hosted runner or tx-node VM-0-11-ubuntu
 Authorization / descriptor: owner/admin authority and sanitized descriptor identity
