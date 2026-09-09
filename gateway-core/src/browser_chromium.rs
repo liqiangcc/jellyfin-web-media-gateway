@@ -5,11 +5,19 @@
 
 use crate::browser::{
     BROWSER_EVENT_VERSION, BrowserAuthMode, BrowserError, BrowserEvent, BrowserEventKind,
-    BrowserFuture, BrowserInput, BrowserNavigationRequest, BrowserOperationId, BrowserSession,
-    BrowserSessionId, BrowserStatus, BrowserWorker, NativePanelSession, R008NavigationPolicy,
+    BrowserFuture, BrowserInput, BrowserNavigationRequest, BrowserObservationPayload,
+    BrowserOperationId, BrowserSession, BrowserSessionId, BrowserStatus, BrowserWorker,
+    MAX_BROWSER_CANDIDATES, MAX_BROWSER_EVENTS, MAX_BROWSER_RESOURCES, NativePanelSession,
+    R008NavigationPolicy, redacted_event_url, redacted_title,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
+use site_adapter_api::{
+    BrowserExpiryHint, BrowserMediaCandidate, BrowserMediaKind, BrowserObservation,
+    BrowserRangeSupport, BrowserStatusClass, ServerOwnedMedia, ServerOwnedObservation,
+    StreamProtocol, security::is_secret_header, validate_browser_observation,
+    validate_server_owned_observation,
+};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -218,6 +226,22 @@ struct ChromiumSession {
     cdp: Arc<CdpClient>,
     panels: HashMap<crate::browser::PanelSessionId, PanelRecord>,
     cancelled: HashMap<BrowserOperationId, ()>,
+    active_operation: Option<BrowserOperationId>,
+    current_page_url: Option<Url>,
+    current_page_title: String,
+    resources: Vec<BrowserResourceRecord>,
+    pending_requests: HashMap<String, PendingRequest>,
+}
+
+struct PendingRequest {
+    url: Url,
+    allowed: bool,
+}
+
+struct BrowserResourceRecord {
+    operation_id: BrowserOperationId,
+    candidate: BrowserMediaCandidate,
+    server_media: ServerOwnedMedia,
 }
 
 type SessionHandle = Arc<AsyncMutex<ChromiumSession>>;
@@ -409,6 +433,9 @@ impl ChromiumBrowserWorker {
 
     fn push_event(state: &mut ChromiumSession, kind: BrowserEventKind) {
         state.sequence += 1;
+        if state.events.len() >= MAX_BROWSER_EVENTS {
+            state.events.pop_front();
+        }
         state.events.push_back(BrowserEvent {
             version: BROWSER_EVENT_VERSION,
             sequence: state.sequence,
@@ -433,6 +460,9 @@ impl ChromiumBrowserWorker {
                 .panels
                 .values_mut()
                 .for_each(|panel| panel.connected = false);
+            state.resources.clear();
+            state.pending_requests.clear();
+            state.active_operation = None;
             Self::push_event(state, BrowserEventKind::WorkerCrashed);
             remove_profile(&state.profile_dir);
         }
@@ -451,6 +481,9 @@ impl ChromiumBrowserWorker {
             .panels
             .values_mut()
             .for_each(|panel| panel.connected = false);
+        state.resources.clear();
+        state.pending_requests.clear();
+        state.active_operation = None;
         Self::push_event(
             state,
             match status {
@@ -520,7 +553,10 @@ impl ChromiumBrowserWorker {
             || cdp
                 .command(
                     "Fetch.enable",
-                    json!({"patterns": [{"requestStage": "Request"}]}),
+                    json!({"patterns": [
+                        {"requestStage": "Request"},
+                        {"requestStage": "Response"}
+                    ]}),
                     DEFAULT_OPERATION_TIMEOUT,
                 )
                 .await
@@ -541,6 +577,11 @@ impl ChromiumBrowserWorker {
             cdp,
             panels: HashMap::new(),
             cancelled: HashMap::new(),
+            active_operation: None,
+            current_page_url: None,
+            current_page_title: String::new(),
+            resources: Vec::new(),
+            pending_requests: HashMap::new(),
         };
         Self::push_event(
             &mut state,
@@ -564,7 +605,7 @@ impl ChromiumBrowserWorker {
 
     async fn process_cdp_event(
         &self,
-        session: &BrowserSessionId,
+        _session: &BrowserSessionId,
         state: &mut ChromiumSession,
         event: Value,
         policy: &R008NavigationPolicy,
@@ -580,35 +621,82 @@ impl ChromiumBrowserWorker {
                     .get("requestId")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                let url = params
-                    .get("request")
-                    .and_then(|request| request.get("url"))
-                    .and_then(Value::as_str)
-                    .and_then(|url| Url::parse(url).ok());
-                let allowed = match url {
-                    Some(url) => policy.authorize_url(&url).await.is_ok(),
-                    None => false,
-                };
-                if allowed {
-                    let _ = state
-                        .cdp
-                        .command(
-                            "Fetch.continueRequest",
-                            json!({"requestId": request_id}),
-                            self.operation_timeout,
-                        )
-                        .await;
-                } else {
-                    let _ = state
-                        .cdp
-                        .command(
-                            "Fetch.failRequest",
-                            json!({"requestId": request_id, "errorReason": "BlockedByClient"}),
-                            self.operation_timeout,
-                        )
-                        .await;
-                    Self::push_event(state, BrowserEventKind::NetworkDenied);
-                    return Err(BrowserError::NavigationDenied);
+                if request_id.is_empty() {
+                    return Ok(false);
+                }
+                let is_response = params.get("responseStatusCode").is_some();
+                if !is_response {
+                    let url = params
+                        .get("request")
+                        .and_then(|request| request.get("url"))
+                        .and_then(Value::as_str)
+                        .and_then(|url| Url::parse(url).ok());
+                    let Some(url) = url else {
+                        return Self::deny_request(state, request_id, self.operation_timeout).await;
+                    };
+                    if policy.authorize_url(&url).await.is_err() {
+                        return Self::deny_request(state, request_id, self.operation_timeout).await;
+                    }
+                    state
+                        .pending_requests
+                        .insert(request_id.to_owned(), PendingRequest { url, allowed: true });
+                } else if let Some(request) = state.pending_requests.remove(request_id)
+                    && request.allowed
+                {
+                    let status = params
+                        .get("responseStatusCode")
+                        .and_then(Value::as_u64)
+                        .and_then(|code| u16::try_from(code).ok())
+                        .unwrap_or(0);
+                    if (300..=399).contains(&status)
+                        && let Some(location) =
+                            response_header(params.get("responseHeaders"), "location")
+                    {
+                        let Some(redirect) = request.url.join(&location).ok() else {
+                            return Self::deny_request(state, request_id, self.operation_timeout)
+                                .await;
+                        };
+                        if policy.authorize_url(&redirect).await.is_err() {
+                            return Self::deny_request(state, request_id, self.operation_timeout)
+                                .await;
+                        }
+                    }
+                    if let Some(record) = build_resource_record(
+                        state.active_operation,
+                        request.url,
+                        status,
+                        params.get("responseHeaders"),
+                        state.sequence,
+                    ) {
+                        if state.resources.len() < MAX_BROWSER_RESOURCES
+                            && state
+                                .resources
+                                .iter()
+                                .filter(|resource| resource.operation_id == record.operation_id)
+                                .count()
+                                < MAX_BROWSER_CANDIDATES
+                        {
+                            Self::push_event(
+                                state,
+                                BrowserEventKind::ResourceObserved {
+                                    candidate: record.candidate.clone(),
+                                },
+                            );
+                            state.resources.push(record);
+                        }
+                    }
+                }
+                if state
+                    .cdp
+                    .command(
+                        "Fetch.continueRequest",
+                        json!({"requestId": request_id}),
+                        self.operation_timeout,
+                    )
+                    .await
+                    .is_err()
+                {
+                    return Err(BrowserError::WorkerUnavailable);
                 }
             }
             "Page.frameNavigated" => {
@@ -632,8 +720,11 @@ impl ChromiumBrowserWorker {
                             result
                                 .get("value")
                                 .and_then(Value::as_str)
-                                .map(str::to_owned)
+                                .map(redacted_title)
                         });
+                    let url = redacted_event_url(&url);
+                    state.current_page_url = Some(url.clone());
+                    state.current_page_title = title.clone().unwrap_or_default();
                     Self::push_event(state, BrowserEventKind::NavigationChanged { url, title });
                 }
             }
@@ -643,7 +734,23 @@ impl ChromiumBrowserWorker {
             }
             _ => {}
         }
-        let _ = session;
+        Ok(false)
+    }
+
+    async fn deny_request(
+        state: &mut ChromiumSession,
+        request_id: &str,
+        timeout: Duration,
+    ) -> Result<bool, BrowserError> {
+        let _ = state
+            .cdp
+            .command(
+                "Fetch.failRequest",
+                json!({"requestId": request_id, "errorReason": "BlockedByClient"}),
+                timeout,
+            )
+            .await;
+        Self::push_event(state, BrowserEventKind::NetworkDenied);
         Ok(false)
     }
 
@@ -668,6 +775,23 @@ impl ChromiumBrowserWorker {
         let mut ready = false;
 
         loop {
+            let cancelled = {
+                let mut state = handle.lock().await;
+                state.cancelled.remove(&request.operation_id()).is_some()
+            };
+            if cancelled {
+                cdp.cancel_command(command_id).await;
+                let mut state = handle.lock().await;
+                state.resources.clear();
+                state.pending_requests.clear();
+                Self::push_event(
+                    &mut state,
+                    BrowserEventKind::OperationCancelled {
+                        operation_id: request.operation_id(),
+                    },
+                );
+                return Err(BrowserError::OperationCancelled);
+            }
             if navigate_accepted && ready {
                 return Ok(());
             }
@@ -774,6 +898,157 @@ impl ChromiumBrowserWorker {
     }
 }
 
+fn response_header(raw_headers: Option<&Value>, wanted: &str) -> Option<String> {
+    raw_headers.and_then(Value::as_array).and_then(|headers| {
+        headers.iter().find_map(|header| {
+            (header
+                .get("name")
+                .and_then(Value::as_str)?
+                .eq_ignore_ascii_case(wanted))
+            .then(|| {
+                header
+                    .get("value")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .flatten()
+        })
+    })
+}
+
+fn build_resource_record(
+    operation_id: Option<BrowserOperationId>,
+    url: Url,
+    status: u16,
+    raw_headers: Option<&Value>,
+    sequence: u64,
+) -> Option<BrowserResourceRecord> {
+    let operation_id = operation_id?;
+    let mut headers = std::collections::BTreeMap::new();
+    if let Some(values) = raw_headers.and_then(Value::as_array) {
+        for header in values {
+            let Some(name) = header.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(value) = header.get("value").and_then(Value::as_str) else {
+                continue;
+            };
+            let normalized = name.to_ascii_lowercase();
+            if !matches!(
+                normalized.as_str(),
+                "accept-ranges"
+                    | "cache-control"
+                    | "content-length"
+                    | "content-range"
+                    | "content-type"
+                    | "expires"
+            ) || is_secret_header(name, value)
+            {
+                continue;
+            }
+            if value.len() <= 512 && !value.chars().any(char::is_control) {
+                headers.insert(normalized, value.to_owned());
+            }
+        }
+    }
+    let content_type = headers
+        .get("content-type")
+        .map(|value| {
+            value
+                .split(';')
+                .next()
+                .unwrap_or(value)
+                .trim()
+                .to_ascii_lowercase()
+        })
+        .unwrap_or_default();
+    let extension = url
+        .path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .and_then(|name| name.rsplit('.').next())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let is_hls = content_type.contains("mpegurl") || content_type == "application/x-mpegurl";
+    let is_media = content_type.starts_with("video/")
+        || content_type.starts_with("audio/")
+        || is_hls
+        || (content_type == "application/octet-stream"
+            && matches!(extension.as_str(), "mp4" | "webm" | "m3u8"));
+    if !is_media {
+        return None;
+    }
+    let kind = if content_type.starts_with("audio/") {
+        BrowserMediaKind::Audio
+    } else if is_hls || matches!(extension.as_str(), "mp4" | "webm" | "m3u8") {
+        BrowserMediaKind::Muxed
+    } else {
+        BrowserMediaKind::Video
+    };
+    let protocol = if is_hls || extension == "m3u8" {
+        StreamProtocol::Hls
+    } else {
+        StreamProtocol::HttpFile
+    };
+    let candidate_id = format!("resource-{sequence}");
+    let access_ref = format!("browser-media-{}", Uuid::new_v4().simple());
+    let candidate = BrowserMediaCandidate {
+        id: candidate_id.clone(),
+        kind,
+        protocol,
+        status: browser_status(status),
+        range: if headers.contains_key("accept-ranges") || headers.contains_key("content-range") {
+            BrowserRangeSupport::Supported
+        } else {
+            BrowserRangeSupport::Unknown
+        },
+        egress_allowed: true,
+        access_ref: access_ref.clone(),
+        expiry: browser_expiry(status, headers.get("cache-control")),
+    };
+    let server_media = ServerOwnedMedia {
+        observation_id: format!("observation-{operation_id:?}"),
+        candidate_id,
+        access_ref,
+        protocol,
+        url,
+        public_headers: headers,
+    };
+    Some(BrowserResourceRecord {
+        operation_id,
+        candidate,
+        server_media,
+    })
+}
+
+fn browser_status(status: u16) -> BrowserStatusClass {
+    match status {
+        200..=299 => BrowserStatusClass::Success,
+        300..=399 => BrowserStatusClass::Redirect,
+        400..=499 => BrowserStatusClass::ClientError,
+        500..=599 => BrowserStatusClass::ServerError,
+        _ => BrowserStatusClass::Unknown,
+    }
+}
+
+fn browser_expiry(status: u16, cache_control: Option<&String>) -> BrowserExpiryHint {
+    if matches!(status, 401 | 403 | 404 | 410) {
+        return BrowserExpiryHint::Expired;
+    }
+    let Some(cache_control) = cache_control else {
+        return BrowserExpiryHint::NoneObserved;
+    };
+    if cache_control
+        .split(',')
+        .filter_map(|directive| directive.trim().strip_prefix("max-age="))
+        .filter_map(|value| value.parse::<u64>().ok())
+        .any(|seconds| seconds <= 300)
+    {
+        BrowserExpiryHint::ShortLived
+    } else {
+        BrowserExpiryHint::NoneObserved
+    }
+}
+
 fn configure_chromium_environment(command: &mut tokio::process::Command, profile_dir: &Path) {
     command
         .env_clear()
@@ -826,10 +1101,13 @@ impl BrowserWorker for ChromiumBrowserWorker {
                     );
                     return Err(BrowserError::OperationCancelled);
                 }
+                state.active_operation = Some(request.operation_id());
+                state.resources.clear();
+                state.pending_requests.clear();
                 Self::push_event(
                     &mut state,
                     BrowserEventKind::NavigationStarted {
-                        url: request.url().clone(),
+                        url: redacted_event_url(request.url()),
                     },
                 );
                 Self::push_event(&mut state, BrowserEventKind::Loading);
@@ -870,6 +1148,68 @@ impl BrowserWorker for ChromiumBrowserWorker {
             .filter(|event| event.sequence > after_sequence)
             .cloned()
             .collect())
+    }
+
+    fn take_observation(
+        &self,
+        session: &BrowserSessionId,
+        operation_id: BrowserOperationId,
+    ) -> Result<Option<BrowserObservationPayload>, BrowserError> {
+        let handle = self.session_handle(session)?;
+        let mut state = handle
+            .try_lock()
+            .map_err(|_| BrowserError::WorkerUnavailable)?;
+        Self::session_error(&mut state)?;
+        if state.active_operation != Some(operation_id) {
+            return Ok(None);
+        }
+        let observation_id = format!("observation-{}", operation_id.value());
+        let records = state
+            .resources
+            .drain(..)
+            .filter(|resource| resource.operation_id == operation_id)
+            .take(MAX_BROWSER_CANDIDATES)
+            .collect::<Vec<_>>();
+        let candidates = records
+            .iter()
+            .map(|resource| resource.candidate.clone())
+            .collect::<Vec<_>>();
+        let media = records
+            .into_iter()
+            .map(|mut resource| {
+                resource.server_media.observation_id = observation_id.clone();
+                resource.server_media
+            })
+            .collect::<Vec<_>>();
+        let Some(page_url) = state.current_page_url.clone() else {
+            return Ok(None);
+        };
+        let observation = BrowserObservation {
+            schema_version: site_adapter_api::BROWSER_OBSERVATION_VERSION,
+            observation_id: observation_id.clone(),
+            page_url: page_url.to_string(),
+            page_title: if state.current_page_title.is_empty() {
+                "Untitled".into()
+            } else {
+                state.current_page_title.clone()
+            },
+            event_count: state.events.len().min(MAX_BROWSER_EVENTS) as u16,
+            resource_count: candidates.len() as u16,
+            candidates,
+        };
+        let server_observation = ServerOwnedObservation {
+            schema_version: site_adapter_api::BROWSER_OBSERVATION_VERSION,
+            observation_id,
+            media,
+        };
+        validate_browser_observation(&observation).map_err(|_| BrowserError::WorkerUnavailable)?;
+        validate_server_owned_observation(&server_observation)
+            .map_err(|_| BrowserError::WorkerUnavailable)?;
+        Ok(Some(BrowserObservationPayload {
+            operation_id,
+            observation,
+            server_observation,
+        }))
     }
 
     fn cancel(
@@ -1042,6 +1382,47 @@ mod tests {
         )
     }
 
+    async fn media_fixture() -> (tokio::task::JoinHandle<()>, Url) {
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    let mut request = [0_u8; 4096];
+                    let size = stream.read(&mut request).await.unwrap_or_default();
+                    let request = String::from_utf8_lossy(&request[..size]);
+                    let media = request.contains("/media.mp4?signature=server-secret");
+                    let body = if media {
+                        b"synthetic-media".as_slice()
+                    } else {
+                        b"<html><head><title>media fixture</title></head><body><video src=\"/media.mp4?signature=server-secret\"></video></body></html>".as_slice()
+                    };
+                    let content_type = if media { "video/mp4" } else { "text/html" };
+                    let range = if media {
+                        "Accept-Ranges: bytes\r\n"
+                    } else {
+                        ""
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\n{range}Connection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    let _ = stream.write_all(body).await;
+                });
+            }
+        });
+        (
+            task,
+            Url::parse(&format!("http://{address}/fixture")).unwrap(),
+        )
+    }
+
     fn local_policy(url: &Url) -> R008NavigationPolicy {
         let mut egress = EgressPolicy::default();
         egress.configure_local_service("fixture", url).unwrap();
@@ -1090,6 +1471,64 @@ mod tests {
         );
         worker.close(session.id()).unwrap();
         assert_eq!(worker.status(session.id()).unwrap(), BrowserStatus::Closed);
+        fixture_task.abort();
+    }
+
+    #[tokio::test]
+    async fn real_chromium_resource_observation_is_redacted_bounded_and_bound() {
+        let worker = ChromiumBrowserWorker::new();
+        assert!(
+            ChromiumBrowserWorker::discover_binary().is_some(),
+            "hosted job must provide an allowlisted browser"
+        );
+        let (fixture_task, url) = media_fixture().await;
+        let policy = local_policy(&url);
+        let session = worker.open_session(BrowserAuthMode::Passive).await.unwrap();
+        let request = BrowserNavigationRequest::new(url.clone());
+        let operation = request.operation_id();
+        worker
+            .navigate(session.id(), request, &policy)
+            .await
+            .unwrap();
+        let mut payload = None;
+        for _ in 0..20 {
+            let current = worker.take_observation(session.id(), operation).unwrap();
+            if current
+                .as_ref()
+                .is_some_and(|value| value.observation.resource_count > 0)
+            {
+                payload = current;
+                break;
+            }
+            sleep(Duration::from_millis(25)).await;
+        }
+        let payload = payload.expect("media fixture produces an observation");
+        let events = worker.poll_events(session.id(), 0).unwrap();
+        let diagnostics = format!("{events:?}");
+        assert!(!diagnostics.contains("server-secret"));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event.kind, BrowserEventKind::ResourceObserved { .. }))
+        );
+        assert_eq!(payload.observation.resource_count, 1);
+        assert_eq!(payload.observation.candidates.len(), 1);
+        assert_eq!(
+            payload.observation.candidates[0].kind,
+            BrowserMediaKind::Muxed
+        );
+        assert_eq!(
+            payload.observation.candidates[0].protocol,
+            StreamProtocol::HttpFile
+        );
+        assert_eq!(payload.server_observation.media.len(), 1);
+        assert!(
+            payload.server_observation.media[0]
+                .url
+                .as_str()
+                .contains("server-secret")
+        );
+        assert!(!format!("{payload:?}").contains("server-secret"));
         fixture_task.abort();
     }
 

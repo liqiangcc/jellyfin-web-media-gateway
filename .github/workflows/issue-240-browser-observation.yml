@@ -1,0 +1,74 @@
+name: issue-240-browser-observation
+
+on:
+  pull_request:
+    paths:
+      - 'gateway-core/**'
+      - 'site-adapter-api/**'
+      - 'plugins/bilibili/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/issue-240-browser-observation.yml'
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact Candidate SHA to verify
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  x64-contract-and-regressions:
+    name: Issue #240 x64 contract, security, and regression suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact Candidate SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+
+      - name: Assert exact Candidate SHA
+        env:
+          EXPECTED_CANDIDATE: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_CANDIDATE"
+
+      - name: Install Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Generic Browser Worker contract tests
+        run: cargo test -p gateway-core --lib browser::tests -- --nocapture
+
+      - name: Chromium boundary tests
+        run: cargo test -p gateway-core --lib browser_chromium::tests -- --nocapture
+
+      - name: SiteAdapter and Bilibili consumer tests
+        run: |
+          cargo test -p site-adapter-api --lib
+          cargo test -p bilibili --lib
+          cargo test -p gateway-core --lib source_session::tests -- --nocapture
+
+      - name: Security and concurrency regressions
+        run: |
+          cargo test -p gateway-core --test security_baseline -- --nocapture
+          cargo test -p gateway-core --test media_gateway -- --nocapture
+          cargo test -p gateway-core --test playback_concurrency -- --nocapture
+
+      - name: Architecture and secret guards
+        run: |
+          ! grep -Eni 'bilibili|youtube|querySelector' gateway-core/src/browser.rs gateway-core/src/browser_chromium.rs
+          ! grep -En 'Fetch\.(getResponseBody|takeResponseBodyAsStream)|Network\.getResponseBody|Set-Cookie|Authorization' gateway-core/src/browser.rs gateway-core/src/browser_chromium.rs
+          ! awk '/#\[cfg\(test\)\]/{exit} {print}' gateway-core/src/browser_chromium.rs | grep -En -- '--no-sandbox'
+
+      - name: Full x64 workspace integration suite
+        run: cargo test --workspace --all-targets -- --test-threads=1

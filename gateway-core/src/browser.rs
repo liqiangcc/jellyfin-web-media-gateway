@@ -7,6 +7,11 @@
 
 use crate::{EgressPolicy, EgressScope};
 use futures_util::{FutureExt, future::BoxFuture};
+use site_adapter_api::{
+    AdapterError, BrowserMediaCandidate, BrowserObservation, ResolveContext, ResolvedMedia,
+    ServerOwnedObservation, SiteAdapterRegistry, validate_browser_observation,
+    validate_server_owned_observation,
+};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::sync::{Arc, Mutex, RwLock};
@@ -15,6 +20,10 @@ use url::Url;
 use uuid::Uuid;
 
 pub const BROWSER_EVENT_VERSION: u16 = 1;
+pub const MAX_BROWSER_EVENTS: usize = 200;
+pub const MAX_BROWSER_RESOURCES: usize = 64;
+pub const MAX_BROWSER_CANDIDATES: usize = 16;
+pub const BROWSER_HANDOFF_TTL: Duration = Duration::from_secs(60);
 
 pub type BrowserFuture<'a, T> = BoxFuture<'a, Result<T, BrowserError>>;
 
@@ -146,10 +155,154 @@ pub enum BrowserStatus {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct BrowserOperationId(u64);
 
+impl BrowserOperationId {
+    pub(crate) const fn value(self) -> u64 {
+        self.0
+    }
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub struct BrowserNavigationRequest {
     operation_id: BrowserOperationId,
     url: Url,
+}
+
+/// A resource fact that is safe to cross the worker event boundary.  The
+/// corresponding URL and response headers remain in the server-owned media
+/// ledger and are never part of this value.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BrowserResourceObservation {
+    pub operation_id: BrowserOperationId,
+    pub candidate: BrowserMediaCandidate,
+}
+
+/// The only worker-to-plugin acquisition boundary.  `server_observation` is
+/// deliberately non-serializable at this layer and contains the short-lived
+/// server-side media references needed by the adapter.
+#[derive(Clone, Eq, PartialEq)]
+pub struct BrowserObservationPayload {
+    pub operation_id: BrowserOperationId,
+    pub observation: BrowserObservation,
+    pub server_observation: ServerOwnedObservation,
+}
+
+impl fmt::Debug for BrowserObservationPayload {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BrowserObservationPayload")
+            .field("operation_id", &self.operation_id)
+            .field("observation", &self.observation)
+            .field("server_observation", &"[server-owned]")
+            .finish()
+    }
+}
+
+/// A plugin-facing observation bound by Core without interpreting the
+/// locator payload.  The handoff is one-shot at the worker boundary and has a
+/// finite lifetime; callers must still use the normal registry/API boundary
+/// to resolve the opaque locator.
+#[derive(Clone, Eq, PartialEq)]
+pub struct BrowserObservationHandoff {
+    session_id: BrowserSessionId,
+    operation_id: BrowserOperationId,
+    locator: site_adapter_api::SourceLocator,
+    observation: BrowserObservation,
+    server_observation: ServerOwnedObservation,
+    expires_at: Instant,
+}
+
+impl fmt::Debug for BrowserObservationHandoff {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BrowserObservationHandoff")
+            .field("session_id", &self.session_id)
+            .field("operation_id", &self.operation_id)
+            .field("locator", &"[opaque]")
+            .field("observation", &self.observation)
+            .field("server_observation", &"[server-owned]")
+            .field("expires_at", &"[short-lived]")
+            .finish()
+    }
+}
+
+impl BrowserObservationHandoff {
+    /// Collect a single worker payload and bind it to the caller-provided
+    /// opaque locator.  Core compares identity only; the owning plugin
+    /// remains responsible for interpreting the locator and selecting a
+    /// candidate during `resolve`.
+    pub fn take_from_worker(
+        worker: &dyn BrowserWorker,
+        session_id: &BrowserSessionId,
+        operation_id: BrowserOperationId,
+        locator: site_adapter_api::SourceLocator,
+        ttl: Duration,
+    ) -> Result<Option<Self>, BrowserError> {
+        let Some(payload) = worker.take_observation(session_id, operation_id)? else {
+            return Ok(None);
+        };
+        Self::bind(session_id.clone(), operation_id, locator, payload, ttl).map(Some)
+    }
+
+    pub fn bind(
+        session_id: BrowserSessionId,
+        operation_id: BrowserOperationId,
+        locator: site_adapter_api::SourceLocator,
+        payload: BrowserObservationPayload,
+        ttl: Duration,
+    ) -> Result<Self, BrowserError> {
+        if payload.operation_id != operation_id
+            || validate_browser_observation(&payload.observation).is_err()
+            || validate_server_owned_observation(&payload.server_observation).is_err()
+            || payload.observation.observation_id != payload.server_observation.observation_id
+        {
+            return Err(BrowserError::InvalidInput);
+        }
+        Ok(Self {
+            session_id,
+            operation_id,
+            locator,
+            observation: payload.observation,
+            server_observation: payload.server_observation,
+            expires_at: Instant::now() + ttl,
+        })
+    }
+
+    pub fn session_id(&self) -> &BrowserSessionId {
+        &self.session_id
+    }
+
+    pub fn operation_id(&self) -> BrowserOperationId {
+        self.operation_id
+    }
+
+    pub fn locator(&self) -> &site_adapter_api::SourceLocator {
+        &self.locator
+    }
+
+    pub fn observation(&self) -> &BrowserObservation {
+        &self.observation
+    }
+
+    pub fn server_observation(&self) -> &ServerOwnedObservation {
+        &self.server_observation
+    }
+
+    pub fn is_expired(&self) -> bool {
+        self.expires_at <= Instant::now()
+    }
+
+    pub fn resolve(&self, registry: &SiteAdapterRegistry) -> Result<ResolvedMedia, AdapterError> {
+        if self.is_expired() {
+            return Err(AdapterError::ObservationExpired);
+        }
+        registry.resolve_with_context(
+            &self.locator,
+            ResolveContext {
+                browser_observation: Some(&self.observation),
+                server_observation: Some(&self.server_observation),
+            },
+        )
+    }
 }
 
 impl fmt::Debug for BrowserNavigationRequest {
@@ -229,6 +382,47 @@ fn redacted_url(url: &Url) -> String {
     safe.set_query(None);
     safe.set_fragment(None);
     safe.to_string()
+}
+
+pub(crate) fn redacted_event_url(url: &Url) -> Url {
+    let mut safe = url.clone();
+    safe.set_username("").ok();
+    safe.set_password(None).ok();
+    safe.set_fragment(None);
+    let query = safe
+        .query_pairs()
+        .filter(|(name, value)| !sensitive_url_component(name) && !sensitive_url_component(value))
+        .map(|(name, value)| (name.into_owned(), value.into_owned()))
+        .collect::<Vec<_>>();
+    safe.set_query(None);
+    for (name, value) in query {
+        safe.query_pairs_mut().append_pair(&name, &value);
+    }
+    safe
+}
+
+fn sensitive_url_component(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    [
+        "authorization",
+        "bearer",
+        "cookie",
+        "password",
+        "secret",
+        "session",
+        "signature",
+        "signed",
+        "token",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
+pub(crate) fn redacted_title(title: &str) -> String {
+    if title.chars().any(char::is_control) || sensitive_url_component(title) {
+        return "[REDACTED]".into();
+    }
+    title.chars().take(512).collect()
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -362,6 +556,7 @@ pub enum BrowserEventKind {
     ProfileDetached,
     NavigationStarted { url: Url },
     NavigationChanged { url: Url, title: Option<String> },
+    ResourceObserved { candidate: BrowserMediaCandidate },
     Loading,
     Ready,
     InputAccepted { kind: InputKind },
@@ -397,6 +592,10 @@ impl fmt::Debug for BrowserEventKind {
                     .field("title", &safe_title)
                     .finish()
             }
+            Self::ResourceObserved { candidate } => f
+                .debug_struct("BrowserEventKind::ResourceObserved")
+                .field("candidate", candidate)
+                .finish(),
             Self::Loading => f.write_str("BrowserEventKind::Loading"),
             Self::Ready => f.write_str("BrowserEventKind::Ready"),
             Self::InputAccepted { kind } => f
@@ -552,6 +751,9 @@ struct FakeSession {
     events: VecDeque<BrowserEvent>,
     sequence: u64,
     profile: Option<ProfileAttachmentRef>,
+    current_page_url: Option<Url>,
+    current_page_title: String,
+    observations: HashMap<BrowserOperationId, BrowserObservationPayload>,
 }
 
 #[derive(Debug, Default)]
@@ -731,6 +933,25 @@ impl FakeBrowserWorker {
             .len()
     }
 
+    #[cfg(test)]
+    fn publish_observation(
+        &self,
+        session: &BrowserSessionId,
+        payload: BrowserObservationPayload,
+    ) -> Result<(), BrowserError> {
+        validate_browser_observation(&payload.observation)
+            .map_err(|_| BrowserError::InvalidInput)?;
+        validate_server_owned_observation(&payload.server_observation)
+            .map_err(|_| BrowserError::InvalidInput)?;
+        let mut state = self.lock_state()?;
+        let session_state = Self::session_mut(&mut state, session)?;
+        Self::ensure_open(session_state)?;
+        session_state
+            .observations
+            .insert(payload.operation_id, payload);
+        Ok(())
+    }
+
     fn lock_state(&self) -> Result<std::sync::MutexGuard<'_, FakeState>, BrowserError> {
         self.state
             .lock()
@@ -739,6 +960,9 @@ impl FakeBrowserWorker {
 
     fn push_event(session: &mut FakeSession, kind: BrowserEventKind) {
         session.sequence += 1;
+        if session.events.len() >= MAX_BROWSER_EVENTS {
+            session.events.pop_front();
+        }
         session.events.push_back(BrowserEvent {
             version: BROWSER_EVENT_VERSION,
             sequence: session.sequence,
@@ -776,6 +1000,7 @@ impl FakeBrowserWorker {
             Self::ensure_open(session_state)?;
             session_state.status = status;
             session_state.profile = None;
+            session_state.observations.clear();
             Self::push_event(
                 session_state,
                 match status {
@@ -817,6 +1042,11 @@ pub trait BrowserWorker: Send + Sync {
         session: &BrowserSessionId,
         after_sequence: u64,
     ) -> Result<Vec<BrowserEvent>, BrowserError>;
+    fn take_observation(
+        &self,
+        session: &BrowserSessionId,
+        operation_id: BrowserOperationId,
+    ) -> Result<Option<BrowserObservationPayload>, BrowserError>;
     fn cancel(
         &self,
         session: &BrowserSessionId,
@@ -838,6 +1068,9 @@ impl BrowserWorker for FakeBrowserWorker {
                 events: VecDeque::new(),
                 sequence: 0,
                 profile: None,
+                current_page_url: None,
+                current_page_title: String::new(),
+                observations: HashMap::new(),
             };
             Self::push_event(
                 &mut fake,
@@ -916,17 +1149,19 @@ impl BrowserWorker for FakeBrowserWorker {
             Self::push_event(
                 session_state,
                 BrowserEventKind::NavigationStarted {
-                    url: request.url().clone(),
+                    url: redacted_event_url(request.url()),
                 },
             );
             Self::push_event(session_state, BrowserEventKind::Loading);
             Self::push_event(
                 session_state,
                 BrowserEventKind::NavigationChanged {
-                    url: request.url().clone(),
+                    url: redacted_event_url(request.url()),
                     title: None,
                 },
             );
+            session_state.current_page_url = Some(redacted_event_url(request.url()));
+            session_state.current_page_title.clear();
             Self::push_event(session_state, BrowserEventKind::Ready);
             Ok(())
         })
@@ -981,6 +1216,17 @@ impl BrowserWorker for FakeBrowserWorker {
             .collect())
     }
 
+    fn take_observation(
+        &self,
+        session: &BrowserSessionId,
+        operation_id: BrowserOperationId,
+    ) -> Result<Option<BrowserObservationPayload>, BrowserError> {
+        let mut state = self.lock_state()?;
+        let session_state = Self::session_mut(&mut state, session)?;
+        Self::ensure_open(session_state)?;
+        Ok(session_state.observations.remove(&operation_id))
+    }
+
     fn cancel(
         &self,
         session: &BrowserSessionId,
@@ -1002,6 +1248,7 @@ impl BrowserWorker for FakeBrowserWorker {
             Self::ensure_open(session_state)?;
             session_state.status = BrowserStatus::Closed;
             session_state.profile = None;
+            session_state.observations.clear();
             Self::push_event(session_state, BrowserEventKind::WorkerClosed);
         }
         for panel in state.panels.values_mut() {
@@ -1016,6 +1263,11 @@ impl BrowserWorker for FakeBrowserWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use site_adapter_api::{
+        BrowserExpiryHint, BrowserMediaKind, BrowserRangeSupport, BrowserStatusClass,
+        ServerOwnedMedia, StreamProtocol,
+    };
+    use std::collections::BTreeMap;
 
     fn policy() -> R008NavigationPolicy {
         R008NavigationPolicy::public_web(EgressPolicy::default())
@@ -1072,6 +1324,101 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event.kind, BrowserEventKind::WorkerClosed))
         );
+    }
+
+    #[tokio::test]
+    async fn observation_handoff_is_bounded_bound_and_one_shot() {
+        let worker = FakeBrowserWorker::new();
+        let session = session(&worker).await;
+        let operation = BrowserNavigationRequest::new(
+            Url::parse("https://example.test/watch?p=2&token=event-secret").unwrap(),
+        )
+        .operation_id();
+        let observation_id = "observation-fixture".to_owned();
+        let candidate = BrowserMediaCandidate {
+            id: "resource-1".into(),
+            kind: BrowserMediaKind::Muxed,
+            protocol: StreamProtocol::HttpFile,
+            status: BrowserStatusClass::Success,
+            range: BrowserRangeSupport::Supported,
+            egress_allowed: true,
+            access_ref: "opaque-media-ref".into(),
+            expiry: BrowserExpiryHint::NoneObserved,
+        };
+        worker
+            .publish_observation(
+                session.id(),
+                BrowserObservationPayload {
+                    operation_id: operation,
+                    observation: BrowserObservation {
+                        schema_version: site_adapter_api::BROWSER_OBSERVATION_VERSION,
+                        observation_id: observation_id.clone(),
+                        page_url: "https://example.test/watch?p=2".into(),
+                        page_title: "fixture page".into(),
+                        event_count: 3,
+                        resource_count: 1,
+                        candidates: vec![candidate],
+                    },
+                    server_observation: ServerOwnedObservation {
+                        schema_version: site_adapter_api::BROWSER_OBSERVATION_VERSION,
+                        observation_id,
+                        media: vec![ServerOwnedMedia {
+                            observation_id: "observation-fixture".into(),
+                            candidate_id: "resource-1".into(),
+                            access_ref: "opaque-media-ref".into(),
+                            protocol: StreamProtocol::HttpFile,
+                            url: Url::parse(
+                                "https://cdn.example.test/media.mp4?signature=server-secret",
+                            )
+                            .unwrap(),
+                            public_headers: BTreeMap::new(),
+                        }],
+                    },
+                },
+            )
+            .unwrap();
+        let locator = site_adapter_api::SourceLocator {
+            site_id: "fixture-site".into(),
+            plugin_id: "fixture-plugin".into(),
+            locator_version: 1,
+            opaque_payload: "opaque-locator".into(),
+        };
+        let handoff = BrowserObservationHandoff::take_from_worker(
+            &worker,
+            session.id(),
+            operation,
+            locator.clone(),
+            BROWSER_HANDOFF_TTL,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(handoff.session_id(), session.id());
+        assert_eq!(handoff.operation_id(), operation);
+        assert_eq!(handoff.locator(), &locator);
+        assert!(!handoff.is_expired());
+        let diagnostics = format!("{handoff:?}");
+        assert!(!diagnostics.contains("server-secret"));
+        assert!(!diagnostics.contains("signature="));
+        assert!(
+            BrowserObservationHandoff::take_from_worker(
+                &worker,
+                session.id(),
+                operation,
+                locator,
+                BROWSER_HANDOFF_TTL,
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn navigation_event_redaction_preserves_safe_page_part_without_signed_data() {
+        let url =
+            Url::parse("https://example.test/video?p=2&token=secret&signature=secret#private")
+                .unwrap();
+        let redacted = redacted_event_url(&url);
+        assert_eq!(redacted.as_str(), "https://example.test/video?p=2");
     }
 
     #[tokio::test]
