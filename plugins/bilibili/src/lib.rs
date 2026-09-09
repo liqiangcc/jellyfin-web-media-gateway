@@ -7,10 +7,12 @@
 
 use serde::{Deserialize, Serialize};
 use site_adapter_api::{
-    AdapterError, BrowserExpiryHint, BrowserMediaKind, BrowserObservation, BrowserStatusClass,
-    MediaProtection, NavigationContext, RecognizeResult, ResolveContext, ResolvedMedia,
-    ResolvedStream, ServerOwnedObservation, SiteAdapter, SiteAdapterRegistry, SourceLocator,
-    StreamProtocol, validate_browser_observation, validate_server_owned_observation,
+    AdapterError, AuthenticatedSessionHandoff, BROWSER_AUTH_OBSERVATION_VERSION,
+    BrowserAuthObservation, BrowserAuthState, BrowserExpiryHint, BrowserMediaKind,
+    BrowserObservation, BrowserStatusClass, MediaProtection, NavigationContext, RecognizeResult,
+    ResolveContext, ResolvedMedia, ResolvedStream, ServerOwnedObservation, SiteAdapter,
+    SiteAdapterRegistry, SourceLocator, StreamProtocol, validate_browser_auth_observation,
+    validate_browser_observation, validate_server_owned_observation,
 };
 use url::Url;
 
@@ -19,6 +21,20 @@ pub const PLUGIN_ID: &str = "bilibili";
 pub const PLUGIN_VERSION: &str = "1.0.0";
 pub const LOCATOR_VERSION: u32 = 1;
 pub const RECOGNITION_PRIORITY: u16 = 100;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BilibiliAccountState {
+    LoginRequired,
+    Checking,
+    Valid,
+    Error,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BilibiliAuthInterpretation {
+    pub account_state: BilibiliAccountState,
+    pub session_ready: bool,
+}
 
 const LOCATOR_SCHEMA: &str = "bilibili.source.v1";
 const MAX_INPUT_BYTES: usize = 2048;
@@ -80,6 +96,62 @@ impl BilibiliAdapter {
                 server_observation: Some(server_observation),
             },
         )
+    }
+
+    /// Interpret the generic auth lifecycle in the site-owned account
+    /// vocabulary. Core and the Browser Worker deliberately do not make this
+    /// decision.
+    pub fn interpret_auth_observation(
+        &self,
+        observation: &BrowserAuthObservation,
+    ) -> Result<BilibiliAuthInterpretation, AdapterError> {
+        validate_browser_auth_observation(observation)?;
+        let interpretation = match observation.state {
+            BrowserAuthState::Required | BrowserAuthState::Expired => BilibiliAuthInterpretation {
+                account_state: BilibiliAccountState::LoginRequired,
+                session_ready: false,
+            },
+            BrowserAuthState::InputNeeded => BilibiliAuthInterpretation {
+                account_state: BilibiliAccountState::Checking,
+                session_ready: false,
+            },
+            BrowserAuthState::CandidateReady => BilibiliAuthInterpretation {
+                account_state: BilibiliAccountState::Valid,
+                session_ready: true,
+            },
+            BrowserAuthState::Cancelled
+            | BrowserAuthState::Crashed
+            | BrowserAuthState::Disconnected
+            | BrowserAuthState::TimedOut => BilibiliAuthInterpretation {
+                account_state: BilibiliAccountState::Error,
+                session_ready: false,
+            },
+        };
+        Ok(interpretation)
+    }
+
+    /// Consume a server-owned candidate-session handoff. The handoff proves
+    /// only that Core atomically accepted an opaque session reference; all
+    /// Bilibili URL/media semantics remain in this adapter.
+    pub fn resolve_authenticated(
+        &self,
+        locator: &SourceLocator,
+        handoff: &AuthenticatedSessionHandoff,
+        observation: &BrowserObservation,
+        server_observation: &ServerOwnedObservation,
+    ) -> Result<ResolvedMedia, AdapterError> {
+        if handoff.schema_version() != BROWSER_AUTH_OBSERVATION_VERSION
+            || handoff.site_id() != SITE_ID
+            || handoff.session_ref().is_empty()
+        {
+            return Err(AdapterError::InvalidObservation);
+        }
+        let auth_observation = handoff.observation();
+        let interpretation = self.interpret_auth_observation(&auth_observation)?;
+        if !interpretation.session_ready {
+            return Err(AdapterError::AccessRequired);
+        }
+        self.resolve_observation(locator, observation, server_observation)
     }
 }
 
@@ -469,6 +541,54 @@ mod tests {
         assert!(media.streams[0].public_headers.is_empty());
         assert!(media.streams[0].upstream_access_ref.is_none());
         assert!(!format!("{media:?}").contains("media-ref-1"));
+    }
+
+    #[test]
+    fn generic_auth_observation_and_server_handoff_are_consumed_by_plugin() {
+        let adapter = BilibiliAdapter;
+        let locator = locator(1);
+        let auth_observation = BrowserAuthObservation {
+            schema_version: BROWSER_AUTH_OBSERVATION_VERSION,
+            sequence: 3,
+            state: BrowserAuthState::CandidateReady,
+            diagnostic: site_adapter_api::BrowserAuthDiagnostic::CandidateAccepted,
+        };
+        assert_eq!(
+            adapter.interpret_auth_observation(&auth_observation),
+            Ok(BilibiliAuthInterpretation {
+                account_state: BilibiliAccountState::Valid,
+                session_ready: true,
+            })
+        );
+        let handoff = AuthenticatedSessionHandoff::new_server_owned(
+            SITE_ID,
+            "fixture-account",
+            "opaque-session-ref",
+            auth_observation,
+        )
+        .unwrap();
+        adapter
+            .resolve_authenticated(&locator, &handoff, &observation(1, "primary"), &server())
+            .unwrap();
+
+        let mut pending = auth_observation;
+        pending.state = BrowserAuthState::InputNeeded;
+        let pending_handoff = AuthenticatedSessionHandoff::new_server_owned(
+            SITE_ID,
+            "fixture-account",
+            "opaque-session-ref",
+            pending,
+        )
+        .unwrap();
+        assert_eq!(
+            adapter.resolve_authenticated(
+                &locator,
+                &pending_handoff,
+                &observation(1, "primary"),
+                &server(),
+            ),
+            Err(AdapterError::AccessRequired)
+        );
     }
 
     #[test]

@@ -26,6 +26,7 @@ use uuid::Uuid;
 
 pub mod auth;
 pub mod browser;
+pub mod browser_auth;
 pub mod browser_chromium;
 pub mod control;
 #[cfg(test)]
@@ -38,6 +39,10 @@ pub use auth::{
     AccountState, AuthBoundaryError, CandidateValidation, CleanupResult, PendingIntent,
     PendingPlaybackAction, PendingSourceLocator, ScopedHttpResponse, ScopedSiteHttpClient,
     SessionSwapResult, SessionVault, SiteAccessContext, SiteAccount, SiteSessionRef, VaultError,
+};
+pub use browser_auth::{
+    AUTH_ATTEMPT_TTL, AUTH_EVENT_VERSION, BrowserAuthAttempt, BrowserAuthEvent, BrowserAuthRuntime,
+    BrowserAuthRuntimeError, MAX_AUTH_EVENTS,
 };
 pub use control::{
     ControlCommand, ControlCommandError, ControlCommandRequest, ControlCommandResponse,

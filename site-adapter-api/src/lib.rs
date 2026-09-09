@@ -19,6 +19,11 @@ pub struct SourceLocator {
 /// needs to know what a candidate means for a particular site.
 pub const BROWSER_OBSERVATION_VERSION: u32 = 1;
 
+/// Version of the generic authenticated-browser lifecycle observation.  The
+/// Browser Worker only emits these bounded facts; a Site Plugin decides what
+/// they mean for its account/session semantics.
+pub const BROWSER_AUTH_OBSERVATION_VERSION: u32 = 1;
+
 const MAX_OBSERVATION_ID_BYTES: usize = 128;
 const MAX_PAGE_URL_BYTES: usize = 2048;
 const MAX_OBSERVATION_CANDIDATES: usize = 16;
@@ -123,6 +128,147 @@ pub struct ServerOwnedObservation {
 pub struct ResolveContext<'a> {
     pub browser_observation: Option<&'a BrowserObservation>,
     pub server_observation: Option<&'a ServerOwnedObservation>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrowserAuthState {
+    Required,
+    InputNeeded,
+    CandidateReady,
+    Cancelled,
+    Expired,
+    Crashed,
+    Disconnected,
+    TimedOut,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrowserAuthDiagnostic {
+    None,
+    AwaitingInput,
+    CandidateAccepted,
+    CandidateRejected,
+    Cancelled,
+    Expired,
+    Crashed,
+    Disconnected,
+    TimedOut,
+    CleanupComplete,
+}
+
+/// Bounded, redacted authentication lifecycle facts.  There is deliberately
+/// no arbitrary message, URL, input, profile path, session material or site
+/// selector in this value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BrowserAuthObservation {
+    pub schema_version: u32,
+    pub sequence: u64,
+    pub state: BrowserAuthState,
+    pub diagnostic: BrowserAuthDiagnostic,
+}
+
+pub fn validate_browser_auth_observation(
+    observation: &BrowserAuthObservation,
+) -> Result<(), AdapterError> {
+    if observation.schema_version != BROWSER_AUTH_OBSERVATION_VERSION || observation.sequence == 0 {
+        return Err(AdapterError::InvalidObservation);
+    }
+    Ok(())
+}
+
+/// Server-owned candidate session handoff.  The session reference is opaque;
+/// the plugin never receives cookies, profile bytes, or a Vault path.
+#[derive(Clone, Eq, PartialEq)]
+pub struct AuthenticatedSessionHandoff {
+    schema_version: u32,
+    site_id: String,
+    account_ref: String,
+    session_ref: String,
+    observation: BrowserAuthObservation,
+}
+
+impl fmt::Debug for AuthenticatedSessionHandoff {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AuthenticatedSessionHandoff")
+            .field("schema_version", &self.schema_version)
+            .field("site_id", &self.site_id)
+            .field("account_ref", &"[opaque]")
+            .field("session_ref", &"[opaque]")
+            .field("observation", &self.observation)
+            .finish()
+    }
+}
+
+impl AuthenticatedSessionHandoff {
+    /// This constructor is for trusted server-side handoff code.  The value
+    /// carries only opaque identifiers and generic auth facts, never Secret.
+    pub fn new_server_owned(
+        site_id: impl Into<String>,
+        account_ref: impl Into<String>,
+        session_ref: impl Into<String>,
+        observation: BrowserAuthObservation,
+    ) -> Result<Self, AdapterError> {
+        validate_browser_auth_observation(&observation)?;
+        let handoff = Self {
+            schema_version: BROWSER_AUTH_OBSERVATION_VERSION,
+            site_id: site_id.into(),
+            account_ref: account_ref.into(),
+            session_ref: session_ref.into(),
+            observation,
+        };
+        if !bounded_auth_ref(&handoff.site_id, 128)
+            || !bounded_auth_ref(&handoff.account_ref, 256)
+            || !bounded_auth_ref(&handoff.session_ref, 256)
+            || contains_auth_secret_marker(&handoff.account_ref)
+            || contains_auth_secret_marker(&handoff.session_ref)
+        {
+            return Err(AdapterError::InvalidObservation);
+        }
+        Ok(handoff)
+    }
+
+    pub fn site_id(&self) -> &str {
+        &self.site_id
+    }
+
+    pub fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
+    pub fn account_ref(&self) -> &str {
+        &self.account_ref
+    }
+
+    pub fn session_ref(&self) -> &str {
+        &self.session_ref
+    }
+
+    pub fn observation(&self) -> BrowserAuthObservation {
+        self.observation
+    }
+}
+
+fn bounded_auth_ref(value: &str, max: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || ".:_-".contains(character))
+}
+
+fn contains_auth_secret_marker(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    [
+        "cookie",
+        "authorization",
+        "bearer",
+        "password",
+        "sessdata",
+        "token",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
 }
 
 pub fn validate_browser_observation(observation: &BrowserObservation) -> Result<(), AdapterError> {
@@ -592,6 +738,44 @@ mod tests {
         registry.register(Arc::new(Fake("high", 10))).unwrap();
         let locator = registry.recognize("https://example.com/video.mp4").unwrap();
         assert_eq!(locator.plugin_id, "high");
+    }
+
+    #[test]
+    fn authenticated_handoff_is_opaque_versioned_and_bounded() {
+        let observation = BrowserAuthObservation {
+            schema_version: BROWSER_AUTH_OBSERVATION_VERSION,
+            sequence: 1,
+            state: BrowserAuthState::CandidateReady,
+            diagnostic: BrowserAuthDiagnostic::CandidateAccepted,
+        };
+        let handoff = AuthenticatedSessionHandoff::new_server_owned(
+            "site",
+            "fixture-account-opaque",
+            "fixture-session-opaque",
+            observation,
+        )
+        .unwrap();
+        assert_eq!(handoff.schema_version(), BROWSER_AUTH_OBSERVATION_VERSION);
+        assert_eq!(handoff.observation(), observation);
+        let debug = format!("{handoff:?}");
+        assert!(!debug.contains("fixture-account-opaque"));
+        assert!(!debug.contains("fixture-session-opaque"));
+        assert_eq!(
+            validate_browser_auth_observation(&BrowserAuthObservation {
+                sequence: 0,
+                ..observation
+            }),
+            Err(AdapterError::InvalidObservation)
+        );
+        assert_eq!(
+            AuthenticatedSessionHandoff::new_server_owned(
+                "site",
+                "account-token",
+                "session-ref",
+                observation,
+            ),
+            Err(AdapterError::InvalidObservation)
+        );
     }
 
     fn locator(plugin: &str, site: &str, payload: &str) -> SourceLocator {
