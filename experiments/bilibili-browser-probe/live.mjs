@@ -15,7 +15,7 @@ import { once } from 'node:events';
 import { chromium } from 'playwright-core';
 import { navigationDescriptor, validateLiveInvocation } from '../../plugins/bilibili/live_selector.mjs';
 import { summarizeObservation, SCHEMA_VERSION } from '../../plugins/bilibili/experimental_probe.mjs';
-import { classifyError, classifyNavigationLifecycle, classifyTransport, diagnosticCounters } from './diagnostic.mjs';
+import { classifyError, classifyNavigationLifecycle, classifyTransport, classifyUpstreamError, diagnosticCounters } from './diagnostic.mjs';
 import { createFinalizer, terminationClass } from './finalizer.mjs';
 import { createStageTracker } from './stage-markers.mjs';
 
@@ -74,6 +74,10 @@ function statusClass(status) {
 // Process-level failures are published by probe.mjs using the same finite process_termination marker.
 function recordStage(state, event, fields = {}) {
   state.stages?.record(event, { ...diagnosticCounters(state), ...fields });
+}
+
+function recordUpstreamStage(state, event, upstreamState, errorClass = 'unknown') {
+  recordStage(state, event, { upstream_state: upstreamState, upstream_error_class: errorClass });
 }
 
 export function shouldRecordFailure(state, phaseHint, lifecycleOutcome) {
@@ -139,9 +143,16 @@ export function brokerServer(state, overrides = {}) {
       rejectUnauthorized: true,
     };
     const upstream = makeRequest(options, (reply) => {
+      let bodyStarted = false;
+      let bodyComplete = false;
+      recordUpstreamStage(state, 'upstream_response_start', 'response_started');
       recordStage(state, 'broker_request_result', { status_class: statusClass(reply.statusCode), transport_outcome: 'success' });
       res.writeHead(reply.statusCode || 502, reply.headers);
       reply.on('data', (chunk) => {
+        if (!bodyStarted) {
+          bodyStarted = true;
+          recordUpstreamStage(state, 'upstream_response_body_start', 'body_started');
+        }
         state.responseBytes += chunk.length;
         if (state.responseBytes > (state.responseLimit || MAX_RESPONSE_BYTES)) {
           reply.destroy(new Error('response budget exceeded'));
@@ -150,10 +161,23 @@ export function brokerServer(state, overrides = {}) {
         }
         if (!res.writableEnded) res.write(chunk);
       });
-      reply.on('end', () => { if (!res.writableEnded) res.end(); });
-      reply.on('error', () => { if (!res.writableEnded) res.end(); });
+      reply.on('end', () => {
+        bodyComplete = true;
+        recordUpstreamStage(state, 'upstream_response_end', 'body_complete');
+        if (!res.writableEnded) res.end();
+      });
+      reply.on('aborted', () => recordUpstreamStage(state, 'upstream_abort', 'aborted', 'aborted'));
+      reply.on('close', () => recordUpstreamStage(state, 'upstream_socket_close', bodyComplete ? 'closed_after_body' : 'closed_early', bodyComplete ? 'unknown' : 'response_closed_early'));
+      reply.on('error', (error) => {
+        const errorClass = classifyUpstreamError(error, bodyStarted ? 'unknown' : 'response_closed_early');
+        recordUpstreamStage(state, 'upstream_error', 'error', errorClass);
+        if (!res.writableEnded) res.end();
+      });
     });
+    upstream.on('timeout', () => recordUpstreamStage(state, 'upstream_timeout', 'timeout', 'timeout'));
+    upstream.on('abort', () => recordUpstreamStage(state, 'upstream_abort', 'aborted', 'aborted'));
     upstream.on('error', (error) => {
+      recordUpstreamStage(state, 'upstream_error', 'error', classifyUpstreamError(error));
       recordFailure(state, error, 'broker_connect');
       recordStage(state, 'broker_request_result', { transport_outcome: 'failure' });
       if (!res.writableEnded) { res.writeHead(502); res.end(); }
@@ -185,6 +209,27 @@ export function brokerServer(state, overrides = {}) {
       recordTransportSuccess(state, 'proxy_response', 200);
       if (head?.length) upstream.write(head);
       let closed = false;
+      let responseStarted = false;
+      let bodyComplete = false;
+      const onUpstreamData = () => {
+        if (responseStarted) return;
+        responseStarted = true;
+        recordUpstreamStage(state, 'upstream_response_start', 'response_started');
+      };
+      const onUpstreamEnd = () => {
+        bodyComplete = true;
+        recordUpstreamStage(state, 'upstream_response_end', 'body_complete');
+      };
+      const onUpstreamClose = () => recordUpstreamStage(state, 'upstream_socket_close', bodyComplete ? 'closed_after_body' : 'closed_early', bodyComplete ? 'unknown' : 'response_closed_early');
+      const onUpstreamTimeout = () => recordUpstreamStage(state, 'upstream_timeout', 'timeout', 'timeout');
+      const onUpstreamAbort = () => recordUpstreamStage(state, 'upstream_abort', 'aborted', 'aborted');
+      const onUpstreamError = (error) => recordUpstreamStage(state, 'upstream_error', 'error', classifyUpstreamError(error, responseStarted ? 'unknown' : 'response_closed_early'));
+      upstream.on('data', onUpstreamData);
+      upstream.on('end', onUpstreamEnd);
+      upstream.on('close', onUpstreamClose);
+      upstream.on('timeout', onUpstreamTimeout);
+      upstream.on('abort', onUpstreamAbort);
+      upstream.on('error', onUpstreamError);
       const closeTunnel = () => {
         if (closed) return;
         closed = true;

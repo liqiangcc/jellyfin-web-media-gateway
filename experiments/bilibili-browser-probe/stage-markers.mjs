@@ -20,6 +20,13 @@ export const STAGE_MARKER_EVENTS = Object.freeze([
   'process_termination',
   'broker_request_start',
   'broker_request_result',
+  'upstream_response_start',
+  'upstream_response_body_start',
+  'upstream_response_end',
+  'upstream_socket_close',
+  'upstream_timeout',
+  'upstream_abort',
+  'upstream_error',
   'transport_outcome',
   'finalizer_entry',
 ]);
@@ -32,12 +39,22 @@ export const STAGE_MARKER_LIFECYCLE_OUTCOMES = Object.freeze([
   'fulfilled', 'rejected', 'timeout', 'aborted', 'page_closed', 'page_crashed',
   'browser_disconnected', 'process_error', 'process_signal', 'unknown',
 ]);
+export const STAGE_MARKER_UPSTREAM_STATES = Object.freeze([
+  'response_started', 'body_started', 'body_complete', 'closed_early',
+  'closed_after_body', 'timeout', 'aborted', 'error', 'unknown',
+]);
+export const STAGE_MARKER_UPSTREAM_ERROR_CLASSES = Object.freeze([
+  'timeout', 'aborted', 'connection_reset', 'connection_refused', 'tls_failure',
+  'response_closed_early', 'unknown',
+]);
 
 const eventSet = new Set(STAGE_MARKER_EVENTS);
 const statusSet = new Set(STAGE_MARKER_STATUS_CLASSES);
 const transportStageSet = new Set(STAGE_MARKER_TRANSPORT_STAGES);
 const transportOutcomeSet = new Set(STAGE_MARKER_TRANSPORT_OUTCOMES);
 const lifecycleOutcomeSet = new Set(STAGE_MARKER_LIFECYCLE_OUTCOMES);
+const upstreamStateSet = new Set(STAGE_MARKER_UPSTREAM_STATES);
+const upstreamErrorClassSet = new Set(STAGE_MARKER_UPSTREAM_ERROR_CLASSES);
 
 function bounded(value, maximum) {
   return Number.isSafeInteger(value) && value >= 0 && value <= maximum ? value : 0;
@@ -59,6 +76,14 @@ function lifecycleOutcome(value) {
   return typeof value === 'string' && lifecycleOutcomeSet.has(value) ? value : 'unknown';
 }
 
+function upstreamState(value) {
+  return typeof value === 'string' && upstreamStateSet.has(value) ? value : 'unknown';
+}
+
+function upstreamErrorClass(value) {
+  return typeof value === 'string' && upstreamErrorClassSet.has(value) ? value : 'unknown';
+}
+
 /**
  * Normalize a marker into the closed durable DTO. Invalid event names are
  * rejected. Unknown fields are ignored and all bounded values have a safe
@@ -75,6 +100,8 @@ export function normalizeStageMarker(input = {}, sequence = 1) {
     transport_stage: transportStage(input.transport_stage),
     transport_outcome: transportOutcome(input.transport_outcome),
     lifecycle_outcome: lifecycleOutcome(input.lifecycle_outcome),
+    upstream_state: upstreamState(input.upstream_state),
+    upstream_error_class: upstreamErrorClass(input.upstream_error_class),
     request_count: bounded(input.request_count, 200),
     response_bytes: bounded(input.response_bytes, 32 * 1024 * 1024),
     metadata_bytes: bounded(input.metadata_bytes, 1024 * 1024),

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyError, classifyFailure, classifyNavigationLifecycle, classifyProcessTermination, diagnosticCounters, DIAGNOSTIC_PHASES, LIFECYCLE_OUTCOMES } from './diagnostic.mjs';
+import { classifyError, classifyFailure, classifyNavigationLifecycle, classifyProcessTermination, classifyUpstreamError, diagnosticCounters, DIAGNOSTIC_PHASES, LIFECYCLE_OUTCOMES, UPSTREAM_ERROR_CLASSES } from './diagnostic.mjs';
 
 test('classifies every bounded phase with schema-safe output', () => {
   const inputs = [
@@ -85,4 +85,23 @@ test('classifies an observed generic navigation rejection without inventing a ca
   assert.equal(classifyError({ name: 'AbortError' }, 'chromium_navigation').reason, 'navigation_aborted');
   assert.equal(classifyError({ name: 'TargetClosedError' }, 'chromium_navigation').reason, 'navigation_browser_disconnected');
   assert.equal(classifyFailure({ phase_hint: 'chromium_navigation', lifecycle_outcome: 'unknown' }).reason, 'chromium_navigation_failed');
+});
+
+test('classifies upstream errors into finite redacted classes', () => {
+  const cases = [
+    [{ code: 'ETIMEDOUT', message: 'https://secret.invalid/?token=timeout' }, 'timeout'],
+    [{ name: 'AbortError', message: 'secret abort' }, 'aborted'],
+    [{ code: 'ECONNRESET', message: 'secret reset' }, 'connection_reset'],
+    [{ code: 'ECONNREFUSED', message: 'secret refused' }, 'connection_refused'],
+    [{ code: 'ERR_TLS_CERT_ALTNAME_INVALID', message: 'secret cert' }, 'tls_failure'],
+    [{ code: 'UNKNOWN_UPSTREAM', message: 'https://secret.invalid/?token=unknown' }, 'unknown'],
+  ];
+  for (const [error, expected] of cases) assert.equal(classifyUpstreamError(error), expected);
+  assert.equal(classifyUpstreamError({}, 'response_closed_early'), 'response_closed_early');
+  assert.deepEqual(UPSTREAM_ERROR_CLASSES, [
+    'timeout', 'aborted', 'connection_reset', 'connection_refused', 'tls_failure',
+    'response_closed_early', 'unknown',
+  ]);
+  const output = cases.map(([error]) => classifyUpstreamError(error));
+  assert.doesNotMatch(JSON.stringify(output), /https?:\/\/|secret|token/i);
 });
