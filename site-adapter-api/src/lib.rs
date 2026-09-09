@@ -263,15 +263,9 @@ fn bounded_auth_ref(value: &str, max: usize) -> bool {
 
 fn contains_auth_secret_marker(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
-    [
-        "cookie",
-        "authorization",
-        "bearer",
-        "password",
-        "token",
-    ]
-    .iter()
-    .any(|marker| lower.contains(marker))
+    ["cookie", "authorization", "bearer", "password", "token"]
+        .iter()
+        .any(|marker| lower.contains(marker))
 }
 
 pub fn validate_browser_observation(observation: &BrowserObservation) -> Result<(), AdapterError> {
