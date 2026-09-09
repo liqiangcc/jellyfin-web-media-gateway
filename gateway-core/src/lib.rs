@@ -25,6 +25,7 @@ use url::Url;
 use uuid::Uuid;
 
 pub mod auth;
+pub mod auth_attempt_registry;
 mod auth_route;
 pub mod browser;
 pub mod browser_auth;
@@ -40,6 +41,10 @@ pub use auth::{
     AccountState, AuthBoundaryError, CandidateValidation, CleanupResult, PendingIntent,
     PendingPlaybackAction, PendingSourceLocator, ScopedHttpResponse, ScopedSiteHttpClient,
     SessionSwapResult, SessionVault, SiteAccessContext, SiteAccount, SiteSessionRef, VaultError,
+};
+pub use auth_attempt_registry::{
+    BrowserAuthAttemptId, BrowserAuthAttemptRegistry, BrowserAuthAttemptSnapshot,
+    BrowserAuthRegistryError,
 };
 pub use browser::{BrowserObservationHandoff, BrowserOperationId, BrowserSessionId};
 pub use browser_auth::{
