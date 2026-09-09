@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn config_is_private_by_default_and_rejects_secret_or_unbounded_values() {
         let config = config();
-        assert_eq!(config.bind_addr, "127.0.0.1".parse().unwrap());
+        assert_eq!(config.bind_addr, "127.0.0.1".parse::<IpAddr>().unwrap());
         assert_eq!(config.port, DEFAULT_PORT);
         assert!(
             GatewayRuntimeConfig::from_values(
