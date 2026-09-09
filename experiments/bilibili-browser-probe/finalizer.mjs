@@ -1,4 +1,4 @@
-import { DIAGNOSTIC_PHASES, DIAGNOSTIC_REASONS, TRANSPORT_OUTCOMES, TRANSPORT_STAGES, classifyFailure } from './diagnostic.mjs';
+import { DIAGNOSTIC_PHASES, DIAGNOSTIC_REASONS, LIFECYCLE_OUTCOMES, TRANSPORT_OUTCOMES, TRANSPORT_STAGES, classifyFailure } from './diagnostic.mjs';
 import { sanitizeStageMarkers } from './stage-markers.mjs';
 
 export const TERMINATION_CLASSES = Object.freeze(['normal', 'error', 'timeout', 'abort', 'signal', 'unknown']);
@@ -6,6 +6,7 @@ export const RESULT_STATUSES = Object.freeze(['success', 'failure', 'unknown', '
 const phaseSet = new Set(DIAGNOSTIC_PHASES);
 const stageSet = new Set(TRANSPORT_STAGES);
 const outcomeSet = new Set(TRANSPORT_OUTCOMES);
+const lifecycleSet = new Set(LIFECYCLE_OUTCOMES);
 const terminationSet = new Set(TERMINATION_CLASSES);
 const resultSet = new Set(RESULT_STATUSES);
 const reasonSet = new Set(DIAGNOSTIC_REASONS);
@@ -39,6 +40,7 @@ function safeDiagnostic(input = {}) {
     status_class: classified.status_class,
     transport_stage: enumOr(value.transport_stage, stageSet, classified.transport_stage),
     transport_outcome: enumOr(value.transport_outcome, outcomeSet, classified.transport_outcome),
+    lifecycle_outcome: enumOr(value.lifecycle_outcome, lifecycleSet, 'unknown'),
     request_count: bounded(value.request_count, 200),
     response_bytes: bounded(value.response_bytes, 32 * 1024 * 1024),
     metadata_bytes: bounded(value.metadata_bytes, 1024 * 1024),

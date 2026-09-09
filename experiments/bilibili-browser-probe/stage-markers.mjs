@@ -14,6 +14,10 @@ export const STAGE_MARKER_EVENTS = Object.freeze([
   'navigation_start',
   'navigation_end',
   'navigation_status',
+  'navigation_promise_result',
+  'page_lifecycle_result',
+  'browser_disconnect',
+  'process_termination',
   'broker_request_start',
   'broker_request_result',
   'transport_outcome',
@@ -24,11 +28,16 @@ export const STAGE_MARKER_TRANSPORT_STAGES = Object.freeze([
   'resolve_policy', 'tcp_connect', 'tls_handshake', 'proxy_response', 'downstream_close', 'unknown',
 ]);
 export const STAGE_MARKER_TRANSPORT_OUTCOMES = Object.freeze(['success', 'failure', 'unknown']);
+export const STAGE_MARKER_LIFECYCLE_OUTCOMES = Object.freeze([
+  'fulfilled', 'rejected', 'timeout', 'aborted', 'page_closed', 'page_crashed',
+  'browser_disconnected', 'process_error', 'process_signal', 'unknown',
+]);
 
 const eventSet = new Set(STAGE_MARKER_EVENTS);
 const statusSet = new Set(STAGE_MARKER_STATUS_CLASSES);
 const transportStageSet = new Set(STAGE_MARKER_TRANSPORT_STAGES);
 const transportOutcomeSet = new Set(STAGE_MARKER_TRANSPORT_OUTCOMES);
+const lifecycleOutcomeSet = new Set(STAGE_MARKER_LIFECYCLE_OUTCOMES);
 
 function bounded(value, maximum) {
   return Number.isSafeInteger(value) && value >= 0 && value <= maximum ? value : 0;
@@ -46,6 +55,10 @@ function transportOutcome(value) {
   return typeof value === 'string' && transportOutcomeSet.has(value) ? value : 'unknown';
 }
 
+function lifecycleOutcome(value) {
+  return typeof value === 'string' && lifecycleOutcomeSet.has(value) ? value : 'unknown';
+}
+
 /**
  * Normalize a marker into the closed durable DTO. Invalid event names are
  * rejected. Unknown fields are ignored and all bounded values have a safe
@@ -61,6 +74,7 @@ export function normalizeStageMarker(input = {}, sequence = 1) {
     status_class: statusClass(input.status_class),
     transport_stage: transportStage(input.transport_stage),
     transport_outcome: transportOutcome(input.transport_outcome),
+    lifecycle_outcome: lifecycleOutcome(input.lifecycle_outcome),
     request_count: bounded(input.request_count, 200),
     response_bytes: bounded(input.response_bytes, 32 * 1024 * 1024),
     metadata_bytes: bounded(input.metadata_bytes, 1024 * 1024),
@@ -71,15 +85,30 @@ export function normalizeStageMarker(input = {}, sequence = 1) {
 export function createStageTracker() {
   const markers = [];
   let sealed = false;
+  let postNavigationReserve = false;
+  let reservedLifecycleMarkers = 0;
+  const reservedEvents = new Set([
+    'navigation_status', 'navigation_end', 'navigation_promise_result',
+    'page_lifecycle_result', 'browser_disconnect', 'process_termination',
+  ]);
   return Object.freeze({
     record(event, fields = {}) {
-      // Keep one slot available for the finalizer marker even if a noisy
-      // broker emits the maximum number of request events.
-      const reserve = event === 'finalizer_entry' ? 0 : 1;
+      // Keep the finalizer and the post-navigation lifecycle boundary
+      // observable even if a noisy broker fills the stream first. The
+      // reservation activates only after navigation_start, preserving the
+      // historical pre-navigation stream behavior while bounding output.
+      if (event === 'navigation_start') {
+        postNavigationReserve = true;
+        reservedLifecycleMarkers = reservedEvents.size;
+      }
+      const priority = postNavigationReserve && reservedEvents.has(event);
+      const remaining = reservedLifecycleMarkers - (priority ? 1 : 0);
+      const reserve = event === 'finalizer_entry' ? 0 : 1 + (postNavigationReserve ? Math.max(0, remaining) : 0);
       if (sealed || markers.length >= MAX_STAGE_MARKERS - reserve) return false;
       const marker = normalizeStageMarker({ ...fields, event }, markers.length + 1);
       if (!marker) return false;
       markers.push(marker);
+      if (priority) reservedLifecycleMarkers -= 1;
       return true;
     },
     snapshot() {

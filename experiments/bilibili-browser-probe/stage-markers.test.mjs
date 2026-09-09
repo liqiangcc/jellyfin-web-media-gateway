@@ -6,13 +6,18 @@ import {
   normalizeStageMarker,
   sanitizeStageMarkers,
   STAGE_MARKER_EVENTS,
+  STAGE_MARKER_LIFECYCLE_OUTCOMES,
 } from './stage-markers.mjs';
 
 test('stage vocabulary and values are finite and redact unknown fields', () => {
   assert.deepEqual(STAGE_MARKER_EVENTS, [
     'browser_launch_start', 'browser_launch_result', 'navigation_start', 'navigation_end',
-    'navigation_status', 'broker_request_start', 'broker_request_result', 'transport_outcome',
-    'finalizer_entry',
+    'navigation_status', 'navigation_promise_result', 'page_lifecycle_result', 'browser_disconnect',
+    'process_termination', 'broker_request_start', 'broker_request_result', 'transport_outcome', 'finalizer_entry',
+  ]);
+  assert.deepEqual(STAGE_MARKER_LIFECYCLE_OUTCOMES, [
+    'fulfilled', 'rejected', 'timeout', 'aborted', 'page_closed', 'page_crashed',
+    'browser_disconnected', 'process_error', 'process_signal', 'unknown',
   ]);
   const marker = normalizeStageMarker({
     event: 'navigation_status', status_class: '4xx', transport_stage: 'proxy_response', transport_outcome: 'failure',
@@ -22,7 +27,7 @@ test('stage vocabulary and values are finite and redact unknown fields', () => {
   assert.deepEqual(marker, {
     schema_version: 1, sequence: 3, event: 'navigation_status', status_class: '4xx',
     transport_stage: 'proxy_response', transport_outcome: 'failure', request_count: 4,
-    response_bytes: 20, metadata_bytes: 2,
+    lifecycle_outcome: 'unknown', response_bytes: 20, metadata_bytes: 2,
   });
   assert.doesNotMatch(JSON.stringify(marker), /https?:\/\/|secret|token|authorization|sentinel/i);
   assert.equal(normalizeStageMarker({ event: 'caller_controlled_stage' }), undefined);
@@ -44,6 +49,26 @@ test('tracker emits monotonic bounded sequences and seals against late callbacks
   assert.equal(tracker.sealed, true);
   assert.equal(tracker.record('finalizer_entry'), false);
   assert.deepEqual(tracker.snapshot(), sealed);
+});
+
+test('tracker reserves post-navigation lifecycle markers before sealing', () => {
+  const tracker = createStageTracker();
+  for (let index = 0; index < 24; index += 1) tracker.record('broker_request_start');
+  assert.equal(tracker.record('navigation_start'), true);
+  assert.equal(tracker.record('navigation_promise_result', { lifecycle_outcome: 'rejected' }), true);
+  assert.equal(tracker.record('page_lifecycle_result', { lifecycle_outcome: 'page_crashed' }), true);
+  assert.equal(tracker.record('browser_disconnect', { lifecycle_outcome: 'browser_disconnected' }), true);
+  assert.equal(tracker.record('navigation_status', { status_class: 'unknown' }), true);
+  assert.equal(tracker.record('navigation_end', { transport_outcome: 'failure' }), true);
+  assert.equal(tracker.record('finalizer_entry'), true);
+  assert.deepEqual(tracker.snapshot().slice(-6).map(({ event, lifecycle_outcome }) => ({ event, lifecycle_outcome })), [
+    { event: 'navigation_promise_result', lifecycle_outcome: 'rejected' },
+    { event: 'page_lifecycle_result', lifecycle_outcome: 'page_crashed' },
+    { event: 'browser_disconnect', lifecycle_outcome: 'browser_disconnected' },
+    { event: 'navigation_status', lifecycle_outcome: 'unknown' },
+    { event: 'navigation_end', lifecycle_outcome: 'unknown' },
+    { event: 'finalizer_entry', lifecycle_outcome: 'unknown' },
+  ]);
 });
 
 test('sanitizer drops malformed markers and reindexes bounded output', () => {

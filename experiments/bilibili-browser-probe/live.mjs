@@ -15,7 +15,7 @@ import { once } from 'node:events';
 import { chromium } from 'playwright-core';
 import { navigationDescriptor, validateLiveInvocation } from '../../plugins/bilibili/live_selector.mjs';
 import { summarizeObservation, SCHEMA_VERSION } from '../../plugins/bilibili/experimental_probe.mjs';
-import { classifyError, classifyTransport, diagnosticCounters } from './diagnostic.mjs';
+import { classifyError, classifyNavigationLifecycle, classifyTransport, diagnosticCounters } from './diagnostic.mjs';
 import { createFinalizer, terminationClass } from './finalizer.mjs';
 import { createStageTracker } from './stage-markers.mjs';
 
@@ -75,14 +75,14 @@ function recordStage(state, event, fields = {}) {
   state.stages?.record(event, { ...diagnosticCounters(state), ...fields });
 }
 
-function recordFailure(state, error, phaseHint, status, transportStage) {
+function recordFailure(state, error, phaseHint, status, transportStage, lifecycleOutcome) {
   // Once the broker has emitted a successful CONNECT response, a later socket
   // callback belongs to the already observed transport outcome. The explicit
   // response-budget path is the only failure that may supersede it before the
   // tunnel cleanup callback runs.
   if (state.failure || state.transportFinalized || state.transport && !state.responseLimitTriggered) return state.failure;
   const counters = diagnosticCounters(state);
-  state.failure = classifyError(error, phaseHint, { ...counters, status, transport_stage: transportStage });
+  state.failure = { ...classifyError(error, phaseHint, { ...counters, status, transport_stage: transportStage }), lifecycle_outcome: lifecycleOutcome || 'unknown' };
   return state.failure;
 }
 
@@ -274,6 +274,7 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
   let profile;
   let result;
   let caughtError;
+  let navigationActive = false;
   const finalizer = createFinalizer(state.stages);
   try {
     profile = await createDisposableProfile();
@@ -295,6 +296,15 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
       await route.continue({ headers });
     });
     const page = await context.newPage();
+    const observeLifecycle = (event, lifecycleOutcome) => {
+      if (!navigationActive || state.lifecycleOutcome) return;
+      state.lifecycleOutcome = lifecycleOutcome;
+      recordStage(state, event, { lifecycle_outcome: lifecycleOutcome, transport_outcome: 'failure' });
+    };
+    browser?.on('disconnected', () => observeLifecycle('browser_disconnect', 'browser_disconnected'));
+    context.on('close', () => observeLifecycle('page_lifecycle_result', 'page_closed'));
+    page.on('close', () => observeLifecycle('page_lifecycle_result', 'page_closed'));
+    page.on('crash', () => observeLifecycle('page_lifecycle_result', 'page_crashed'));
     const pendingObservations = new Set();
     page.on('response', async (response) => {
       const task = (async () => {
@@ -313,10 +323,13 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
       pendingObservations.add(task);
       task.finally(() => pendingObservations.delete(task));
     });
+    navigationActive = true;
     recordStage(state, 'navigation_start');
     let navigationResponse;
     try {
       navigationResponse = await page.goto(admitted.navigation.url, { waitUntil: 'domcontentloaded', timeout: admitted.timeout_ms });
+      navigationActive = false;
+      recordStage(state, 'navigation_promise_result', { lifecycle_outcome: 'fulfilled', transport_outcome: 'success' });
       const navigationStatus = navigationResponse?.status();
       recordStage(state, 'navigation_status', { status_class: statusClass(navigationStatus) });
       if (navigationResponse?.status() >= 300) {
@@ -325,11 +338,15 @@ export async function runLive(invocation, browserPath = process.env.CHROME_PATH 
       }
       recordStage(state, 'navigation_end', { status_class: statusClass(navigationStatus), transport_outcome: 'success' });
     } catch (error) {
-      recordFailure(state, error, 'chromium_navigation');
+      const lifecycleOutcome = state.lifecycleOutcome || classifyNavigationLifecycle(error);
+      navigationActive = false;
+      recordStage(state, 'navigation_promise_result', { lifecycle_outcome: lifecycleOutcome, transport_outcome: 'failure' });
+      recordFailure(state, error, 'chromium_navigation', undefined, undefined, lifecycleOutcome);
       recordStage(state, 'navigation_status', { transport_stage: state.failure?.transport_stage, transport_outcome: 'failure' });
       recordStage(state, 'navigation_end', { transport_stage: state.failure?.transport_stage, transport_outcome: 'failure' });
       throw error;
     }
+    navigationActive = false;
     await page.waitForTimeout(Math.min(3000, admitted.timeout_ms));
     await Promise.allSettled([...pendingObservations]);
     const partMatch = new URL(page.url()).pathname.includes(`/video/${admitted.navigation.bvid}`) && new URL(page.url()).searchParams.get('p') === String(admitted.navigation.part);

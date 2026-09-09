@@ -39,6 +39,7 @@ test('finalizer publishes one bounded result and ignores late callbacks', () => 
   const finalizer = createFinalizer(tracker);
   const first = finalizer.finalize({ result: 'failure', termination: 'signal', diagnostic: {
     phase: 'chromium_navigation', reason: 'connection_closed', transport_stage: 'downstream_close', transport_outcome: 'failure',
+    lifecycle_outcome: 'page_closed',
     request_count: 4, response_bytes: 20, metadata_bytes: 2,
   }, activity: { page_navigation: true, click: true }, cleanup: {
     browser_exit: 'complete', broker_close: 'complete', temporary_profile: 'complete', ephemeral_candidates: 'complete', dns_pins: 'complete', staging: 'complete',
@@ -47,6 +48,7 @@ test('finalizer publishes one bounded result and ignores late callbacks', () => 
   assert.strictEqual(late, first);
   assert.equal(first.result, 'failure');
   assert.equal(first.termination, 'signal');
+  assert.equal(first.diagnostic.lifecycle_outcome, 'page_closed');
   assert.equal(first.activity.click, true);
   assert.equal(first.cleanup.staging, 'complete');
   assert.deepEqual(first.diagnostic.stage_markers.map(({ event, sequence }) => ({ event, sequence })), [
@@ -55,6 +57,21 @@ test('finalizer publishes one bounded result and ignores late callbacks', () => 
   assert.equal(tracker.sealed, true);
   assert.equal(tracker.record('broker_request_start'), false);
   assert.doesNotMatch(JSON.stringify(first), /https?:\/\/|cookie|authorization|secret|token/i);
+});
+
+test('finalizer preserves first post-navigation lifecycle class against late callbacks', () => {
+  const tracker = createStageTracker();
+  tracker.record('navigation_start');
+  const finalizer = createFinalizer(tracker);
+  const first = finalizer.finalize({ result: 'failure', termination: 'error', diagnostic: {
+    phase: 'chromium_navigation', reason: 'navigation_timeout', lifecycle_outcome: 'timeout',
+  } });
+  const late = finalizer.finalize({ result: 'failure', termination: 'error', diagnostic: {
+    phase: 'chromium_navigation', reason: 'connection_closed', lifecycle_outcome: 'browser_disconnected',
+  } });
+  assert.strictEqual(late, first);
+  assert.equal(first.diagnostic.lifecycle_outcome, 'timeout');
+  assert.equal(tracker.record('browser_disconnect', { lifecycle_outcome: 'browser_disconnected' }), false);
 });
 
 test('finalizer gives explicit unknown cleanup for impossible paths', () => {
@@ -87,5 +104,7 @@ test('probe has one output owner and bounded process-level termination', () => {
   assert.equal((probe.match(/process\.stdout\.write/g) || []).length, 1);
   assert.doesNotMatch(live, /process\.stdout\.write/);
   assert.match(probe, /\['SIGINT', 'SIGTERM'\]/);
+  assert.match(probe, /processStages\.record\('process_termination'/);
+  assert.match(probe, /classifyProcessTermination/);
   assert.match(probe, /setTimeout\(\(\) => \{[\s\S]*process\.exit\(exitCode\)/);
 });
