@@ -294,9 +294,11 @@ impl<W: BrowserWorker> BrowserAuthAttempt<W> {
         candidate_session_id: &str,
         observation: BrowserAuthObservation,
     ) -> Result<AuthenticatedSessionHandoff, BrowserAuthRuntimeError> {
-        let candidate = self
-            .vault
-            .candidate_session_ref(&self.site_id, &self.account_ref, candidate_session_id)?;
+        let candidate = self.vault.candidate_session_ref(
+            &self.site_id,
+            &self.account_ref,
+            candidate_session_id,
+        )?;
         self.accept_candidate(candidate, observation)
     }
 

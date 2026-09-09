@@ -5,12 +5,12 @@
 //! registration/liveness stays behind `DisplaySessionService`; Playback
 //! authority stays behind `ControlService`.
 
+use crate::browser::BrowserObservationHandoff;
 use crate::control::{
     ControlCommandError, ControlCommandRequest, ControlCommandResponse, ControlService,
     NavigationStart,
 };
 use crate::display_session::{DisplaySessionError, DisplaySessionService};
-use crate::browser::BrowserObservationHandoff;
 use crate::playback::{Command, CommandError, NavigationTicket};
 use crate::{Binding, EgressScope, GatewayError, GatewayService};
 use axum::response::{IntoResponse, Response};
@@ -887,8 +887,7 @@ mod tests {
             if matches!(
                 self.mode,
                 FixtureMode::Observation | FixtureMode::AuthenticatedObservation
-            )
-                && (context.browser_observation.is_none() || context.server_observation.is_none())
+            ) && (context.browser_observation.is_none() || context.server_observation.is_none())
             {
                 return Err(AdapterError::ObservationRequired);
             }
@@ -1152,37 +1151,35 @@ mod tests {
             source: "fixture://observation".into(),
             display_id: "display-a".into(),
         };
-        let first = json(
-            service.create_authenticated_playback_session(
-                request.clone(),
-                authenticated_browser_handoff(
-                    "fixture://observation",
-                    std::time::Duration::from_secs(30),
-                ),
-                authenticated_session(),
+        let first = json(service.create_authenticated_playback_session(
+            request.clone(),
+            authenticated_browser_handoff(
+                "fixture://observation",
+                std::time::Duration::from_secs(30),
             ),
-        )
+            authenticated_session(),
+        ))
         .await;
         let capability_count = service.capability_count();
-        let replay = json(
-            service.create_authenticated_playback_session(
-                request,
-                authenticated_browser_handoff(
-                    "fixture://observation",
-                    std::time::Duration::from_secs(30),
-                ),
-                authenticated_session(),
+        let replay = json(service.create_authenticated_playback_session(
+            request,
+            authenticated_browser_handoff(
+                "fixture://observation",
+                std::time::Duration::from_secs(30),
             ),
-        )
+            authenticated_session(),
+        ))
         .await;
 
         assert_eq!(first["session_id"], replay["session_id"]);
         assert_eq!(first["media"]["streams"], replay["media"]["streams"]);
         assert_eq!(service.capability_count(), capability_count);
         assert_eq!(service.control().session_count(), 1);
-        assert!(first["media"]["streams"][0]["gateway_path"]
-            .as_str()
-            .is_some_and(|path| path.starts_with("/stream/")));
+        assert!(
+            first["media"]["streams"][0]["gateway_path"]
+                .as_str()
+                .is_some_and(|path| path.starts_with("/stream/"))
+        );
     }
 
     #[tokio::test]

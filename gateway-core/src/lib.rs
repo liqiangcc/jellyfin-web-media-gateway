@@ -40,11 +40,11 @@ pub use auth::{
     PendingPlaybackAction, PendingSourceLocator, ScopedHttpResponse, ScopedSiteHttpClient,
     SessionSwapResult, SessionVault, SiteAccessContext, SiteAccount, SiteSessionRef, VaultError,
 };
+pub use browser::{BrowserObservationHandoff, BrowserOperationId, BrowserSessionId};
 pub use browser_auth::{
     AUTH_ATTEMPT_TTL, AUTH_EVENT_VERSION, BrowserAuthAttempt, BrowserAuthEvent, BrowserAuthRuntime,
     BrowserAuthRuntimeError, MAX_AUTH_EVENTS,
 };
-pub use browser::{BrowserObservationHandoff, BrowserOperationId, BrowserSessionId};
 pub use control::{
     ControlCommand, ControlCommandError, ControlCommandRequest, ControlCommandResponse,
     ControlDisplaySnapshot, ControlErrorResponse, ControlEvent, ControlEventKind,
