@@ -997,7 +997,13 @@ fn build_resource_record(
         kind,
         group_id: None,
         codec: None,
-        container: Some(content_type.split('/').next_back().unwrap_or("unknown").into()),
+        container: Some(
+            content_type
+                .split('/')
+                .next_back()
+                .unwrap_or("unknown")
+                .into(),
+        ),
         mime_type: Some(content_type.clone()),
         width: None,
         height: None,

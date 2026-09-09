@@ -324,9 +324,15 @@ pub fn validate_browser_observation(observation: &BrowserObservation) -> Result<
             || !bounded_optional_metadata(candidate.container.as_deref(), MAX_MEDIA_CONTAINER_BYTES)
             || !bounded_optional_metadata(candidate.mime_type.as_deref(), MAX_MEDIA_MIME_BYTES)
             || !bounded_optional_metadata(candidate.language.as_deref(), MAX_MEDIA_LANGUAGE_BYTES)
-            || candidate.width.is_some_and(|value| value == 0 || value > 16_384)
-            || candidate.height.is_some_and(|value| value == 0 || value > 16_384)
-            || candidate.bitrate.is_some_and(|value| value == 0 || value > 1_000_000_000)
+            || candidate
+                .width
+                .is_some_and(|value| value == 0 || value > 16_384)
+            || candidate
+                .height
+                .is_some_and(|value| value == 0 || value > 16_384)
+            || candidate
+                .bitrate
+                .is_some_and(|value| value == 0 || value > 1_000_000_000)
             || candidate
                 .expires_at
                 .is_some_and(|value| value == 0 || value > MAX_MEDIA_EXPIRY_UNIX_SECONDS)
@@ -509,7 +515,10 @@ impl fmt::Debug for MediaTrack {
             .field("height", &self.height)
             .field("bitrate", &self.bitrate)
             .field("language", &self.language)
-            .field("access_ref", &self.access_ref.as_ref().map(|_| "<redacted>"))
+            .field(
+                "access_ref",
+                &self.access_ref.as_ref().map(|_| "<redacted>"),
+            )
             .field("expires_at", &self.expires_at)
             .finish()
     }

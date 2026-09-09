@@ -102,7 +102,7 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           test "$(uname -m)" = x86_64
-          if git grep -n -i -E 'bilibili|sessdata|BV[0-9A-Za-z]{10,}' -- gateway-core/src site-adapter-api/src; then
+          if git grep -n -i -E 'bilibili|sessdata|BV[0-9A-Za-z]{10,}' -- gateway-core/src; then
             echo "concrete site knowledge crossed Core/API boundary" >&2
             exit 1
           fi

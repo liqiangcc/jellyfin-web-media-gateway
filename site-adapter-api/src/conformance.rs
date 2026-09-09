@@ -249,9 +249,15 @@ pub fn validate_media_shape(
         {
             return Err("media shape language metadata is invalid".into());
         }
-        if track.width.is_some_and(|value| value == 0 || value > 16_384)
-            || track.height.is_some_and(|value| value == 0 || value > 16_384)
-            || track.bitrate.is_some_and(|value| value == 0 || value > 1_000_000_000)
+        if track
+            .width
+            .is_some_and(|value| value == 0 || value > 16_384)
+            || track
+                .height
+                .is_some_and(|value| value == 0 || value > 16_384)
+            || track
+                .bitrate
+                .is_some_and(|value| value == 0 || value > 1_000_000_000)
             || track
                 .expires_at
                 .is_some_and(|value| value == 0 || value > crate::MAX_MEDIA_EXPIRY_UNIX_SECONDS)
@@ -261,9 +267,9 @@ pub fn validate_media_shape(
         if track.access_ref.as_deref().is_some_and(|value| {
             value.is_empty()
                 || value.len() > 256
-                || !value
-                    .chars()
-                    .all(|character| character.is_ascii_alphanumeric() || ".:_-".contains(character))
+                || !value.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || ".:_-".contains(character)
+                })
                 || contains_secret_marker(value)
         }) {
             return Err("media shape access reference is invalid".into());
@@ -344,7 +350,8 @@ pub fn assert_error_diagnostics_bounded(sentinels: &[&str]) -> Result<(), Confor
 mod tests {
     use super::*;
     use crate::{
-        ResolvedStream, ResolvedSubtitle, SiteAdapterRegistry, SourceLocator, StreamProtocol,
+        MediaTrack, ResolvedStream, ResolvedSubtitle, SiteAdapterRegistry, SourceLocator,
+        StreamProtocol,
     };
     use std::collections::BTreeMap;
     use std::sync::Arc;

@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 use site_adapter_api::{
     AdapterError, AuthenticatedSessionHandoff, BROWSER_AUTH_OBSERVATION_VERSION,
     BrowserAuthObservation, BrowserAuthState, BrowserExpiryHint, BrowserMediaKind,
-    BrowserObservation, BrowserStatusClass, MediaProtection, NavigationContext, RecognizeResult,
-    MediaShapeV1, MediaTrack, MediaTrackKind, ResolveContext, ResolvedMedia, ResolvedStream,
-    ServerOwnedObservation, SiteAdapter, SiteAdapterRegistry, SourceLocator, StreamProtocol,
-    validate_browser_auth_observation, validate_browser_observation,
+    BrowserObservation, BrowserStatusClass, MediaProtection, MediaShapeV1, MediaTrack,
+    MediaTrackKind, NavigationContext, RecognizeResult, ResolveContext, ResolvedMedia,
+    ResolvedStream, ServerOwnedObservation, SiteAdapter, SiteAdapterRegistry, SourceLocator,
+    StreamProtocol, validate_browser_auth_observation, validate_browser_observation,
     validate_server_owned_observation,
 };
 use url::Url;
@@ -270,14 +270,16 @@ impl SiteAdapter for BilibiliAdapter {
         let mut muxed_candidate = None;
         let mut paired_candidates = std::collections::BTreeMap::<
             String,
-            Vec<(&site_adapter_api::BrowserMediaCandidate, &site_adapter_api::ServerOwnedMedia)>,
+            Vec<(
+                &site_adapter_api::BrowserMediaCandidate,
+                &site_adapter_api::ServerOwnedMedia,
+            )>,
         >::new();
         for observed in &observation.candidates {
             if !matches!(
                 observed.protocol,
                 StreamProtocol::HttpFile | StreamProtocol::Hls | StreamProtocol::Dash
-            )
-                || observed.status != BrowserStatusClass::Success
+            ) || observed.status != BrowserStatusClass::Success
                 || !observed.egress_allowed
                 || observed.expiry == BrowserExpiryHint::Expired
             {
@@ -325,36 +327,40 @@ impl SiteAdapter for BilibiliAdapter {
                 })
                 .collect();
             if complete_groups.len() == 1 {
-                complete_groups.into_iter().next().expect("complete group").1
+                complete_groups
+                    .into_iter()
+                    .next()
+                    .expect("complete group")
+                    .1
             } else {
                 Vec::new()
             }
         };
         if selected.is_empty() {
             return Err({
-            if observation
-                .candidates
-                .iter()
-                .any(|candidate| candidate.expiry == BrowserExpiryHint::Expired)
-            {
-                AdapterError::ObservationExpired
-            } else if observation.candidates.iter().any(|candidate| {
-                matches!(
-                    candidate.kind,
-                    BrowserMediaKind::Video | BrowserMediaKind::Audio
-                )
-            }) {
-                AdapterError::UnsupportedMedia
-            } else if observation
-                .candidates
-                .iter()
-                .any(|candidate| !candidate.egress_allowed)
-            {
-                AdapterError::EgressRejected
-            } else {
-                AdapterError::UnsupportedMedia
-            }
-        });
+                if observation
+                    .candidates
+                    .iter()
+                    .any(|candidate| candidate.expiry == BrowserExpiryHint::Expired)
+                {
+                    AdapterError::ObservationExpired
+                } else if observation.candidates.iter().any(|candidate| {
+                    matches!(
+                        candidate.kind,
+                        BrowserMediaKind::Video | BrowserMediaKind::Audio
+                    )
+                }) {
+                    AdapterError::UnsupportedMedia
+                } else if observation
+                    .candidates
+                    .iter()
+                    .any(|candidate| !candidate.egress_allowed)
+                {
+                    AdapterError::EgressRejected
+                } else {
+                    AdapterError::UnsupportedMedia
+                }
+            });
         }
         if selected
             .iter()
