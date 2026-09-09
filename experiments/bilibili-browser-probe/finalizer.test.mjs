@@ -74,6 +74,14 @@ test('finalizer preserves first post-navigation lifecycle class against late cal
   assert.equal(tracker.record('browser_disconnect', { lifecycle_outcome: 'browser_disconnected' }), false);
 });
 
+test('finalizer derives a bounded rejection reason from the lifecycle marker', () => {
+  const result = finalizeResult({ result: 'failure', termination: 'error', diagnostic: {
+    phase: 'chromium_navigation', lifecycle_outcome: 'rejected',
+  } });
+  assert.equal(result.diagnostic.reason, 'navigation_promise_rejected');
+  assert.equal(result.diagnostic.lifecycle_outcome, 'rejected');
+});
+
 test('finalizer gives explicit unknown cleanup for impossible paths', () => {
   const result = finalizeResult({ result: 'unknown', termination: 'unknown', diagnostic: { phase: 'unknown', transport_stage: 'unknown' } });
   assert.equal(result.result, 'unknown');

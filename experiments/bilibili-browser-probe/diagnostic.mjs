@@ -75,6 +75,10 @@ export const DIAGNOSTIC_REASONS = Object.freeze([
   ...new Set([
     ...ERROR_CODES.map(([, , reason]) => reason),
     ...DIAGNOSTIC_PHASES.filter((phase) => phase !== 'unknown').map((phase) => `${phase}_failed`),
+    'navigation_promise_rejected',
+    'navigation_target_closed',
+    'navigation_target_crashed',
+    'navigation_browser_disconnected',
     'unclassified_failure',
     'status_1xx', 'status_2xx', 'status_3xx', 'status_4xx', 'status_5xx',
   ]),
@@ -157,6 +161,15 @@ function stageFor(phase, match, explicit) {
   }[phase] || 'unknown');
 }
 
+const NAVIGATION_LIFECYCLE_REASONS = Object.freeze({
+  rejected: 'navigation_promise_rejected',
+  timeout: 'navigation_timeout',
+  aborted: 'navigation_aborted',
+  page_closed: 'navigation_target_closed',
+  page_crashed: 'navigation_target_crashed',
+  browser_disconnected: 'navigation_browser_disconnected',
+});
+
 /**
  * Classify a coarse failure DTO.  Unknown fields are ignored and only
  * allowlisted codes become output, so passing an Error message cannot leak it.
@@ -165,7 +178,9 @@ export function classifyFailure(input = {}) {
   const value = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
   const match = codeMatch(value.error_code) || codeMatch(value.code);
   const phase = match?.[1] || hintMatch(value.phase_hint) || (Number.isInteger(value.status) && value.status >= 300 ? 'http_status' : 'unknown');
-  const reason = match?.[2] || (phase === 'http_status' ? `status_${statusClass(value.status)}` : phase === 'unknown' ? 'unclassified_failure' : `${phase}_failed`);
+  const lifecycle = lifecycleOutcome(value.lifecycle_outcome);
+  const reason = match?.[2] || (phase === 'chromium_navigation' && lifecycle ? NAVIGATION_LIFECYCLE_REASONS[lifecycle] : undefined) ||
+    (phase === 'http_status' ? `status_${statusClass(value.status)}` : phase === 'unknown' ? 'unclassified_failure' : `${phase}_failed`);
   return Object.freeze({
     schema_version: DIAGNOSTIC_SCHEMA_VERSION,
     phase,
@@ -186,6 +201,12 @@ export function classifyFailure(input = {}) {
 export function classifyError(error, phaseHint, counters = {}) {
   const code = error && typeof error.code === 'string' ? error.code : '';
   const message = error && typeof error.message === 'string' ? error.message : '';
+  const inferredLifecycle = phaseHint === 'chromium_navigation' ? classifyNavigationLifecycle(error) : undefined;
+  // A generic Error only proves an explicit rejection when the navigation
+  // caller supplies that settled lifecycle marker. Known structured names and
+  // codes can be inferred locally; an opaque Error remains the unknown class.
+  const observedLifecycle = lifecycleOutcome(counters.lifecycle_outcome) ||
+    (inferredLifecycle && inferredLifecycle !== 'rejected' ? inferredLifecycle : undefined);
   return classifyFailure({
     phase_hint: phaseHint,
     error_code: code || message,
@@ -194,6 +215,7 @@ export function classifyError(error, phaseHint, counters = {}) {
     metadata_bytes: counters.metadata_bytes,
     status: counters.status,
     transport_stage: counters.transport_stage,
+    lifecycle_outcome: observedLifecycle,
   });
 }
 
