@@ -12,6 +12,7 @@ Environment: env:cloud
 Requested model: gpt-5.6-luna, reasoning high
 Fast: disabled by user; do not enable/select Fast
 Target: tx-node / gateway-verify
+Contract revision base: c3bfad69565423e4cae82b47143344e10bd89f19
 ```
 
 ## Goal
@@ -24,21 +25,21 @@ This Task does not require a host-wide clean browser state, a separately provisi
 
 ## Accepted implementation / artifact anchor
 
-Reuse the accepted #188 implementation unless an actual target failure proves a code correction is required:
+Reuse the accepted #207 diagnostic implementation unless an actual target failure proves a code correction is required:
 
 ```text
-Candidate: e277220b625a2c4846ad3469a841398c685ad13b
-PR: #205
-Hosted run: 34300151962
-Artifact: 10084651588
-Artifact size: 4,215,293 bytes
-Artifact digest: sha256:f58e4ece689595b4e73808e8a8843dca25becef738209644658f77cf22713e50
+Candidate: c8ff3f9e1b5f468e2b68d3f274da82eba0b9a76f
+PR: #209
+Hosted run: 34302593582
+Artifact: 10085488784
+Artifact size: 4,215,814 bytes
+Artifact digest: sha256:9a074b534a4067e307d1e0108dfa66f6f296e6baeaf52e096ab8b01ee6957cb6
 Selector: bilibili:BV14V411W7r5:part-2
 ```
 
 The hosted implementation gate already passed. Do not rebuild or change code before target execution unless the target result demonstrates that a focused correction is necessary.
 
-The accepted implementation includes the #199 stage-marker follow-up and the #203 post-navigation lifecycle diagnostic. Issue #203 was accepted after PR #205 merged to `main` at `4b2590bf24c445ee1366a4c1e2101a7830efa357`; its exact Candidate `e277220b625a2c4846ad3469a841398c685ad13b`, hosted run `34300151962`, and artifact `10084651588` are the anchor above. The #203 follow-up adds finite lifecycle outcomes for fulfilled/rejected navigation, timeout/abort, page/browser termination, and process error/signal termination, with bounded `navigation_promise_result`, `page_lifecycle_result`, `browser_disconnect`, `process_termination`, and sealed finalizer markers. #199 and #203 produced no target evidence; this revised #188 Task remains responsible for the next target navigation result.
+The accepted implementation includes the #199 stage-marker follow-up, the #203 post-navigation lifecycle diagnostic, and the #207 finite navigation-rejection classifier. Issue #207 was accepted after PR #209 merged to `main` at `c3bfad69565423e4cae82b47143344e10bd89f19`; its exact Candidate `c8ff3f9e1b5f468e2b68d3f274da82eba0b9a76f`, hosted run `34302593582`, and artifact `10085488784` are the anchor above. The accepted follow-ups add finite lifecycle outcomes for fulfilled/rejected navigation, timeout/abort, page/browser termination, and process error/signal termination, plus allowlisted navigation reasons including the explicit generic rejection class, with bounded `navigation_promise_result`, `page_lifecycle_result`, `browser_disconnect`, `process_termination`, and sealed finalizer markers. #199, #203 and #207 produced no target evidence; this revised #188 Task remains responsible for the next target navigation result.
 
 ## Fast-path target contract
 
