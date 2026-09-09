@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyError, classifyFailure, classifyNavigationLifecycle, classifyProcessTermination, classifyUpstreamError, diagnosticCounters, DIAGNOSTIC_PHASES, LIFECYCLE_OUTCOMES, UPSTREAM_ERROR_CLASSES } from './diagnostic.mjs';
+import { classifyError, classifyFailure, classifyNavigationLifecycle, classifyProcessTermination, classifyResponseMetadata, classifyUpstreamError, diagnosticCounters, DIAGNOSTIC_PHASES, LIFECYCLE_OUTCOMES, RESPONSE_ORIGINS, RESPONSE_REDIRECT_CLASSES, UPSTREAM_ERROR_CLASSES } from './diagnostic.mjs';
 
 test('classifies every bounded phase with schema-safe output', () => {
   const inputs = [
@@ -41,6 +41,25 @@ test('success metadata is unaffected by diagnostic helpers', () => {
   const before = JSON.stringify(metadata);
   classifyFailure({ phase_hint: 'unknown', error_code: 'https://secret.invalid/body' });
   assert.equal(JSON.stringify(metadata), before);
+});
+
+test('response provenance and redirect metadata are finite and never inferred from status', () => {
+  assert.deepEqual(RESPONSE_ORIGINS, ['broker_policy', 'upstream_http', 'navigation_status', 'unknown']);
+  assert.deepEqual(RESPONSE_REDIRECT_CLASSES, ['none', 'redirect', 'unknown']);
+  assert.deepEqual(classifyResponseMetadata({ response_origin: 'broker_policy', status: 403, request_count: 4, response_bytes: 20, metadata_bytes: 2 }), {
+    schema_version: 2, response_origin: 'broker_policy', status_class: '4xx', redirect_class: 'none',
+    request_count: 4, response_bytes: 20, metadata_bytes: 2,
+  });
+  assert.deepEqual(classifyResponseMetadata({ response_origin: 'upstream_http', status: 302 }), {
+    schema_version: 2, response_origin: 'upstream_http', status_class: '3xx', redirect_class: 'redirect',
+    request_count: 0, response_bytes: 0, metadata_bytes: 0,
+  });
+  const unknown = classifyResponseMetadata({ response_origin: 'https://secret.invalid', status: 499, redirect_class: 'attacker', body: 'token=sentinel' });
+  assert.equal(unknown.response_origin, 'unknown');
+  assert.equal(unknown.redirect_class, 'none');
+  assert.doesNotMatch(JSON.stringify(unknown), /https?:\/\/|secret|token|sentinel/i);
+  assert.equal(classifyFailure({ status: 404, response_origin: 'upstream_http' }).response_origin, 'upstream_http');
+  assert.equal(classifyFailure({ status: 404 }).response_origin, 'unknown');
 });
 
 test('post-navigation lifecycle markers reduce to finite classes without raw error data', () => {
