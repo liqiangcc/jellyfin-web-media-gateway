@@ -66,9 +66,9 @@ jobs:
 
       - name: Architecture and secret guards
         run: |
-          ! rg -n -i 'bilibili|youtube|querySelector' gateway-core/src/browser.rs gateway-core/src/browser_chromium.rs
-          ! rg -n 'Fetch\.(getResponseBody|takeResponseBodyAsStream)|Network\.getResponseBody|Set-Cookie|Authorization' gateway-core/src/browser.rs gateway-core/src/browser_chromium.rs
-          ! rg -n -- '--no-sandbox' gateway-core/src/browser_chromium.rs
+          ! grep -Eni 'bilibili|youtube|querySelector' gateway-core/src/browser.rs gateway-core/src/browser_chromium.rs
+          ! grep -En 'Fetch\.(getResponseBody|takeResponseBodyAsStream)|Network\.getResponseBody|Set-Cookie|Authorization' gateway-core/src/browser.rs gateway-core/src/browser_chromium.rs
+          ! grep -En -- '--no-sandbox' gateway-core/src/browser_chromium.rs
 
       - name: Full x64 workspace integration suite
         run: cargo test --workspace --all-targets -- --test-threads=1
