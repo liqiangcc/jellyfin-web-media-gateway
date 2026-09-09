@@ -268,7 +268,6 @@ fn contains_auth_secret_marker(value: &str) -> bool {
         "authorization",
         "bearer",
         "password",
-        "sessdata",
         "token",
     ]
     .iter()
