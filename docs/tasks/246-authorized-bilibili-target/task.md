@@ -7,13 +7,13 @@ GitHub Issue: #246
 Parent Goal / Research Item: #68 Bilibili Web E2E
 Task / Research ID: R005-TARGET-AUTHORIZED-PLAYBACK
 Task kind: verification
-Base commit: f7d123834594070d4f6eea6838e70fab808f24f3
+Base commit: 289f4357558b211ebb9be68b7f6fb8b731006324
 Candidate commit: accepted main/runtime; exact target Candidate recorded before execution
 Session bootstrap prompt: docs/tasks/246-authorized-bilibili-target/prompt.md
 Preferred worker: cloud
 Eligible worker environments: env:cloud
 Required capabilities: github-read-write, cloud-interactive, lan-access, tv-browser, manual-observation
-Hard publication dependencies: #237 and #240 and #243 Final Acceptance; #235 authorization/account gate; Coordinator target publication gate
+Hard publication dependencies: #237, #240, #243, #248, #251, #255, #257 and #259 Final Acceptance; #235 authorization/account gate; Coordinator target publication gate
 ```
 
 ## Goal
@@ -29,7 +29,7 @@ The Task stays `status:blocked` until the Issue contains all of the following, r
 3. An approved interactive authentication channel owned by the Auth Mode design, with timeout/cancellation and no raw VNC/CDP/personal-browser control.
 4. Permission to use the tx-node target slot and retain only sanitized bounded evidence.
 5. Fresh low-privilege target identity with no Vault, SSH, Tailscale auth key, root/ADB or production credential.
-6. Exact accepted implementation Candidate and current hosted regression evidence from #243/#240.
+6. Exact accepted implementation Candidates and current hosted regression evidence from #240, #243, #248, #251, #255, #257 and #259; the current integration base is `289f4357558b211ebb9be68b7f6fb8b731006324`.
 
 Absence of any item is `BLOCKED`, not a reason to attempt anonymous login or bypass policy.
 
@@ -74,7 +74,7 @@ C6: Parent #68 playback acceptance is a separate Coordinator Gate; this Task's r
 | J0 | C1,C5 | Web/GitHub read-back | Coordinator | yes before target |
 | J1 | C1-C4 | approved target execution | tx-node isolated browser slot | yes after J0 |
 | J2 | C5 | target cleanup/read-back | tx-node low-privilege identity | yes |
-| J3 | implementation freshness | GitHub Actions | hosted x64, exact accepted Candidate | yes if main changed |
+| J3 | implementation freshness | GitHub Actions | hosted x64, exact current integration Candidate `289f4357558b211ebb9be68b7f6fb8b731006324` | yes before target |
 
 No target action is permitted while `status:blocked`; a Worker may claim only after publication gate changes it to `status:ready` and records all authorization prerequisites.
 
