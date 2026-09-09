@@ -13,7 +13,7 @@ path = "src/bin/gateway-server.rs"
 [dependencies]
 axum.workspace = true
 bilibili = { path = "../plugins/bilibili" }
-gateway-core = { path = "../gateway-core", features = ["test-support"] }
+gateway-core = { path = "../gateway-core" }
 generic-direct = { path = "../plugins/generic-direct" }
 generic-ytdlp = { path = "../plugins/generic-ytdlp" }
 site-adapter-api = { path = "../site-adapter-api" }
@@ -21,5 +21,6 @@ tokio.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+gateway-core = { path = "../gateway-core", features = ["test-support"] }
 serde_json.workspace = true
 tower.workspace = true
