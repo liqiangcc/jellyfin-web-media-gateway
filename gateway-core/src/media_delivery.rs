@@ -324,8 +324,14 @@ impl DeliveryInputBroker for HttpFileDeliveryBroker {
                 .headers(input.secret_headers().clone())
                 .send()
                 .await
-                .map_err(|_| DeliveryError::BrokerRejected)?;
+                .map_err(|_| {
+                    #[cfg(feature = "control-ui-harness")]
+                    eprintln!("media_delivery stage=send track={}", input.track_id());
+                    DeliveryError::BrokerRejected
+                })?;
             if !response.status().is_success() {
+                #[cfg(feature = "control-ui-harness")]
+                eprintln!("media_delivery stage=status track={}", input.track_id());
                 return Err(DeliveryError::BrokerRejected);
             }
             if response
@@ -726,7 +732,11 @@ impl MediaDeliverySupervisor {
                 deadline,
             )
             .await??;
-            validate_materialization(&validated, &acquired, workspace)?;
+            if let Err(error) = validate_materialization(&validated, &acquired, workspace) {
+                #[cfg(feature = "control-ui-harness")]
+                eprintln!("media_delivery stage=validate track={}", input.track_id());
+                return Err(error);
+            }
             inputs.push((track.kind, acquired.path));
         }
 
