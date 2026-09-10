@@ -1159,11 +1159,13 @@ fn validate_mp4_input(path: &Path) -> Result<(), DeliveryError> {
     if first_box_size < 16 || first_box_size > prefix.len() {
         return Err(DeliveryError::BrokerRejected);
     }
-    if contains_nested_reference(&prefix) {
+    if let Some((marker, offset)) = nested_reference_marker(&prefix) {
+        eprintln!("MEDIA_DELIVERY_PROBE_REJECT marker={marker} offset={offset}");
         return Err(DeliveryError::BrokerRejected);
     }
     let mut carry = prefix[prefix.len().saturating_sub(32)..].to_vec();
     let mut chunk = [0u8; 8192];
+    let mut stream_offset = prefix.len();
     loop {
         let bytes_read = file
             .read(&mut chunk)
@@ -1171,23 +1173,29 @@ fn validate_mp4_input(path: &Path) -> Result<(), DeliveryError> {
         if bytes_read == 0 {
             break;
         }
+        let carry_len = carry.len();
         let mut window = carry;
         window.extend_from_slice(&chunk[..bytes_read]);
-        if contains_nested_reference(&window) {
+        if let Some((marker, offset)) = nested_reference_marker(&window) {
+            eprintln!(
+                "MEDIA_DELIVERY_PROBE_REJECT marker={marker} offset={}",
+                stream_offset.saturating_sub(carry_len) + offset
+            );
             return Err(DeliveryError::BrokerRejected);
         }
         carry = window[window.len().saturating_sub(32)..].to_vec();
+        stream_offset += bytes_read;
     }
     Ok(())
 }
 
-fn contains_nested_reference(bytes: &[u8]) -> bool {
+fn nested_reference_marker(bytes: &[u8]) -> Option<(&'static str, usize)> {
     let text = String::from_utf8_lossy(bytes).to_ascii_lowercase();
     [
         "#extm3u", "#ext-x-", "#extinf", "<?xml", "http://", "https://", "file://",
     ]
     .iter()
-    .any(|marker| text.contains(marker))
+    .find_map(|marker| text.find(marker).map(|offset| (*marker, offset)))
 }
 
 fn valid_upstream_url(url: &Url) -> bool {
