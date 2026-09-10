@@ -327,6 +327,23 @@ impl ControlService {
         self.seed_session(item_id, resolved_media, display_id)
     }
 
+    #[cfg(feature = "control-ui-harness")]
+    pub fn invalidate_harness_session(&self, session_id: &str) -> Result<(), ControlLookupError> {
+        let session = self.session(session_id)?;
+        let mut record = session.lock().expect("control session poisoned");
+        record.playback.switch_item(
+            "control-ui-invalidated-item",
+            "control-ui-harness-invalidated",
+        );
+        append_event(
+            &mut record,
+            session_id,
+            ControlEventKind::CommandAccepted,
+            self.event_limit,
+        );
+        Ok(())
+    }
+
     #[cfg(any(test, feature = "control-ui-harness"))]
     fn seed_session(
         &self,

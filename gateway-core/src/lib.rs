@@ -35,6 +35,7 @@ pub mod control;
 mod control_contract_tests;
 pub mod control_view;
 pub mod display_session;
+pub mod media_delivery;
 pub mod security;
 mod source_session;
 pub use auth::{
@@ -69,6 +70,15 @@ pub use display_session::{
     DisplayRegistration, DisplayRegistrationResponse, DisplaySessionError,
     DisplaySessionErrorResponse, DisplaySessionService, LiveDisplayView, WebDisplayErrorCode,
     WebDisplayObservation,
+};
+pub use media_delivery::{
+    BrokerInput, BrokerMaterialization, DEFAULT_DELIVERY_TIMEOUT, DEFAULT_DELIVERY_TTL,
+    DELIVERY_CONTRACT_VERSION, DeliveryAuthority, DeliveryBinding, DeliveryBrokerFuture,
+    DeliveryCancellation, DeliveryError, DeliveryFailureClass, DeliveryInputBroker,
+    DeliveryInputCapability, DeliveryRequest, DeliveryResult, HttpFileDeliveryBroker,
+    MAX_CONCURRENT_DELIVERIES, MAX_DELIVERY_INPUT_BYTES, MAX_DELIVERY_OUTPUT_BYTES,
+    MAX_DELIVERY_OUTPUTS, MediaDeliverySupervisor, PlaybackDeliveryAuthority,
+    ValidatedDeliveryInput,
 };
 pub use security::{
     EgressDnsResolver, EgressPolicy, EgressPolicyError, EgressResolutionFuture, EgressScope,
@@ -242,6 +252,13 @@ struct GatewayState {
     display_sessions: DisplaySessionService,
     source_sessions: source_session::SourceSessionService,
     auth_routes: auth_route::AuthRouteCoordinator,
+    media_delivery: media_delivery::MediaDeliverySupervisor,
+    pending_media_deliveries: Arc<Mutex<HashMap<String, PendingMediaDelivery>>>,
+}
+
+struct PendingMediaDelivery {
+    request: media_delivery::DeliveryRequest,
+    broker: Arc<dyn media_delivery::DeliveryInputBroker>,
 }
 
 #[derive(Clone)]
@@ -478,10 +495,12 @@ impl GatewayService {
     }
 
     pub fn with_registry(max_capabilities: usize, registry: Arc<SiteAdapterRegistry>) -> Self {
+        let egress_policy = Arc::new(RwLock::new(EgressPolicy::default()));
         Self {
             state: Arc::new(GatewayState {
                 store: Arc::new(CapabilityStore::new(max_capabilities)),
-                egress_policy: Arc::new(RwLock::new(EgressPolicy::default())),
+                media_delivery: media_delivery::MediaDeliverySupervisor::new(egress_policy.clone()),
+                egress_policy,
                 http_authorities: Arc::new(RwLock::new(HttpAuthorityPolicy::default())),
                 active_streams: Arc::new(AtomicUsize::new(0)),
                 proof_paths: Arc::new(RwLock::new(ProofPaths {
@@ -495,6 +514,7 @@ impl GatewayService {
                 display_sessions: DisplaySessionService::default(),
                 source_sessions: source_session::SourceSessionService::new(registry),
                 auth_routes: auth_route::AuthRouteCoordinator::new(SessionVault::default()),
+                pending_media_deliveries: Arc::new(Mutex::new(HashMap::new())),
             }),
         }
     }
@@ -686,10 +706,12 @@ impl GatewayService {
         registry: Arc<SiteAdapterRegistry>,
     ) -> Self {
         let vault = SessionVault::default();
+        let egress_policy = Arc::new(RwLock::new(EgressPolicy::default()));
         Self {
             state: Arc::new(GatewayState {
                 store: Arc::new(CapabilityStore::new(max_capabilities)),
-                egress_policy: Arc::new(RwLock::new(EgressPolicy::default())),
+                media_delivery: media_delivery::MediaDeliverySupervisor::new(egress_policy.clone()),
+                egress_policy,
                 http_authorities: Arc::new(RwLock::new(HttpAuthorityPolicy::default())),
                 active_streams: Arc::new(AtomicUsize::new(0)),
                 proof_paths: Arc::new(RwLock::new(ProofPaths {
@@ -705,6 +727,7 @@ impl GatewayService {
                 display_sessions: DisplaySessionService::default(),
                 source_sessions: source_session::SourceSessionService::new(registry),
                 auth_routes: auth_route::AuthRouteCoordinator::fake_for_tests(vault),
+                pending_media_deliveries: Arc::new(Mutex::new(HashMap::new())),
             }),
         }
     }
@@ -719,6 +742,69 @@ impl GatewayService {
 
     pub fn max_capabilities(&self) -> usize {
         self.state.store.max_entries
+    }
+
+    /// Return the Gateway-owned separated A/V delivery supervisor. Callers
+    /// must obtain `DeliveryInputCapability` values from server-side resolve
+    /// state and provide the Playback authority and broker for the attempt.
+    pub fn media_delivery(&self) -> media_delivery::MediaDeliverySupervisor {
+        self.state.media_delivery.clone()
+    }
+
+    /// Return the server-owned Playback authority for an internal delivery
+    /// request. This is for trusted resolver/display integration code; HTTP
+    /// callers never provide or replace this authority.
+    pub fn playback_delivery_authority(
+        &self,
+        session_id: impl Into<String>,
+    ) -> Arc<dyn media_delivery::DeliveryAuthority> {
+        Arc::new(media_delivery::PlaybackDeliveryAuthority::new(
+            self.state.control.clone(),
+            session_id,
+        ))
+    }
+
+    /// Start a generic separated-track delivery attempt under this Gateway's
+    /// PlaybackSession authority. The caller still supplies server-owned
+    /// capabilities and a broker; no site-specific or synthetic media is
+    /// created here.
+    pub async fn start_media_delivery(
+        &self,
+        mut request: media_delivery::DeliveryRequest,
+        broker: Arc<dyn media_delivery::DeliveryInputBroker>,
+        cancellation: media_delivery::DeliveryCancellation,
+    ) -> Result<media_delivery::DeliveryResult, media_delivery::DeliveryError> {
+        let session_id = request.binding.session_id.clone();
+        request.authority = Arc::new(media_delivery::PlaybackDeliveryAuthority::new(
+            self.state.control.clone(),
+            session_id,
+        ));
+        self.state
+            .media_delivery
+            .start(request, broker, cancellation)
+            .await
+    }
+
+    /// Register a server-owned delivery request for the HTTP handoff route.
+    /// The returned path is an opaque, one-shot start capability; callers must
+    /// still obtain all request inputs through the normal resolver/broker
+    /// boundary before registering it.
+    pub fn queue_media_delivery(
+        &self,
+        request: media_delivery::DeliveryRequest,
+        broker: Arc<dyn media_delivery::DeliveryInputBroker>,
+    ) -> Result<String, media_delivery::DeliveryError> {
+        let mut pending = self
+            .state
+            .pending_media_deliveries
+            .lock()
+            .map_err(|_| media_delivery::DeliveryError::CleanupFailed)?;
+        if pending.len() >= media_delivery::MAX_DELIVERY_OUTPUTS {
+            return Err(media_delivery::DeliveryError::ConcurrencyLimitExceeded);
+        }
+        let token = format!("p-{}", Uuid::new_v4().simple());
+        pending.insert(token.clone(), PendingMediaDelivery { request, broker });
+        Ok(format!("/api/v1/media-delivery/{token}/start"))
     }
 
     #[cfg(test)]
@@ -811,6 +897,19 @@ impl GatewayService {
                 "/stream/{token}/{session}/{item}/{revision}/{resource}",
                 get(stream_handler).head(stream_handler),
             )
+            .route(
+                "/media/delivery/{token}/{session}/{item}/{revision}/{generation}/{display_generation}/{group}",
+                get(delivery_stream_handler).head(delivery_stream_handler),
+            )
+            .route(
+                "/api/v1/media-delivery/{token}/start",
+                post(start_media_delivery_handler),
+            )
+            .route(
+                "/__harness/invalidate/{session_id}",
+                post(harness_invalidate_handler),
+            )
+            .route("/__harness/output-count", get(harness_output_count_handler))
             .route("/metrics", get(metrics_handler))
             .route("/proof/paths", get(proof_paths_handler))
             .route("/display", get(display_handler))
@@ -903,6 +1002,37 @@ impl GatewayService {
                 http_surface_guard,
             ))
             .with_state(self.state.clone())
+    }
+}
+
+async fn harness_invalidate_handler(
+    State(state): State<Arc<GatewayState>>,
+    Path(session_id): Path<String>,
+) -> Response {
+    #[cfg(feature = "control-ui-harness")]
+    {
+        return match state.control.invalidate_harness_session(&session_id) {
+            Ok(()) => StatusCode::NO_CONTENT.into_response(),
+            Err(ControlLookupError::NotFound) => StatusCode::NOT_FOUND.into_response(),
+            Err(ControlLookupError::AmbiguousDisplay) => StatusCode::CONFLICT.into_response(),
+        };
+    }
+    #[cfg(not(feature = "control-ui-harness"))]
+    {
+        let _ = (state, session_id);
+        StatusCode::NOT_FOUND.into_response()
+    }
+}
+
+async fn harness_output_count_handler(State(state): State<Arc<GatewayState>>) -> Response {
+    #[cfg(feature = "control-ui-harness")]
+    {
+        return Json(state.media_delivery.published_output_count()).into_response();
+    }
+    #[cfg(not(feature = "control-ui-harness"))]
+    {
+        let _ = state;
+        StatusCode::NOT_FOUND.into_response()
     }
 }
 
@@ -2043,6 +2173,56 @@ async fn stream_handler(
         }
     });
     response_from_parts(status, response_headers, Body::from_stream(guarded))
+}
+
+async fn delivery_stream_handler(
+    State(state): State<Arc<GatewayState>>,
+    Path((token, session, item, revision, generation, display_generation, group)): Path<(
+        String,
+        String,
+        String,
+        u64,
+        u64,
+        u64,
+        String,
+    )>,
+    method: Method,
+    request_headers: HeaderMap,
+) -> Response {
+    let binding = media_delivery::DeliveryBinding::new(
+        session,
+        item,
+        revision,
+        generation,
+        display_generation,
+        group,
+    );
+    state
+        .media_delivery
+        .serve(&token, &binding, method, &request_headers)
+        .await
+}
+
+async fn start_media_delivery_handler(
+    State(state): State<Arc<GatewayState>>,
+    Path(token): Path<String>,
+) -> Response {
+    let pending = state
+        .pending_media_deliveries
+        .lock()
+        .ok()
+        .and_then(|mut pending| pending.remove(&token));
+    let Some(PendingMediaDelivery { request, broker }) = pending else {
+        return (StatusCode::NOT_FOUND, "DELIVERY_START_NOT_FOUND").into_response();
+    };
+    let service = GatewayService { state };
+    match service
+        .start_media_delivery(request, broker, DeliveryCancellation::default())
+        .await
+    {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    }
 }
 
 async fn fetch_upstream(

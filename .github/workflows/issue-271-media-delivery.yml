@@ -1,0 +1,229 @@
+name: issue-271-media-delivery
+
+on:
+  pull_request:
+    paths:
+      - "gateway-core/**"
+      - "site-adapter-api/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/issue-271-media-delivery.yml"
+      - "scripts/media-delivery-j4.mjs"
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: "Exact candidate commit to verify"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: issue-271-media-delivery-${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+
+jobs:
+  hosted-x64:
+    name: J1 hosted x64 format clippy and regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: '[[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]'
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - name: Confirm exact hosted x64 checkout
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(uname -m)" = x86_64
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace --all-targets -- --test-threads=1
+
+  lifecycle:
+    name: J2 paired tracks stale expiry cancellation cleanup matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: '[[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]'
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Confirm exact hosted x64 checkout
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(uname -m)" = x86_64
+      - name: Run delivery lifecycle and R007 matrix
+        run: |
+          cargo test -p gateway-core --lib media_delivery::tests -- --nocapture
+          cargo test -p gateway-core --lib media_delivery::tests::materialization_rejects_workspace_escape_symlinks_and_disguised_manifests -- --exact --nocapture
+          cargo test -p gateway-core --test playback_concurrency -- --test-threads=1
+          cargo test -p gateway-core --test media_gateway -- --test-threads=1
+
+  security-boundary:
+    name: J3 argv broker egress and public projection guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: '[[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]'
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Confirm exact checkout and static boundaries
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(uname -m)" = x86_64
+          ! git grep -n -E 'Command::new\([^)]*url|std::process::Command::new\([^)]*url|sh[[:space:]]+-c|bash[[:space:]]+-c' -- gateway-core/src/media_delivery.rs
+          ! sed -n '/pub struct DeliveryResult/,/}/p' gateway-core/src/media_delivery.rs | grep -Eiq 'Authorization|Cookie|Bearer|sessdata|signed-url|access_ref|upstream'
+          grep -q 'StructuredCommand' gateway-core/src/media_delivery.rs
+          grep -q 'DeliveryInputBroker' gateway-core/src/media_delivery.rs
+          grep -q 'EgressPolicy' gateway-core/src/media_delivery.rs
+          grep -q 'display_generation' gateway-core/src/media_delivery.rs
+          grep -q 'media/delivery' gateway-core/src/lib.rs
+          grep -q 'api/v1/media-delivery/{token}/start' gateway-core/src/lib.rs
+          grep -q 'validate_materialization.*workspace' gateway-core/src/media_delivery.rs
+          test "$(grep -c -- '-protocol_whitelist' gateway-core/src/media_delivery.rs)" -ge 2
+          test "$(grep -c -- 'arg(\"-f\")' gateway-core/src/media_delivery.rs)" -ge 2
+      - name: Run hosted negative input-boundary regression
+        run: |
+          cargo test -p gateway-core --lib media_delivery::tests::materialization_rejects_workspace_escape_symlinks_and_disguised_manifests -- --exact --nocapture
+      - name: Emit bounded redacted provenance
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          evidence_dir="$RUNNER_TEMP/issue-271-security-evidence"
+          mkdir -p "$evidence_dir"
+          {
+            echo "candidate_sha=$CANDIDATE_SHA"
+            echo "git_head=$(git rev-parse HEAD)"
+            echo "runner_arch=$(uname -m)"
+            echo "argv=structured"
+            echo "inputs=broker_owned"
+            echo "egress=central_policy"
+            echo "projection=gateway_resource_only"
+          } > "$evidence_dir/manifest.txt"
+          test "$(wc -c < "$evidence_dir/manifest.txt")" -lt 2048
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-271-media-delivery-evidence-${{ env.CANDIDATE_SHA }}
+          path: ${{ runner.temp }}/issue-271-security-evidence
+          retention-days: 14
+
+  synthetic-fmp4:
+    name: J4 synthetic hosted x64 fMP4 HTTP-file smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: '[[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]'
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install hosted FFmpeg fixture dependency
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - name: Confirm exact hosted x64 checkout and FFmpeg
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(uname -m)" = x86_64
+          command -v ffmpeg
+          ffmpeg -version | sed -n '1p'
+      - name: Create synthetic separated A/V fixture
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          fixture_dir="$RUNNER_TEMP/issue-271-fixture"
+          mkdir -p "$fixture_dir"
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=size=64x64:rate=8 -t 1 \
+            -an -c:v libx264 -pix_fmt yuv420p "$fixture_dir/video.mp4"
+          ffmpeg -hide_banner -loglevel error -f lavfi -i sine=frequency=880:sample_rate=48000 -t 1 \
+            -vn -c:a aac -b:a 64k "$fixture_dir/audio.m4a"
+          test -s "$fixture_dir/video.mp4"
+          test -s "$fixture_dir/audio.m4a"
+          echo "MEDIA_DELIVERY_FIXTURE_VIDEO=$fixture_dir/video.mp4" >> "$GITHUB_ENV"
+          echo "MEDIA_DELIVERY_FIXTURE_AUDIO=$fixture_dir/audio.m4a" >> "$GITHUB_ENV"
+      - name: Build exact-Candidate media delivery harness on hosted x64
+        run: cargo build -p gateway-core --features control-ui-harness --bin media-delivery-harness
+      - name: Run Gateway HTTP route through hosted Chromium
+        shell: bash
+        run: |
+          trap 'if [[ -f media-delivery-harness.pid ]]; then kill "$(cat media-delivery-harness.pid)" 2>/dev/null || true; fi' EXIT
+          MEDIA_DELIVERY_PORT=8787 MEDIA_DELIVERY_TTL_SECONDS=30 MEDIA_DELIVERY_EXPIRY_TTL_SECONDS=2 ./target/debug/media-delivery-harness > media-delivery-harness.log 2>&1 &
+          echo $! > media-delivery-harness.pid
+          for i in $(seq 1 30); do grep -q '^MEDIA_DELIVERY_START_PATH=' media-delivery-harness.log && break; sleep 1; done
+          base_url="$(sed -n 's/^MEDIA_DELIVERY_HARNESS_URL=//p' media-delivery-harness.log | head -n 1)"
+          start_path="$(sed -n 's/^MEDIA_DELIVERY_START_PATH=//p' media-delivery-harness.log | head -n 1)"
+          expiry_start_path="$(sed -n 's/^MEDIA_DELIVERY_EXPIRY_START_PATH=//p' media-delivery-harness.log | head -n 1)"
+          test -n "$base_url"
+          test -n "$start_path"
+          test -n "$expiry_start_path"
+          npm install --no-save playwright-core@1.55.0
+          CANDIDATE_SHA="$CANDIDATE_SHA" MEDIA_DELIVERY_HARNESS_URL="$base_url" MEDIA_DELIVERY_START_PATH="$start_path" MEDIA_DELIVERY_EXPIRY_START_PATH="$expiry_start_path" node scripts/media-delivery-j4.mjs
+      - name: Emit bounded redacted provenance
+        if: always()
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          evidence_dir="$RUNNER_TEMP/issue-271-evidence"
+          mkdir -p "$evidence_dir"
+          {
+            echo "candidate_sha=$CANDIDATE_SHA"
+            echo "git_head=$(git rev-parse HEAD)"
+            echo "runner_arch=$(uname -m)"
+            echo "delivery=server_remux_fmp4_http_file"
+            echo "authority_entry=GatewayService::start_media_delivery"
+            echo "http_route=POST /api/v1/media-delivery/{token}/start"
+            echo "browser=isolated Playwright Chromium"
+            echo "projection=short_lived_gateway_capability"
+            echo "inputs=server_owned_broker_only"
+            echo "secret_policy=upstream_url_headers_and_refs_server_only"
+          } > "$evidence_dir/manifest.txt"
+          if [[ -f media-delivery-j4-proof.json ]]; then
+            cp media-delivery-j4-proof.json "$evidence_dir/"
+          else
+            {
+              echo "candidate_sha=$CANDIDATE_SHA"
+              echo "stage=proof_not_written"
+              echo "error_code=hosted_smoke_failed_before_proof"
+            } > "$evidence_dir/failure.txt"
+          fi
+          if [[ -f media-delivery-harness.log ]]; then
+            awk -F= '
+              /^MEDIA_DELIVERY_HARNESS_URL=/ { print "MEDIA_DELIVERY_HARNESS_URL=<present>"; next }
+              /^MEDIA_DELIVERY_START_PATH=/ { print "MEDIA_DELIVERY_START_PATH=<present>"; next }
+              /^MEDIA_DELIVERY_EXPIRY_START_PATH=/ { print "MEDIA_DELIVERY_EXPIRY_START_PATH=<present>"; next }
+              /^MEDIA_DELIVERY_AUTHORITY=/ { print "MEDIA_DELIVERY_AUTHORITY=<symbolic>"; next }
+            ' media-delivery-harness.log | head -n 8 > "$evidence_dir/harness-stage.txt" || true
+          fi
+          ! grep -Eiq 'cookie|authorization|bearer|sessdata|signed-url|fixture-secret|media\.example' "$evidence_dir"/*
+          ! grep -Eq '/api/v1/media-delivery/p-[0-9a-f]{20,}/start' "$evidence_dir"/*
+          ! grep -Eiq 'cookie|authorization|bearer|sessdata|signed-url|fixture-secret|media\.example' "$evidence_dir/manifest.txt"
+          test "$(wc -c < "$evidence_dir/manifest.txt")" -lt 2048
+          sha256sum gateway-core/src/media_delivery.rs > "$evidence_dir/source-sha256sums.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: issue-271-synthetic-fmp4-${{ env.CANDIDATE_SHA }}
+          path: ${{ runner.temp }}/issue-271-evidence
+          if-no-files-found: error
+          retention-days: 14

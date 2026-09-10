@@ -19,6 +19,11 @@ name = "control-ui-harness"
 path = "src/bin/control-ui-harness.rs"
 required-features = ["control-ui-harness"]
 
+[[bin]]
+name = "media-delivery-harness"
+path = "src/bin/media-delivery-harness.rs"
+required-features = ["control-ui-harness"]
+
 [dependencies]
 axum.workspace = true
 bytes.workspace = true

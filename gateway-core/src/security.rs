@@ -85,6 +85,21 @@ impl ValidatedTarget {
         &self.addresses
     }
 
+    /// Return true only for the exact scheme-independent host and port that
+    /// produced this checked target. The URL path/query remains capability
+    /// data, but it cannot silently change the DNS authority.
+    pub fn is_bound_to(&self, url: &Url) -> bool {
+        let Some(host) = url.host_str() else {
+            return false;
+        };
+        let Some(port) = url.port_or_known_default() else {
+            return false;
+        };
+        host.eq_ignore_ascii_case(&self.host)
+            && !self.addresses.is_empty()
+            && self.addresses.iter().all(|address| address.port() == port)
+    }
+
     /// Keep the hostname in the URL for HTTP Host/TLS verification while
     /// forcing the connector to use exactly the addresses checked by policy.
     pub fn pinned_client(&self) -> Result<reqwest::Client, reqwest::Error> {
@@ -597,6 +612,14 @@ impl StructuredCommand {
 
     pub fn into_command(self) -> Command {
         let mut command = Command::new(self.program);
+        command.args(self.args);
+        command
+    }
+
+    /// Consume the same structured argv for an async process without
+    /// converting it to a shell command string.
+    pub fn into_tokio_command(self) -> tokio::process::Command {
+        let mut command = tokio::process::Command::new(self.program);
         command.args(self.args);
         command
     }
