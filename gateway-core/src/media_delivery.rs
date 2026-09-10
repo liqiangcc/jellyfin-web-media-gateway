@@ -20,7 +20,6 @@ use site_adapter_api::{MediaShapeV1, MediaTrackKind, StreamProtocol};
 use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -1143,59 +1142,152 @@ fn validate_materialization(
     Ok(())
 }
 
-const MEDIA_PROBE_BYTES: usize = 64 * 1024;
-
 fn validate_mp4_input(path: &Path) -> Result<(), DeliveryError> {
-    let mut file = std::fs::File::open(path).map_err(|_| DeliveryError::BrokerRejected)?;
-    let mut prefix = vec![0u8; MEDIA_PROBE_BYTES];
-    let bytes_read = file
-        .read(&mut prefix)
-        .map_err(|_| DeliveryError::BrokerRejected)?;
-    prefix.truncate(bytes_read);
-    if prefix.len() < 16 || &prefix[4..8] != b"ftyp" {
+    let bytes = std::fs::read(path).map_err(|_| DeliveryError::BrokerRejected)?;
+    if bytes.len() < 16 || &bytes[4..8] != b"ftyp" {
         return Err(DeliveryError::BrokerRejected);
     }
-    let first_box_size = u32::from_be_bytes(prefix[0..4].try_into().unwrap()) as usize;
-    if first_box_size < 16 || first_box_size > prefix.len() {
+    let first_box_size = u32::from_be_bytes(bytes[0..4].try_into().unwrap()) as usize;
+    if first_box_size < 16 || first_box_size > bytes.len() {
         return Err(DeliveryError::BrokerRejected);
     }
-    if let Some((marker, offset)) = nested_reference_marker(&prefix) {
-        eprintln!("MEDIA_DELIVERY_PROBE_REJECT marker={marker} offset={offset}");
+    inspect_mp4_boxes(&bytes, 0, bytes.len(), 0)?;
+    Ok(())
+}
+
+const MAX_MP4_BOX_DEPTH: usize = 8;
+
+fn inspect_mp4_boxes(
+    bytes: &[u8],
+    mut offset: usize,
+    end: usize,
+    depth: usize,
+) -> Result<(), DeliveryError> {
+    if depth > MAX_MP4_BOX_DEPTH {
         return Err(DeliveryError::BrokerRejected);
     }
-    let mut carry = prefix[prefix.len().saturating_sub(32)..].to_vec();
-    let mut chunk = [0u8; 8192];
-    let mut stream_offset = prefix.len();
-    loop {
-        let bytes_read = file
-            .read(&mut chunk)
-            .map_err(|_| DeliveryError::BrokerRejected)?;
-        if bytes_read == 0 {
-            break;
-        }
-        let carry_len = carry.len();
-        let mut window = carry;
-        window.extend_from_slice(&chunk[..bytes_read]);
-        if let Some((marker, offset)) = nested_reference_marker(&window) {
-            eprintln!(
-                "MEDIA_DELIVERY_PROBE_REJECT marker={marker} offset={}",
-                stream_offset.saturating_sub(carry_len) + offset
-            );
+    while offset < end {
+        if end - offset < 8 {
             return Err(DeliveryError::BrokerRejected);
         }
-        carry = window[window.len().saturating_sub(32)..].to_vec();
-        stream_offset += bytes_read;
+        let size = u32::from_be_bytes(
+            bytes[offset..offset + 4]
+                .try_into()
+                .map_err(|_| DeliveryError::BrokerRejected)?,
+        ) as usize;
+        let box_type = &bytes[offset + 4..offset + 8];
+        let (header, box_size) = if size == 1 {
+            if end - offset < 16 {
+                return Err(DeliveryError::BrokerRejected);
+            }
+            let high = u32::from_be_bytes(
+                bytes[offset + 8..offset + 12]
+                    .try_into()
+                    .map_err(|_| DeliveryError::BrokerRejected)?,
+            );
+            if high != 0 {
+                return Err(DeliveryError::BrokerRejected);
+            }
+            (
+                16,
+                u32::from_be_bytes(
+                    bytes[offset + 12..offset + 16]
+                        .try_into()
+                        .map_err(|_| DeliveryError::BrokerRejected)?,
+                ) as usize,
+            )
+        } else {
+            (8, size)
+        };
+        if box_size < header || box_size > end - offset {
+            return Err(DeliveryError::BrokerRejected);
+        }
+        let payload_start = offset + header;
+        let box_end = offset + box_size;
+        if box_type == b"dref" {
+            validate_data_reference_box(bytes, payload_start, box_end)?;
+        } else if box_type == b"urn " || box_type == b"rdrf" {
+            return Err(DeliveryError::BrokerRejected);
+        } else if is_mp4_container(box_type) {
+            let child_start = if box_type == b"meta" {
+                payload_start.checked_add(4).ok_or(DeliveryError::BrokerRejected)?
+            } else {
+                payload_start
+            };
+            if child_start > box_end {
+                return Err(DeliveryError::BrokerRejected);
+            }
+            inspect_mp4_boxes(bytes, child_start, box_end, depth + 1)?;
+        }
+        offset = box_end;
     }
     Ok(())
 }
 
-fn nested_reference_marker(bytes: &[u8]) -> Option<(&'static str, usize)> {
-    let text = String::from_utf8_lossy(bytes).to_ascii_lowercase();
-    [
-        "#extm3u", "#ext-x-", "#extinf", "<?xml", "http://", "https://", "file://",
-    ]
-    .iter()
-    .find_map(|marker| text.find(marker).map(|offset| (*marker, offset)))
+fn validate_data_reference_box(
+    bytes: &[u8],
+    payload_start: usize,
+    box_end: usize,
+) -> Result<(), DeliveryError> {
+    if box_end - payload_start < 8 {
+        return Err(DeliveryError::BrokerRejected);
+    }
+    let entry_count = u32::from_be_bytes(
+        bytes[payload_start + 4..payload_start + 8]
+            .try_into()
+            .map_err(|_| DeliveryError::BrokerRejected)?,
+    ) as usize;
+    let mut offset = payload_start + 8;
+    for _ in 0..entry_count {
+        if box_end - offset < 8 {
+            return Err(DeliveryError::BrokerRejected);
+        }
+        let size = u32::from_be_bytes(
+            bytes[offset..offset + 4]
+                .try_into()
+                .map_err(|_| DeliveryError::BrokerRejected)?,
+        ) as usize;
+        let box_type = &bytes[offset + 4..offset + 8];
+        if size < 12 || size > box_end - offset {
+            return Err(DeliveryError::BrokerRejected);
+        }
+        if box_type == b"urn " || box_type == b"rdrf" {
+            return Err(DeliveryError::BrokerRejected);
+        }
+        if box_type == b"url " {
+            let flags = u32::from_be_bytes(
+                bytes[offset + 8..offset + 12]
+                    .try_into()
+                    .map_err(|_| DeliveryError::BrokerRejected)?,
+            ) & 0x00ff_ffff;
+            if flags & 1 == 0 {
+                return Err(DeliveryError::BrokerRejected);
+            }
+        }
+        offset += size;
+    }
+    if offset != box_end {
+        return Err(DeliveryError::BrokerRejected);
+    }
+    Ok(())
+}
+
+fn is_mp4_container(box_type: &[u8]) -> bool {
+    matches!(
+        box_type,
+        b"moov"
+            | b"trak"
+            | b"mdia"
+            | b"minf"
+            | b"dinf"
+            | b"stbl"
+            | b"edts"
+            | b"mvex"
+            | b"moof"
+            | b"traf"
+            | b"mfra"
+            | b"meta"
+    )
 }
 
 fn valid_upstream_url(url: &Url) -> bool {
@@ -1656,8 +1748,44 @@ mod tests {
                 Err(DeliveryError::BrokerRejected)
             );
         }
+
+        let self_contained = workspace.join("self-contained.mp4");
+        std::fs::write(&self_contained, mp4_with_data_reference(1, b"https://inert.example"))
+            .unwrap();
+        assert!(validate_mp4_input(&self_contained).is_ok());
+        let external = workspace.join("external.mp4");
+        std::fs::write(&external, mp4_with_data_reference(0, b"relative-media.m4a")).unwrap();
+        assert_eq!(
+            validate_mp4_input(&external),
+            Err(DeliveryError::BrokerRejected)
+        );
         remove_workspace(&workspace);
         let _ = std::fs::remove_file(outside);
+    }
+
+    fn mp4_with_data_reference(flags: u32, payload: &[u8]) -> Vec<u8> {
+        fn box_bytes(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+            let mut bytes = Vec::with_capacity(8 + payload.len());
+            bytes.extend_from_slice(&(8u32 + payload.len() as u32).to_be_bytes());
+            bytes.extend_from_slice(kind);
+            bytes.extend_from_slice(payload);
+            bytes
+        }
+        let mut ftyp_payload = Vec::from(*b"isom");
+        ftyp_payload.extend_from_slice(&0u32.to_be_bytes());
+        ftyp_payload.extend_from_slice(b"isom");
+        let ftyp = box_bytes(b"ftyp", &ftyp_payload);
+        let mut url_payload = flags.to_be_bytes().to_vec();
+        url_payload.extend_from_slice(payload);
+        let url = box_bytes(b"url ", &url_payload);
+        let mut dref_payload = 0u32.to_be_bytes().to_vec();
+        dref_payload.extend_from_slice(&1u32.to_be_bytes());
+        dref_payload.extend_from_slice(&url);
+        let dref = box_bytes(b"dref", &dref_payload);
+        let dinf = box_bytes(b"dinf", &dref);
+        let moov = box_bytes(b"moov", &dinf);
+        let mdat = box_bytes(b"mdat", b"https://inert.example");
+        [ftyp, moov, mdat].concat()
     }
 
     #[tokio::test]

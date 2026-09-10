@@ -179,6 +179,7 @@ jobs:
           npm install --no-save playwright-core@1.55.0
           CANDIDATE_SHA="$CANDIDATE_SHA" MEDIA_DELIVERY_HARNESS_URL="$base_url" MEDIA_DELIVERY_START_PATH="$start_path" node scripts/media-delivery-j4.mjs
       - name: Emit bounded redacted provenance
+        if: always()
         shell: bash --noprofile --norc -euo pipefail {0}
         run: |
           evidence_dir="$RUNNER_TEMP/issue-271-evidence"
@@ -195,7 +196,20 @@ jobs:
             echo "inputs=server_owned_broker_only"
             echo "secret_policy=upstream_url_headers_and_refs_server_only"
           } > "$evidence_dir/manifest.txt"
-          cp media-delivery-j4-proof.json "$evidence_dir/"
+          if [[ -f media-delivery-j4-proof.json ]]; then
+            cp media-delivery-j4-proof.json "$evidence_dir/"
+          else
+            {
+              echo "candidate_sha=$CANDIDATE_SHA"
+              echo "stage=proof_not_written"
+              echo "error_code=hosted_smoke_failed_before_proof"
+            } > "$evidence_dir/failure.txt"
+          fi
+          if [[ -f media-delivery-harness.log ]]; then
+            grep -E '^MEDIA_DELIVERY_(HARNESS_URL|START_PATH|AUTHORITY)=' media-delivery-harness.log \
+              | sed -E 's#(https?://)[^ ]+#\1<redacted>#g' \
+              | head -n 8 > "$evidence_dir/harness-stage.txt" || true
+          fi
           ! grep -Eiq 'cookie|authorization|bearer|sessdata|signed-url|fixture-secret|media\.example' "$evidence_dir"/*
           ! grep -Eiq 'cookie|authorization|bearer|sessdata|signed-url|fixture-secret|media\.example' "$evidence_dir/manifest.txt"
           test "$(wc -c < "$evidence_dir/manifest.txt")" -lt 2048
