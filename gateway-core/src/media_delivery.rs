@@ -1175,13 +1175,19 @@ fn validate_mp4_input(path: &Path) -> Result<(), DeliveryError> {
         .map_err(|_| DeliveryError::BrokerRejected)?;
     prefix.truncate(bytes_read);
     if prefix.len() < 16 || &prefix[4..8] != b"ftyp" {
+        #[cfg(feature = "control-ui-harness")]
+        eprintln!("media_delivery probe=ftyp");
         return Err(DeliveryError::BrokerRejected);
     }
     let first_box_size = u32::from_be_bytes(prefix[0..4].try_into().unwrap()) as usize;
     if first_box_size < 16 || first_box_size > prefix.len() {
+        #[cfg(feature = "control-ui-harness")]
+        eprintln!("media_delivery probe=box-size");
         return Err(DeliveryError::BrokerRejected);
     }
     if contains_nested_reference(&prefix) {
+        #[cfg(feature = "control-ui-harness")]
+        eprintln!("media_delivery probe=prefix-reference");
         return Err(DeliveryError::BrokerRejected);
     }
     let mut carry = prefix[prefix.len().saturating_sub(32)..].to_vec();
@@ -1196,6 +1202,8 @@ fn validate_mp4_input(path: &Path) -> Result<(), DeliveryError> {
         let mut window = carry;
         window.extend_from_slice(&chunk[..bytes_read]);
         if contains_nested_reference(&window) {
+            #[cfg(feature = "control-ui-harness")]
+            eprintln!("media_delivery probe=body-reference");
             return Err(DeliveryError::BrokerRejected);
         }
         carry = window[window.len().saturating_sub(32)..].to_vec();
