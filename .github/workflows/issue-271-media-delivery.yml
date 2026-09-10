@@ -132,6 +132,8 @@ jobs:
           ref: ${{ env.CANDIDATE_SHA }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install hosted FFmpeg fixture dependency
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
       - name: Confirm exact hosted x64 checkout and FFmpeg
         shell: bash --noprofile --norc -euo pipefail {0}
         run: |

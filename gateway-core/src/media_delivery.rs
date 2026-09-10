@@ -663,12 +663,11 @@ fn validate_request(request: &DeliveryRequest, now: u64) -> Result<(), DeliveryE
         if !valid_upstream_url(&input.resource.url) {
             return Err(DeliveryError::InputCapabilityRejected);
         }
-        if input
-            .resource
-            .public_headers
-            .values()
-            .any(|value| value.chars().any(char::is_control))
-        {
+        if input.resource.public_headers.values().any(|value| {
+            value
+                .to_str()
+                .is_ok_and(|value| value.chars().any(char::is_control))
+        }) {
             return Err(DeliveryError::InputCapabilityRejected);
         }
         if input.resource.public_headers.len() > 32
