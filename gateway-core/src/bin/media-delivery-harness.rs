@@ -25,12 +25,10 @@ struct Fixture {
 }
 
 async fn fixture_video(State(fixture): State<Fixture>) -> Response {
-    eprintln!("fixture request video");
     fixture_response(fixture.video.as_slice(), "video/mp4")
 }
 
 async fn fixture_audio(State(fixture): State<Fixture>) -> Response {
-    eprintln!("fixture request audio");
     fixture_response(fixture.audio.as_slice(), "audio/mp4")
 }
 

@@ -1120,48 +1120,26 @@ fn validate_materialization(
         || materialization.container != input.container
         || materialization.path.as_os_str().is_empty()
     {
-        #[cfg(feature = "control-ui-harness")]
-        eprintln!("media_delivery materialization stage=metadata");
         return Err(DeliveryError::BrokerRejected);
     }
     if materialization.size_bytes == 0 || materialization.size_bytes > MAX_DELIVERY_INPUT_BYTES {
         return Err(DeliveryError::InputLimitExceeded);
     }
-    let metadata = std::fs::symlink_metadata(&materialization.path)
-        .map_err(|_| {
-            #[cfg(feature = "control-ui-harness")]
-            eprintln!("media_delivery materialization stage=stat");
-            DeliveryError::BrokerRejected
-        })?;
+    let metadata =
+        std::fs::symlink_metadata(&materialization.path).map_err(|_| DeliveryError::BrokerRejected)?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
-        #[cfg(feature = "control-ui-harness")]
-        eprintln!("media_delivery materialization stage=file");
         return Err(DeliveryError::BrokerRejected);
     }
     let canonical_workspace =
-        std::fs::canonicalize(workspace).map_err(|_| {
-            #[cfg(feature = "control-ui-harness")]
-            eprintln!("media_delivery materialization stage=workspace");
-            DeliveryError::BrokerRejected
-        })?;
+        std::fs::canonicalize(workspace).map_err(|_| DeliveryError::BrokerRejected)?;
     let canonical_path =
-        std::fs::canonicalize(&materialization.path).map_err(|_| {
-            #[cfg(feature = "control-ui-harness")]
-            eprintln!("media_delivery materialization stage=canonical");
-            DeliveryError::BrokerRejected
-        })?;
+        std::fs::canonicalize(&materialization.path).map_err(|_| DeliveryError::BrokerRejected)?;
     if !canonical_path.starts_with(&canonical_workspace)
         || metadata.len() != materialization.size_bytes
     {
-        #[cfg(feature = "control-ui-harness")]
-        eprintln!("media_delivery materialization stage=bound");
         return Err(DeliveryError::BrokerRejected);
     }
-    if let Err(error) = validate_mp4_input(&canonical_path) {
-        #[cfg(feature = "control-ui-harness")]
-        eprintln!("media_delivery materialization stage=probe");
-        return Err(error);
-    }
+    validate_mp4_input(&canonical_path)?;
     Ok(())
 }
 
@@ -1175,19 +1153,13 @@ fn validate_mp4_input(path: &Path) -> Result<(), DeliveryError> {
         .map_err(|_| DeliveryError::BrokerRejected)?;
     prefix.truncate(bytes_read);
     if prefix.len() < 16 || &prefix[4..8] != b"ftyp" {
-        #[cfg(feature = "control-ui-harness")]
-        eprintln!("media_delivery probe=ftyp");
         return Err(DeliveryError::BrokerRejected);
     }
     let first_box_size = u32::from_be_bytes(prefix[0..4].try_into().unwrap()) as usize;
     if first_box_size < 16 || first_box_size > prefix.len() {
-        #[cfg(feature = "control-ui-harness")]
-        eprintln!("media_delivery probe=box-size");
         return Err(DeliveryError::BrokerRejected);
     }
     if contains_nested_reference(&prefix) {
-        #[cfg(feature = "control-ui-harness")]
-        eprintln!("media_delivery probe=prefix-reference");
         return Err(DeliveryError::BrokerRejected);
     }
     let mut carry = prefix[prefix.len().saturating_sub(32)..].to_vec();
@@ -1202,8 +1174,6 @@ fn validate_mp4_input(path: &Path) -> Result<(), DeliveryError> {
         let mut window = carry;
         window.extend_from_slice(&chunk[..bytes_read]);
         if contains_nested_reference(&window) {
-            #[cfg(feature = "control-ui-harness")]
-            eprintln!("media_delivery probe=body-reference");
             return Err(DeliveryError::BrokerRejected);
         }
         carry = window[window.len().saturating_sub(32)..].to_vec();
@@ -1214,7 +1184,7 @@ fn validate_mp4_input(path: &Path) -> Result<(), DeliveryError> {
 fn contains_nested_reference(bytes: &[u8]) -> bool {
     let text = String::from_utf8_lossy(bytes).to_ascii_lowercase();
     [
-        "#extm3u", "#ext-x-", "#extinf", "<?xml", "http://", "https://", "file://", "://",
+        "#extm3u", "#ext-x-", "#extinf", "<?xml", "http://", "https://", "file://",
     ]
     .iter()
     .any(|marker| text.contains(marker))
