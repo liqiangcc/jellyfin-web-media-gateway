@@ -72,10 +72,12 @@ pub use display_session::{
     WebDisplayObservation,
 };
 pub use media_delivery::{
-    BrokerInput, DEFAULT_DELIVERY_TIMEOUT, DEFAULT_DELIVERY_TTL, DELIVERY_CONTRACT_VERSION,
-    DeliveryAuthority, DeliveryBinding, DeliveryCancellation, DeliveryError, DeliveryFailureClass,
-    DeliveryInputBroker, DeliveryInputCapability, DeliveryRequest, DeliveryResult,
-    MAX_DELIVERY_OUTPUT_BYTES, MediaDeliverySupervisor,
+    BrokerInput, BrokerMaterialization, DEFAULT_DELIVERY_TIMEOUT, DEFAULT_DELIVERY_TTL,
+    DELIVERY_CONTRACT_VERSION, DeliveryAuthority, DeliveryBinding, DeliveryBrokerFuture,
+    DeliveryCancellation, DeliveryError, DeliveryFailureClass, DeliveryInputBroker,
+    DeliveryInputCapability, DeliveryRequest, DeliveryResult, MAX_CONCURRENT_DELIVERIES,
+    MAX_DELIVERY_INPUT_BYTES, MAX_DELIVERY_OUTPUT_BYTES, MAX_DELIVERY_OUTPUTS,
+    MediaDeliverySupervisor, PlaybackDeliveryAuthority, ValidatedDeliveryInput,
 };
 pub use security::{
     EgressDnsResolver, EgressPolicy, EgressPolicyError, EgressResolutionFuture, EgressScope,
@@ -738,6 +740,27 @@ impl GatewayService {
     /// state and provide the Playback authority and broker for the attempt.
     pub fn media_delivery(&self) -> media_delivery::MediaDeliverySupervisor {
         self.state.media_delivery.clone()
+    }
+
+    /// Start a generic separated-track delivery attempt under this Gateway's
+    /// PlaybackSession authority. The caller still supplies server-owned
+    /// capabilities and a broker; no site-specific or synthetic media is
+    /// created here.
+    pub async fn start_media_delivery(
+        &self,
+        mut request: media_delivery::DeliveryRequest,
+        broker: Arc<dyn media_delivery::DeliveryInputBroker>,
+        cancellation: media_delivery::DeliveryCancellation,
+    ) -> Result<media_delivery::DeliveryResult, media_delivery::DeliveryError> {
+        let session_id = request.binding.session_id.clone();
+        request.authority = Arc::new(media_delivery::PlaybackDeliveryAuthority::new(
+            self.state.control.clone(),
+            session_id,
+        ));
+        self.state
+            .media_delivery
+            .start(request, broker, cancellation)
+            .await
     }
 
     #[cfg(test)]

@@ -8,7 +8,8 @@
 //! resulting fMP4 file.
 
 use crate::UpstreamResource;
-use crate::security::{EgressPolicy, StructuredCommand};
+use crate::control::ControlService;
+use crate::security::{EgressPolicy, StructuredCommand, ValidatedTarget};
 use axum::body::Body;
 use axum::http::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, RANGE};
 use axum::http::{HeaderMap, Method, StatusCode};
@@ -16,7 +17,9 @@ use axum::response::{IntoResponse, Response};
 use site_adapter_api::{MediaShapeV1, MediaTrackKind, StreamProtocol};
 use std::collections::HashMap;
 use std::fmt;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -30,8 +33,12 @@ pub const DEFAULT_DELIVERY_TTL: Duration = Duration::from_secs(60);
 pub const MAX_DELIVERY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 pub const MAX_DELIVERY_TTL: Duration = Duration::from_secs(10 * 60);
 pub const MAX_DELIVERY_OUTPUT_BYTES: u64 = 128 * 1024 * 1024;
+pub const MAX_DELIVERY_INPUT_BYTES: u64 = 128 * 1024 * 1024;
+pub const MAX_CONCURRENT_DELIVERIES: usize = 2;
+pub const MAX_DELIVERY_OUTPUTS: usize = 32;
 const MAX_DELIVERY_ID_BYTES: usize = 128;
 const MAX_DELIVERY_GROUP_BYTES: usize = 128;
+const MAX_DELIVERY_CONTAINER_BYTES: usize = 32;
 
 /// The full CAS identity of one delivery attempt. No field is derived from a
 /// short-lived URL or from browser-provided state.
@@ -114,46 +121,194 @@ impl DeliveryInputCapability {
     }
 }
 
-/// A broker may materialize an input into a controlled local file or another
-/// broker-owned file descriptor. The path is never accepted from a request or
-/// put into a public DTO; it is consumed only by the structured FFmpeg argv.
-pub struct BrokerInput {
+/// The result of broker acquisition. Only a local regular file is accepted;
+/// URLs, manifests and segment references never cross this boundary into the
+/// remux process. The broker must report metadata that matches the requested
+/// track and the materialized file.
+pub struct BrokerMaterialization {
     path: PathBuf,
+    size_bytes: u64,
+    protocol: StreamProtocol,
+    container: String,
 }
 
-impl fmt::Debug for BrokerInput {
+impl fmt::Debug for BrokerMaterialization {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("BrokerInput")
+            .debug_struct("BrokerMaterialization")
             .field("path", &"<broker-owned>")
+            .field("size_bytes", &self.size_bytes)
+            .field("protocol", &self.protocol)
+            .field("container", &self.container)
             .finish()
     }
 }
 
-impl BrokerInput {
-    pub fn from_server_owned_path(path: PathBuf) -> Result<Self, DeliveryError> {
-        if path.as_os_str().is_empty() {
+impl BrokerMaterialization {
+    pub fn from_server_owned_path(
+        path: PathBuf,
+        size_bytes: u64,
+        protocol: StreamProtocol,
+        container: impl Into<String>,
+    ) -> Result<Self, DeliveryError> {
+        let container = container.into();
+        if path.as_os_str().is_empty()
+            || protocol != StreamProtocol::HttpFile
+            || size_bytes == 0
+            || size_bytes > MAX_DELIVERY_INPUT_BYTES
+            || !valid_container(&container)
+        {
             return Err(DeliveryError::BrokerRejected);
         }
-        Ok(Self { path })
+        Ok(Self {
+            path,
+            size_bytes,
+            protocol,
+            container,
+        })
     }
 }
 
-/// This is the only input seam used by the delivery process. A production
-/// implementation can use the Gateway HTTP broker or a controlled stdin/fd
-/// broker; neither URL nor headers are passed to FFmpeg by this trait.
-pub trait DeliveryInputBroker: Send + Sync {
-    fn acquire(
+/// Egress validation and the checked DNS addresses are carried together with
+/// the capability. A broker must use `pinned_client` for HTTP acquisition;
+/// that client disables redirects and pins connections to the addresses that
+/// EgressPolicy checked. The wrapper prevents an unbound URL from being the
+/// acquisition input.
+pub struct ValidatedDeliveryInput {
+    capability: DeliveryInputCapability,
+    target: ValidatedTarget,
+    protocol: StreamProtocol,
+    container: String,
+}
+
+impl fmt::Debug for ValidatedDeliveryInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ValidatedDeliveryInput")
+            .field("track_id", &self.capability.track_id)
+            .field("target", &self.target)
+            .field("protocol", &self.protocol)
+            .field("container", &self.container)
+            .finish()
+    }
+}
+
+impl ValidatedDeliveryInput {
+    fn new(
+        capability: DeliveryInputCapability,
+        target: ValidatedTarget,
+        protocol: StreamProtocol,
+        container: String,
+    ) -> Result<Self, DeliveryError> {
+        if protocol != StreamProtocol::HttpFile
+            || !valid_container(&container)
+            || !target.is_bound_to(&capability.resource.url)
+        {
+            return Err(DeliveryError::EgressRejected);
+        }
+        Ok(Self {
+            capability,
+            target,
+            protocol,
+            container,
+        })
+    }
+
+    pub fn track_id(&self) -> &str {
+        &self.capability.track_id
+    }
+
+    pub fn access_ref(&self) -> &str {
+        &self.capability.access_ref
+    }
+
+    pub fn url(&self) -> &Url {
+        &self.capability.resource.url
+    }
+
+    pub fn public_headers(&self) -> &HeaderMap {
+        &self.capability.resource.public_headers
+    }
+
+    pub fn secret_headers(&self) -> &HeaderMap {
+        &self.capability.resource.secret_headers
+    }
+
+    pub fn target(&self) -> &ValidatedTarget {
+        &self.target
+    }
+
+    pub fn pinned_client(
         &self,
-        capability: &DeliveryInputCapability,
-        workspace: &Path,
-    ) -> Result<BrokerInput, DeliveryError>;
+        timeout: Option<Duration>,
+    ) -> Result<reqwest::Client, reqwest::Error> {
+        self.target.pinned_client_with_timeout(timeout)
+    }
+
+    pub fn protocol(&self) -> StreamProtocol {
+        self.protocol
+    }
+
+    pub fn container(&self) -> &str {
+        &self.container
+    }
+}
+
+pub type DeliveryBrokerFuture<'a> = Pin<
+    Box<dyn Future<Output = Result<BrokerMaterialization, DeliveryError>> + Send + 'a>,
+>;
+
+/// Compatibility name for callers that used the first-attempt broker type.
+pub type BrokerInput = BrokerMaterialization;
+
+/// This is the only input seam used by the delivery process. Acquisition is
+/// async so cancellation/deadline can drop the download future. Production
+/// brokers must use the validated input's no-redirect, pinned-DNS client and
+/// materialize only a bounded local regular file.
+pub trait DeliveryInputBroker: Send + Sync {
+    fn acquire<'a>(
+        &'a self,
+        input: &'a ValidatedDeliveryInput,
+        workspace: &'a Path,
+    ) -> DeliveryBrokerFuture<'a>;
 }
 
 /// The authority checks the PlaybackSession snapshot before and after the
 /// external process. A stale result is discarded before it can be projected.
 pub trait DeliveryAuthority: Send + Sync {
     fn matches(&self, binding: &DeliveryBinding) -> bool;
+}
+
+/// Adapter from the generic delivery supervisor to the Gateway's authoritative
+/// PlaybackSession snapshot. It deliberately contains no site or URL logic.
+#[derive(Clone)]
+pub struct PlaybackDeliveryAuthority {
+    control: ControlService,
+    session_id: String,
+}
+
+impl PlaybackDeliveryAuthority {
+    pub fn new(control: ControlService, session_id: impl Into<String>) -> Self {
+        Self {
+            control,
+            session_id: session_id.into(),
+        }
+    }
+}
+
+impl DeliveryAuthority for PlaybackDeliveryAuthority {
+    fn matches(&self, binding: &DeliveryBinding) -> bool {
+        if binding.session_id != self.session_id {
+            return false;
+        }
+        let Ok(snapshot) = self.control.snapshot(&self.session_id) else {
+            return false;
+        };
+        snapshot.current_item.item_id == binding.item_id
+            && snapshot.current_item.item_revision == binding.item_revision
+            && snapshot.current_item.media_generation == binding.media_generation
+            && snapshot.active_display.generation == binding.display_generation
+    }
 }
 
 #[derive(Clone, Default)]
@@ -216,6 +371,8 @@ pub enum DeliveryError {
     EgressRejected,
     SecretMaterial,
     BrokerRejected,
+    InputLimitExceeded,
+    ConcurrencyLimitExceeded,
     Cancelled,
     TimedOut,
     OutputLimitExceeded,
@@ -240,6 +397,8 @@ impl fmt::Display for DeliveryError {
             Self::EgressRejected => "DELIVERY_EGRESS_REJECTED",
             Self::SecretMaterial => "DELIVERY_SECRET_REJECTED",
             Self::BrokerRejected => "DELIVERY_BROKER_REJECTED",
+            Self::InputLimitExceeded => "DELIVERY_INPUT_LIMIT",
+            Self::ConcurrencyLimitExceeded => "DELIVERY_CONCURRENCY_LIMIT",
             Self::Cancelled => "DELIVERY_CANCELLED",
             Self::TimedOut => "DELIVERY_TIMEOUT",
             Self::OutputLimitExceeded => "DELIVERY_OUTPUT_LIMIT",
@@ -280,6 +439,8 @@ impl DeliveryError {
             | Self::EgressRejected
             | Self::SecretMaterial
             | Self::BrokerRejected
+            | Self::InputLimitExceeded
+            | Self::ConcurrencyLimitExceeded
             | Self::OutputLimitExceeded
             | Self::ProcessFailed
             | Self::CleanupFailed
@@ -292,8 +453,10 @@ impl DeliveryError {
 
 struct OutputRecord {
     binding: DeliveryBinding,
+    authority: Arc<dyn DeliveryAuthority>,
     path: PathBuf,
     expires_at: Instant,
+    created_seq: u64,
 }
 
 #[derive(Clone)]
@@ -301,6 +464,7 @@ pub struct MediaDeliverySupervisor {
     egress_policy: Arc<RwLock<EgressPolicy>>,
     outputs: Arc<Mutex<HashMap<String, OutputRecord>>>,
     sequence: Arc<AtomicU64>,
+    active_deliveries: Arc<AtomicU64>,
     ffmpeg_program: Arc<PathBuf>,
 }
 
@@ -310,6 +474,7 @@ impl MediaDeliverySupervisor {
             egress_policy,
             outputs: Arc::new(Mutex::new(HashMap::new())),
             sequence: Arc::new(AtomicU64::new(1)),
+            active_deliveries: Arc::new(AtomicU64::new(0)),
             ffmpeg_program: Arc::new(PathBuf::from("ffmpeg")),
         }
     }
@@ -320,33 +485,54 @@ impl MediaDeliverySupervisor {
         broker: Arc<dyn DeliveryInputBroker>,
         cancellation: DeliveryCancellation,
     ) -> Result<DeliveryResult, DeliveryError> {
+        let deadline = tokio::time::Instant::now() + request.timeout;
         let now = unix_seconds();
         validate_request(&request, now)?;
+        if cancellation.is_cancelled() {
+            return Err(DeliveryError::Cancelled);
+        }
         if !request.authority.matches(&request.binding) {
             return Err(DeliveryError::StaleGeneration);
         }
+        let _permit = self.try_acquire_delivery()?;
 
         let workspace = delivery_workspace();
-        std::fs::create_dir_all(&workspace).map_err(|_| DeliveryError::CleanupFailed)?;
+        if std::fs::create_dir_all(&workspace).is_err() {
+            remove_workspace(&workspace);
+            return Err(DeliveryError::CleanupFailed);
+        }
         let result = self
-            .run_process(&request, broker, cancellation, &workspace)
+            .run_process(&request, broker, cancellation.clone(), &workspace, deadline)
             .await;
         match result {
             Ok(output_path) => {
-                if !request.authority.matches(&request.binding) {
+                if cancellation.is_cancelled() || !request.authority.matches(&request.binding) {
                     remove_workspace(&workspace);
-                    return Err(DeliveryError::StaleGeneration);
+                    return Err(if cancellation.is_cancelled() {
+                        DeliveryError::Cancelled
+                    } else {
+                        DeliveryError::StaleGeneration
+                    });
                 }
-                let output_bytes = std::fs::metadata(&output_path)
-                    .map_err(|_| DeliveryError::OutputUnavailable)?
-                    .len();
+                let output_bytes = match std::fs::metadata(&output_path) {
+                    Ok(metadata) if metadata.is_file() => metadata.len(),
+                    Ok(_) | Err(_) => {
+                        remove_workspace(&workspace);
+                        return Err(DeliveryError::OutputUnavailable);
+                    }
+                };
                 if output_bytes == 0 || output_bytes > request.max_output_bytes {
                     remove_workspace(&workspace);
                     return Err(DeliveryError::OutputLimitExceeded);
                 }
+                if tokio::time::Instant::now() >= deadline {
+                    remove_workspace(&workspace);
+                    return Err(DeliveryError::TimedOut);
+                }
+                let created_seq = self.sequence.fetch_add(1, Ordering::Relaxed);
                 let token = format!(
                     "d{}-{}",
-                    self.sequence.fetch_add(1, Ordering::Relaxed),
+                    created_seq,
                     Uuid::new_v4().simple()
                 );
                 let gateway_path = format!(
@@ -359,14 +545,26 @@ impl MediaDeliverySupervisor {
                     request.binding.display_generation,
                     request.binding.group_id
                 );
-                let mut outputs = self.outputs.lock().expect("delivery outputs poisoned");
+                let mut outputs = match self.outputs.lock() {
+                    Ok(outputs) => outputs,
+                    Err(_) => {
+                        remove_workspace(&workspace);
+                        return Err(DeliveryError::CleanupFailed);
+                    }
+                };
                 self.retain_live_outputs(&mut outputs);
+                if !request.authority.matches(&request.binding) {
+                    remove_workspace(&workspace);
+                    return Err(DeliveryError::StaleGeneration);
+                }
                 outputs.insert(
                     token,
                     OutputRecord {
                         binding: request.binding.clone(),
+                        authority: request.authority.clone(),
                         path: output_path,
                         expires_at: Instant::now() + request.output_ttl,
+                        created_seq,
                     },
                 );
                 Ok(DeliveryResult {
@@ -390,6 +588,7 @@ impl MediaDeliverySupervisor {
         broker: Arc<dyn DeliveryInputBroker>,
         cancellation: DeliveryCancellation,
         workspace: &Path,
+        deadline: tokio::time::Instant,
     ) -> Result<PathBuf, DeliveryError> {
         let mut inputs = Vec::with_capacity(request.inputs.len());
         for input in &request.inputs {
@@ -404,17 +603,29 @@ impl MediaDeliverySupervisor {
                 .read()
                 .expect("egress policy poisoned")
                 .clone();
-            policy
-                .validate(&input.resource.url, &input.resource.egress_scope)
-                .await
-                .map_err(|_| DeliveryError::EgressRejected)?;
-            if cancellation.is_cancelled() {
-                return Err(DeliveryError::Cancelled);
-            }
-            let acquired = broker.acquire(input, workspace)?;
-            if acquired.path.as_os_str().is_empty() {
-                return Err(DeliveryError::BrokerRejected);
-            }
+            let target = await_delivery_stage(
+                policy.validate_and_resolve(&input.resource.url, &input.resource.egress_scope),
+                &cancellation,
+                deadline,
+            )
+            .await?
+            .map_err(|_| DeliveryError::EgressRejected)?;
+            let validated = ValidatedDeliveryInput::new(
+                input.clone(),
+                target,
+                track.protocol,
+                track
+                    .container
+                    .clone()
+                    .ok_or(DeliveryError::UnsupportedShape)?,
+            )?;
+            let acquired = await_delivery_stage(
+                broker.acquire(&validated, workspace),
+                &cancellation,
+                deadline,
+            )
+            .await??;
+            validate_materialization(&validated, &acquired)?;
             inputs.push((track.kind, acquired.path));
         }
 
@@ -429,6 +640,9 @@ impl MediaDeliverySupervisor {
             .map(|(_, path)| path)
             .ok_or(DeliveryError::IncompleteTrackGroup)?;
         let output = workspace.join("delivery.mp4");
+        if tokio::time::Instant::now() >= deadline {
+            return Err(DeliveryError::TimedOut);
+        }
         let max_size = request.max_output_bytes.to_string();
         let command = StructuredCommand::new(self.ffmpeg_program.as_os_str().to_os_string())
             .arg("-hide_banner")
@@ -462,7 +676,6 @@ impl MediaDeliverySupervisor {
             .stderr(std::process::Stdio::null())
             .spawn()
             .map_err(|_| DeliveryError::ProcessFailed)?;
-        let deadline = tokio::time::Instant::now() + request.timeout;
         let mut wait = Box::pin(child.wait());
         loop {
             enum ProcessEvent {
@@ -480,6 +693,9 @@ impl MediaDeliverySupervisor {
             match event {
                 ProcessEvent::Finished(status) => {
                     let status = status.map_err(|_| DeliveryError::ProcessFailed)?;
+                    if cancellation.is_cancelled() {
+                        return Err(DeliveryError::Cancelled);
+                    }
                     if !status.success() {
                         return Err(DeliveryError::ProcessFailed);
                     }
@@ -516,7 +732,33 @@ impl MediaDeliverySupervisor {
         {
             return Err(DeliveryError::OutputLimitExceeded);
         }
+        if cancellation.is_cancelled() {
+            return Err(DeliveryError::Cancelled);
+        }
         Ok(output)
+    }
+
+    fn try_acquire_delivery(&self) -> Result<DeliveryPermit, DeliveryError> {
+        loop {
+            let current = self.active_deliveries.load(Ordering::Acquire);
+            if current >= MAX_CONCURRENT_DELIVERIES as u64 {
+                return Err(DeliveryError::ConcurrencyLimitExceeded);
+            }
+            if self
+                .active_deliveries
+                .compare_exchange(
+                    current,
+                    current + 1,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                return Ok(DeliveryPermit {
+                    active_deliveries: self.active_deliveries.clone(),
+                });
+            }
+        }
     }
 
     pub(crate) async fn serve(
@@ -544,17 +786,37 @@ impl MediaDeliverySupervisor {
                     .into_response();
             };
             if &record.binding != binding {
+                let record = outputs.remove(token).expect("delivery output present");
+                remove_workspace(record.path.parent().unwrap_or_else(|| Path::new("/")));
                 return (
                     StatusCode::FORBIDDEN,
                     DeliveryError::CapabilityBindingMismatch.to_string(),
                 )
                     .into_response();
             }
-            record.path.clone()
+            if !record.authority.matches(&record.binding) {
+                let record = outputs.remove(token).expect("delivery output present");
+                remove_workspace(record.path.parent().unwrap_or_else(|| Path::new("/")));
+                return (
+                    StatusCode::GONE,
+                    DeliveryError::StaleGeneration.to_string(),
+                )
+                    .into_response();
+            }
+            (record.path.clone(), record.authority.clone())
         };
-        let bytes = match tokio::fs::read(&record).await {
+        if !record.1.matches(binding) {
+            self.remove_output(token);
+            return (
+                StatusCode::GONE,
+                DeliveryError::StaleGeneration.to_string(),
+            )
+                .into_response();
+        }
+        let bytes = match tokio::fs::read(&record.0).await {
             Ok(bytes) => bytes,
             Err(_) => {
+                self.remove_output(token);
                 return (
                     StatusCode::GONE,
                     DeliveryError::OutputUnavailable.to_string(),
@@ -562,6 +824,14 @@ impl MediaDeliverySupervisor {
                     .into_response();
             }
         };
+        if !record.1.matches(binding) {
+            self.remove_output(token);
+            return (
+                StatusCode::GONE,
+                DeliveryError::StaleGeneration.to_string(),
+            )
+                .into_response();
+        }
         ranged_response(method, request_headers, bytes)
     }
 
@@ -586,6 +856,35 @@ impl MediaDeliverySupervisor {
                 false
             }
         });
+        while outputs.len() >= MAX_DELIVERY_OUTPUTS {
+            let Some(token) = outputs
+                .iter()
+                .min_by_key(|(_, record)| record.created_seq)
+                .map(|(token, _)| token.clone())
+            else {
+                break;
+            };
+            if let Some(record) = outputs.remove(&token) {
+                remove_workspace(record.path.parent().unwrap_or_else(|| Path::new("/")));
+            }
+        }
+    }
+
+    fn remove_output(&self, token: &str) {
+        let mut outputs = self.outputs.lock().expect("delivery outputs poisoned");
+        if let Some(record) = outputs.remove(token) {
+            remove_workspace(record.path.parent().unwrap_or_else(|| Path::new("/")));
+        }
+    }
+}
+
+struct DeliveryPermit {
+    active_deliveries: Arc<AtomicU64>,
+}
+
+impl Drop for DeliveryPermit {
+    fn drop(&mut self) {
+        self.active_deliveries.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -619,10 +918,8 @@ fn validate_request(request: &DeliveryRequest, now: u64) -> Result<(), DeliveryE
             || track.group_id.as_deref() != Some(binding.group_id.as_str())
             || !track.group_id.as_deref().is_some_and(valid_group)
             || track.access_ref.is_none()
-            || !matches!(
-                track.protocol,
-                StreamProtocol::HttpFile | StreamProtocol::Hls | StreamProtocol::Dash
-            )
+            || track.protocol != StreamProtocol::HttpFile
+            || !track.container.as_deref().is_some_and(valid_container)
         {
             return Err(DeliveryError::UnsupportedShape);
         }
@@ -646,7 +943,11 @@ fn validate_request(request: &DeliveryRequest, now: u64) -> Result<(), DeliveryE
     if video.is_none() || audio.is_none() {
         return Err(DeliveryError::IncompleteTrackGroup);
     }
+    let mut input_ids = std::collections::HashSet::new();
     for input in &request.inputs {
+        if !input_ids.insert(input.track_id.clone()) {
+            return Err(DeliveryError::InputCapabilityRejected);
+        }
         let Some(track) = request
             .shape
             .tracks
@@ -656,6 +957,7 @@ fn validate_request(request: &DeliveryRequest, now: u64) -> Result<(), DeliveryE
             return Err(DeliveryError::InputCapabilityRejected);
         };
         if track.access_ref.as_deref() != Some(input.access_ref.as_str())
+            || input.resource.protocol != StreamProtocol::HttpFile
             || input.resource.protocol != track.protocol
         {
             return Err(DeliveryError::InputCapabilityRejected);
@@ -714,6 +1016,35 @@ fn valid_opaque_ref(value: &str) -> bool {
         && !contains_secret_marker(value)
 }
 
+fn valid_container(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_DELIVERY_CONTAINER_BYTES
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
+}
+
+fn validate_materialization(
+    input: &ValidatedDeliveryInput,
+    materialization: &BrokerMaterialization,
+) -> Result<(), DeliveryError> {
+    if materialization.protocol != input.protocol
+        || materialization.container != input.container
+        || materialization.path.as_os_str().is_empty()
+    {
+        return Err(DeliveryError::BrokerRejected);
+    }
+    if materialization.size_bytes == 0 || materialization.size_bytes > MAX_DELIVERY_INPUT_BYTES {
+        return Err(DeliveryError::InputLimitExceeded);
+    }
+    let metadata = std::fs::metadata(&materialization.path)
+        .map_err(|_| DeliveryError::BrokerRejected)?;
+    if !metadata.is_file() || metadata.len() != materialization.size_bytes {
+        return Err(DeliveryError::BrokerRejected);
+    }
+    Ok(())
+}
+
 fn valid_upstream_url(url: &Url) -> bool {
     matches!(url.scheme(), "http" | "https")
         && url.host_str().is_some()
@@ -746,6 +1077,22 @@ fn unix_seconds() -> u64 {
 async fn wait_for_cancel(cancellation: DeliveryCancellation) {
     while !cancellation.is_cancelled() {
         sleep(Duration::from_millis(5)).await;
+    }
+}
+
+async fn await_delivery_stage<T, E, F>(
+    future: F,
+    cancellation: &DeliveryCancellation,
+    deadline: tokio::time::Instant,
+) -> Result<Result<T, E>, DeliveryError>
+where
+    F: Future<Output = Result<T, E>>,
+{
+    tokio::pin!(future);
+    tokio::select! {
+        result = &mut future => Ok(result),
+        _ = wait_for_cancel(cancellation.clone()) => Err(DeliveryError::Cancelled),
+        _ = tokio::time::sleep_until(deadline) => Err(DeliveryError::TimedOut),
     }
 }
 
@@ -838,17 +1185,38 @@ mod tests {
         files: HashMap<String, PathBuf>,
     }
     impl DeliveryInputBroker for FileBroker {
-        fn acquire(
-            &self,
-            capability: &DeliveryInputCapability,
-            _workspace: &Path,
-        ) -> Result<BrokerInput, DeliveryError> {
-            self.files
-                .get(&capability.access_ref)
-                .cloned()
-                .map(BrokerInput::from_server_owned_path)
-                .transpose()?
-                .ok_or(DeliveryError::BrokerRejected)
+        fn acquire<'a>(
+            &'a self,
+            input: &'a ValidatedDeliveryInput,
+            _workspace: &'a Path,
+        ) -> DeliveryBrokerFuture<'a> {
+            Box::pin(async move {
+                let path = self
+                    .files
+                    .get(input.access_ref())
+                    .cloned()
+                    .ok_or(DeliveryError::BrokerRejected)?;
+                let size = std::fs::metadata(&path)
+                    .map_err(|_| DeliveryError::BrokerRejected)?
+                    .len();
+                BrokerInput::from_server_owned_path(
+                    path,
+                    size,
+                    input.protocol(),
+                    input.container(),
+                )
+            })
+        }
+    }
+
+    struct BlockingBroker;
+    impl DeliveryInputBroker for BlockingBroker {
+        fn acquire<'a>(
+            &'a self,
+            _input: &'a ValidatedDeliveryInput,
+            _workspace: &'a Path,
+        ) -> DeliveryBrokerFuture<'a> {
+            Box::pin(std::future::pending::<Result<BrokerMaterialization, DeliveryError>>())
         }
     }
 
@@ -870,7 +1238,7 @@ mod tests {
             id: "video-1".into(),
             kind: MediaTrackKind::Video,
             group_id: Some("group-1".into()),
-            protocol: StreamProtocol::Dash,
+            protocol: StreamProtocol::HttpFile,
             codec: Some("avc1".into()),
             container: Some("mp4".into()),
             mime_type: Some("video/mp4".into()),
@@ -885,7 +1253,7 @@ mod tests {
             id: "audio-1".into(),
             kind: MediaTrackKind::Audio,
             group_id: Some("group-1".into()),
-            protocol: StreamProtocol::Dash,
+            protocol: StreamProtocol::HttpFile,
             codec: Some("mp4a".into()),
             container: Some("m4a".into()),
             mime_type: Some("audio/mp4".into()),
@@ -910,13 +1278,13 @@ mod tests {
         let video_cap = DeliveryInputCapability::new_server_owned(
             "video-1",
             "video-ref",
-            resource(StreamProtocol::Dash),
+            resource(StreamProtocol::HttpFile),
         )
         .unwrap();
         let audio_cap = DeliveryInputCapability::new_server_owned(
             "audio-1",
             "audio-ref",
-            resource(StreamProtocol::Dash),
+            resource(StreamProtocol::HttpFile),
         )
         .unwrap();
         (
@@ -943,7 +1311,7 @@ mod tests {
                 "cookie-ref",
                 UpstreamResource {
                     url: Url::parse("https://media.example.test/input").unwrap(),
-                    protocol: StreamProtocol::Dash,
+                    protocol: StreamProtocol::HttpFile,
                     public_headers: HeaderMap::new(),
                     secret_headers: HeaderMap::new(),
                     egress_scope: EgressScope::PublicWeb,
@@ -962,6 +1330,17 @@ mod tests {
         assert_eq!(
             validate_request(&request, unix_seconds()),
             Err(DeliveryError::IncompleteTrackGroup)
+        );
+        let (mut request, _) = request(
+            Arc::new(Authority::default()),
+            PathBuf::from("video"),
+            PathBuf::from("audio"),
+            unix_seconds(),
+        );
+        request.shape.tracks[0].protocol = StreamProtocol::Dash;
+        assert_eq!(
+            validate_request(&request, unix_seconds()),
+            Err(DeliveryError::UnsupportedShape)
         );
     }
 
@@ -1017,6 +1396,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancellation_drops_an_inflight_broker_acquisition() {
+        let authority = Arc::new(Authority::default());
+        let (request, _) = request(
+            authority,
+            PathBuf::from("missing-video"),
+            PathBuf::from("missing-audio"),
+            unix_seconds(),
+        );
+        let supervisor = MediaDeliverySupervisor::new(policy());
+        let cancellation = DeliveryCancellation::default();
+        let worker_cancellation = cancellation.clone();
+        let worker = tokio::spawn({
+            let supervisor = supervisor.clone();
+            async move {
+                supervisor
+                    .start(request, Arc::new(BlockingBroker), worker_cancellation)
+                    .await
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        cancellation.cancel();
+        assert_eq!(worker.await.unwrap(), Err(DeliveryError::Cancelled));
+        assert_eq!(supervisor.active_deliveries.load(Ordering::Acquire), 0);
+        assert!(supervisor.outputs.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn synthetic_fmp4_fixture_is_remuxed_and_projected() {
         let Some(video) = std::env::var_os("MEDIA_DELIVERY_FIXTURE_VIDEO") else {
             return;
@@ -1056,6 +1462,9 @@ mod tests {
     async fn public_projection_is_bound_and_range_limited() {
         let supervisor = MediaDeliverySupervisor::new(policy());
         let binding = DeliveryBinding::new("s", "i", 1, 1, 1, "g");
+        let authority = Arc::new(Authority {
+            current: Mutex::new(Some(binding.clone())),
+        });
         let token = "fixture".to_string();
         let dir = delivery_workspace();
         std::fs::create_dir_all(&dir).unwrap();
@@ -1065,8 +1474,10 @@ mod tests {
             token.clone(),
             OutputRecord {
                 binding: binding.clone(),
+                authority: authority.clone(),
                 path: path.clone(),
                 expires_at: Instant::now() + Duration::from_secs(30),
+                created_seq: 1,
             },
         );
         let response = supervisor
@@ -1082,7 +1493,11 @@ mod tests {
             to_bytes(response.into_body(), 1024).await.unwrap().as_ref(),
             b"fixture"
         );
-        assert!(supervisor.revoke("/media/delivery/fixture/s/i/1/1/1/g"));
+        *authority.current.lock().unwrap() = None;
+        let stale = supervisor
+            .serve(&token, &binding, Method::GET, &HeaderMap::new())
+            .await;
+        assert_eq!(stale.status(), StatusCode::GONE);
         assert!(!path.exists());
     }
 }
