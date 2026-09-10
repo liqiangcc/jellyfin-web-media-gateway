@@ -800,7 +800,10 @@ impl MediaDeliverySupervisor {
             Ok(bytes) => bytes,
             Err(_) => {
                 self.remove_output(token);
-                return (StatusCode::GONE, DeliveryError::OutputUnavailable.to_string())
+                return (
+                    StatusCode::GONE,
+                    DeliveryError::OutputUnavailable.to_string(),
+                )
                     .into_response();
             }
         };
