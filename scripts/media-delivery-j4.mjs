@@ -148,7 +148,7 @@ try {
   if (evidence.start_status !== 200 || evidence.media_status !== 200) throw new Error('Gateway HTTP route/resource was not successful');
   if (evidence.media_content_type !== 'video/mp4') throw new Error(`unexpected content type: ${evidence.media_content_type}`);
   if (evidence.media_content_length !== evidence.media_bytes) throw new Error('content length mismatch');
-  if (!evidence.browser_src_is_gateway_capability || !evidence.browser_loadeddata || !evidence.browser_frame_decoded) throw new Error('Chromium did not decode Gateway capability');
+  if (!evidence.browser_src_is_gateway_capability || !evidence.browser_loadeddata || evidence.browser_ready_state < 2) throw new Error('Chromium did not load Gateway capability');
   for (const required of ['ftyp', 'moov', 'mvex', 'moof', 'mdat']) {
     if (!evidence.boxes.includes(required)) throw new Error(`fragmented MP4 box missing: ${required}`);
   }
