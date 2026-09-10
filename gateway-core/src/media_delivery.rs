@@ -254,9 +254,8 @@ impl ValidatedDeliveryInput {
     }
 }
 
-pub type DeliveryBrokerFuture<'a> = Pin<
-    Box<dyn Future<Output = Result<BrokerMaterialization, DeliveryError>> + Send + 'a>,
->;
+pub type DeliveryBrokerFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<BrokerMaterialization, DeliveryError>> + Send + 'a>>;
 
 /// Compatibility name for callers that used the first-attempt broker type.
 pub type BrokerInput = BrokerMaterialization;
@@ -530,11 +529,7 @@ impl MediaDeliverySupervisor {
                     return Err(DeliveryError::TimedOut);
                 }
                 let created_seq = self.sequence.fetch_add(1, Ordering::Relaxed);
-                let token = format!(
-                    "d{}-{}",
-                    created_seq,
-                    Uuid::new_v4().simple()
-                );
+                let token = format!("d{}-{}", created_seq, Uuid::new_v4().simple());
                 let gateway_path = format!(
                     "/media/delivery/{}/{}/{}/{}/{}/{}/{}",
                     token,
@@ -746,12 +741,7 @@ impl MediaDeliverySupervisor {
             }
             if self
                 .active_deliveries
-                .compare_exchange(
-                    current,
-                    current + 1,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                )
+                .compare_exchange(current, current + 1, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
             {
                 return Ok(DeliveryPermit {
@@ -797,40 +787,26 @@ impl MediaDeliverySupervisor {
             if !record.authority.matches(&record.binding) {
                 let record = outputs.remove(token).expect("delivery output present");
                 remove_workspace(record.path.parent().unwrap_or_else(|| Path::new("/")));
-                return (
-                    StatusCode::GONE,
-                    DeliveryError::StaleGeneration.to_string(),
-                )
+                return (StatusCode::GONE, DeliveryError::StaleGeneration.to_string())
                     .into_response();
             }
             (record.path.clone(), record.authority.clone())
         };
         if !record.1.matches(binding) {
             self.remove_output(token);
-            return (
-                StatusCode::GONE,
-                DeliveryError::StaleGeneration.to_string(),
-            )
-                .into_response();
+            return (StatusCode::GONE, DeliveryError::StaleGeneration.to_string()).into_response();
         }
         let bytes = match tokio::fs::read(&record.0).await {
             Ok(bytes) => bytes,
             Err(_) => {
                 self.remove_output(token);
-                return (
-                    StatusCode::GONE,
-                    DeliveryError::OutputUnavailable.to_string(),
-                )
+                return (StatusCode::GONE, DeliveryError::OutputUnavailable.to_string())
                     .into_response();
             }
         };
         if !record.1.matches(binding) {
             self.remove_output(token);
-            return (
-                StatusCode::GONE,
-                DeliveryError::StaleGeneration.to_string(),
-            )
-                .into_response();
+            return (StatusCode::GONE, DeliveryError::StaleGeneration.to_string()).into_response();
         }
         ranged_response(method, request_headers, bytes)
     }
@@ -1037,8 +1013,8 @@ fn validate_materialization(
     if materialization.size_bytes == 0 || materialization.size_bytes > MAX_DELIVERY_INPUT_BYTES {
         return Err(DeliveryError::InputLimitExceeded);
     }
-    let metadata = std::fs::metadata(&materialization.path)
-        .map_err(|_| DeliveryError::BrokerRejected)?;
+    let metadata =
+        std::fs::metadata(&materialization.path).map_err(|_| DeliveryError::BrokerRejected)?;
     if !metadata.is_file() || metadata.len() != materialization.size_bytes {
         return Err(DeliveryError::BrokerRejected);
     }
@@ -1199,12 +1175,7 @@ mod tests {
                 let size = std::fs::metadata(&path)
                     .map_err(|_| DeliveryError::BrokerRejected)?
                     .len();
-                BrokerInput::from_server_owned_path(
-                    path,
-                    size,
-                    input.protocol(),
-                    input.container(),
-                )
+                BrokerInput::from_server_owned_path(path, size, input.protocol(), input.container())
             })
         }
     }
@@ -1216,7 +1187,9 @@ mod tests {
             _input: &'a ValidatedDeliveryInput,
             _workspace: &'a Path,
         ) -> DeliveryBrokerFuture<'a> {
-            Box::pin(std::future::pending::<Result<BrokerMaterialization, DeliveryError>>())
+            Box::pin(std::future::pending::<
+                Result<BrokerMaterialization, DeliveryError>,
+            >())
         }
     }
 
@@ -1331,15 +1304,15 @@ mod tests {
             validate_request(&request, unix_seconds()),
             Err(DeliveryError::IncompleteTrackGroup)
         );
-        let (mut request, _) = request(
+        let (mut dash_request, _) = request(
             Arc::new(Authority::default()),
             PathBuf::from("video"),
             PathBuf::from("audio"),
             unix_seconds(),
         );
-        request.shape.tracks[0].protocol = StreamProtocol::Dash;
+        dash_request.shape.tracks[0].protocol = StreamProtocol::Dash;
         assert_eq!(
-            validate_request(&request, unix_seconds()),
+            validate_request(&dash_request, unix_seconds()),
             Err(DeliveryError::UnsupportedShape)
         );
     }
