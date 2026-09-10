@@ -14,6 +14,7 @@ use axum::body::Body;
 use axum::http::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, RANGE};
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
+use futures_util::StreamExt;
 use site_adapter_api::{MediaShapeV1, MediaTrackKind, StreamProtocol};
 use std::collections::HashMap;
 use std::fmt;
@@ -23,7 +24,9 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::io::AsyncWriteExt;
 use tokio::time::sleep;
+use tokio::time::Instant as TokioInstant;
 use url::Url;
 use uuid::Uuid;
 
@@ -270,6 +273,100 @@ pub trait DeliveryInputBroker: Send + Sync {
         input: &'a ValidatedDeliveryInput,
         workspace: &'a Path,
     ) -> DeliveryBrokerFuture<'a>;
+}
+
+/// The production HTTP-file broker. It is deliberately only a broker of
+/// already validated inputs: the supervisor performs EgressPolicy validation,
+/// then this implementation uses the resulting pinned/no-redirect client and
+/// keeps both public and secret headers on the server side.
+#[derive(Clone, Debug)]
+pub struct HttpFileDeliveryBroker {
+    request_timeout: Duration,
+}
+
+impl Default for HttpFileDeliveryBroker {
+    fn default() -> Self {
+        Self {
+            request_timeout: DEFAULT_DELIVERY_TIMEOUT,
+        }
+    }
+}
+
+impl HttpFileDeliveryBroker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_timeout(request_timeout: Duration) -> Self {
+        Self { request_timeout }
+    }
+}
+
+impl DeliveryInputBroker for HttpFileDeliveryBroker {
+    fn acquire<'a>(
+        &'a self,
+        input: &'a ValidatedDeliveryInput,
+        workspace: &'a Path,
+    ) -> DeliveryBrokerFuture<'a> {
+        Box::pin(async move {
+            let request_timeout = self
+                .request_timeout
+                .min(MAX_DELIVERY_TIMEOUT)
+                .max(Duration::from_millis(1));
+            let client = input
+                .pinned_client(Some(request_timeout))
+                .map_err(|_| DeliveryError::BrokerRejected)?;
+            let response = client
+                .get(input.url().clone())
+                .headers(input.public_headers().clone())
+                .headers(input.secret_headers().clone())
+                .send()
+                .await
+                .map_err(|_| DeliveryError::BrokerRejected)?;
+            if !response.status().is_success() {
+                return Err(DeliveryError::BrokerRejected);
+            }
+            if response
+                .content_length()
+                .is_some_and(|length| length > MAX_DELIVERY_INPUT_BYTES)
+            {
+                return Err(DeliveryError::InputLimitExceeded);
+            }
+
+            let path = workspace.join(format!("delivery-input-{}", input.track_id()));
+            let mut file = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .await
+                .map_err(|_| DeliveryError::BrokerRejected)?;
+            let mut size_bytes = 0u64;
+            let mut stream = response.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk.map_err(|_| DeliveryError::BrokerRejected)?;
+                size_bytes = size_bytes
+                    .checked_add(chunk.len() as u64)
+                    .ok_or(DeliveryError::InputLimitExceeded)?;
+                if size_bytes > MAX_DELIVERY_INPUT_BYTES {
+                    return Err(DeliveryError::InputLimitExceeded);
+                }
+                file.write_all(&chunk)
+                    .await
+                    .map_err(|_| DeliveryError::BrokerRejected)?;
+            }
+            file.flush()
+                .await
+                .map_err(|_| DeliveryError::BrokerRejected)?;
+            drop(file);
+
+            BrokerMaterialization::from_server_owned_path(
+                path,
+                size_bytes,
+                input.protocol(),
+                input.container(),
+            )
+        })
+    }
 }
 
 /// The authority checks the PlaybackSession snapshot before and after the
@@ -548,20 +645,27 @@ impl MediaDeliverySupervisor {
                     }
                 };
                 self.retain_live_outputs(&mut outputs);
-                if !request.authority.matches(&request.binding) {
+                if cancellation.is_cancelled() || !request.authority.matches(&request.binding) {
                     remove_workspace(&workspace);
-                    return Err(DeliveryError::StaleGeneration);
+                    return Err(if cancellation.is_cancelled() {
+                        DeliveryError::Cancelled
+                    } else {
+                        DeliveryError::StaleGeneration
+                    });
                 }
+                let expires_at = Instant::now() + request.output_ttl;
                 outputs.insert(
-                    token,
+                    token.clone(),
                     OutputRecord {
                         binding: request.binding.clone(),
                         authority: request.authority.clone(),
                         path: output_path,
-                        expires_at: Instant::now() + request.output_ttl,
+                        expires_at,
                         created_seq,
                     },
                 );
+                drop(outputs);
+                self.schedule_output_expiry(token.clone(), expires_at);
                 Ok(DeliveryResult {
                     contract_version: DELIVERY_CONTRACT_VERSION,
                     binding: request.binding,
@@ -638,32 +742,13 @@ impl MediaDeliverySupervisor {
         if tokio::time::Instant::now() >= deadline {
             return Err(DeliveryError::TimedOut);
         }
-        let max_size = request.max_output_bytes.to_string();
-        let command = StructuredCommand::new(self.ffmpeg_program.as_os_str().to_os_string())
-            .arg("-hide_banner")
-            .arg("-loglevel")
-            .arg("error")
-            .arg("-nostdin")
-            .arg("-y")
-            .arg("-i")
-            .arg(video.as_os_str().to_os_string())
-            .arg("-i")
-            .arg(audio.as_os_str().to_os_string())
-            .arg("-map")
-            .arg("0:v:0")
-            .arg("-map")
-            .arg("1:a:0")
-            .arg("-c:v")
-            .arg("copy")
-            .arg("-c:a")
-            .arg("copy")
-            .arg("-movflags")
-            .arg("+faststart")
-            .arg("-fs")
-            .arg(max_size)
-            .arg("-f")
-            .arg("mp4")
-            .arg(output.as_os_str().to_os_string());
+        let command = ffmpeg_command(
+            self.ffmpeg_program.as_path(),
+            video,
+            audio,
+            &output,
+            request.max_output_bytes,
+        );
         let mut child = command
             .into_tokio_command()
             .stdin(std::process::Stdio::null())
@@ -847,6 +932,27 @@ impl MediaDeliverySupervisor {
                 remove_workspace(record.path.parent().unwrap_or_else(|| Path::new("/")));
             }
         }
+    }
+
+    fn schedule_output_expiry(&self, token: String, expires_at: Instant) {
+        let outputs = Arc::downgrade(&self.outputs);
+        tokio::spawn(async move {
+            tokio::time::sleep_until(TokioInstant::from_std(expires_at)).await;
+            let Some(outputs) = outputs.upgrade() else {
+                return;
+            };
+            let Ok(mut outputs) = outputs.lock() else {
+                return;
+            };
+            let expired = outputs
+                .get(&token)
+                .is_some_and(|record| record.expires_at <= Instant::now());
+            if expired {
+                if let Some(record) = outputs.remove(&token) {
+                    remove_workspace(record.path.parent().unwrap_or_else(|| Path::new("/")));
+                }
+            }
+        });
     }
 
     fn remove_output(&self, token: &str) {
@@ -1043,7 +1149,51 @@ fn delivery_workspace() -> PathBuf {
 }
 
 fn remove_workspace(path: &Path) {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return;
+    };
+    if !name.starts_with("gateway-delivery-")
+        || path.parent() != Some(std::env::temp_dir().as_path())
+    {
+        return;
+    }
     let _ = std::fs::remove_dir_all(path);
+}
+
+fn ffmpeg_command(
+    program: &Path,
+    video: &Path,
+    audio: &Path,
+    output: &Path,
+    max_output_bytes: u64,
+) -> StructuredCommand {
+    StructuredCommand::new(program.as_os_str().to_os_string())
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-nostdin")
+        .arg("-y")
+        .arg("-protocol_whitelist")
+        .arg("file")
+        .arg("-i")
+        .arg(video.as_os_str().to_os_string())
+        .arg("-i")
+        .arg(audio.as_os_str().to_os_string())
+        .arg("-map")
+        .arg("0:v:0")
+        .arg("-map")
+        .arg("1:a:0")
+        .arg("-c:v")
+        .arg("copy")
+        .arg("-c:a")
+        .arg("copy")
+        .arg("-movflags")
+        .arg("+faststart")
+        .arg("-fs")
+        .arg(max_output_bytes.to_string())
+        .arg("-f")
+        .arg("mp4")
+        .arg(output.as_os_str().to_os_string())
 }
 
 fn unix_seconds() -> u64 {
@@ -1318,6 +1468,62 @@ mod tests {
             validate_request(&dash_request, unix_seconds()),
             Err(DeliveryError::UnsupportedShape)
         );
+    }
+
+    #[test]
+    fn ffmpeg_argv_whitelists_only_local_files_before_inputs() {
+        let command = ffmpeg_command(
+            Path::new("ffmpeg"),
+            Path::new("/workspace/video-input"),
+            Path::new("/workspace/audio-input"),
+            Path::new("/workspace/delivery.mp4"),
+            MAX_DELIVERY_OUTPUT_BYTES,
+        );
+        let args: Vec<_> = command
+            .argv()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let whitelist = args
+            .iter()
+            .position(|arg| arg == "-protocol_whitelist")
+            .expect("protocol whitelist");
+        let first_input = args
+            .iter()
+            .position(|arg| arg == "-i")
+            .expect("first input");
+        assert_eq!(args[whitelist + 1], "file");
+        assert!(whitelist < first_input);
+        assert!(args.iter().all(|arg| !arg.contains("://")));
+    }
+
+    #[tokio::test]
+    async fn scheduled_expiry_removes_unvisited_output() {
+        let supervisor = MediaDeliverySupervisor::new(policy());
+        let binding = DeliveryBinding::new("s", "i", 1, 1, 1, "g");
+        let authority = Arc::new(Authority {
+            current: Mutex::new(Some(binding.clone())),
+        });
+        let dir = delivery_workspace();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("delivery.mp4");
+        std::fs::write(&path, b"fixture-fmp4").unwrap();
+        let token = "scheduled".to_string();
+        let expires_at = Instant::now() + Duration::from_millis(20);
+        supervisor.outputs.lock().unwrap().insert(
+            token.clone(),
+            OutputRecord {
+                binding,
+                authority,
+                path: path.clone(),
+                expires_at,
+                created_seq: 1,
+            },
+        );
+        supervisor.schedule_output_expiry(token, expires_at);
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!path.exists());
+        assert!(supervisor.outputs.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

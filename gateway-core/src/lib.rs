@@ -77,7 +77,8 @@ pub use media_delivery::{
     DeliveryCancellation, DeliveryError, DeliveryFailureClass, DeliveryInputBroker,
     DeliveryInputCapability, DeliveryRequest, DeliveryResult, MAX_CONCURRENT_DELIVERIES,
     MAX_DELIVERY_INPUT_BYTES, MAX_DELIVERY_OUTPUT_BYTES, MAX_DELIVERY_OUTPUTS,
-    MediaDeliverySupervisor, PlaybackDeliveryAuthority, ValidatedDeliveryInput,
+    HttpFileDeliveryBroker, MediaDeliverySupervisor, PlaybackDeliveryAuthority,
+    ValidatedDeliveryInput,
 };
 pub use security::{
     EgressDnsResolver, EgressPolicy, EgressPolicyError, EgressResolutionFuture, EgressScope,
