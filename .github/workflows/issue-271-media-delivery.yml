@@ -168,7 +168,7 @@ jobs:
       - name: Run Gateway HTTP route through hosted Chromium
         shell: bash
         run: |
-          trap 'if [[ -f media-delivery-harness.pid ]]; then kill "$(cat media-delivery-harness.pid)" 2>/dev/null || true; fi' EXIT
+          trap 'if [[ -f media-delivery-harness.pid ]]; then kill "$(cat media-delivery-harness.pid)" 2>/dev/null || true; fi; cat media-delivery-harness.log 2>/dev/null || true' EXIT
           MEDIA_DELIVERY_PORT=8787 ./target/debug/media-delivery-harness > media-delivery-harness.log 2>&1 &
           echo $! > media-delivery-harness.pid
           for i in $(seq 1 30); do grep -q '^MEDIA_DELIVERY_START_PATH=' media-delivery-harness.log && break; sleep 1; done
