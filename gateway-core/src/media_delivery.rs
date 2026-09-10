@@ -1125,8 +1125,8 @@ fn validate_materialization(
     if materialization.size_bytes == 0 || materialization.size_bytes > MAX_DELIVERY_INPUT_BYTES {
         return Err(DeliveryError::InputLimitExceeded);
     }
-    let metadata =
-        std::fs::symlink_metadata(&materialization.path).map_err(|_| DeliveryError::BrokerRejected)?;
+    let metadata = std::fs::symlink_metadata(&materialization.path)
+        .map_err(|_| DeliveryError::BrokerRejected)?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(DeliveryError::BrokerRejected);
     }
