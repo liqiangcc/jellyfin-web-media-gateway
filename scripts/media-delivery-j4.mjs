@@ -13,6 +13,7 @@ const evidence = {
   candidate_sha: candidate,
   browser: 'isolated Playwright Chromium (sandbox enabled)',
   browser_sandbox_status: 'unverified',
+  browser_sandbox_fields: {},
   browser_no_disable_switches: false,
   authority_entry: 'GatewayService::start_media_delivery',
   route: 'POST /api/v1/media-delivery/{token}/start',
@@ -79,6 +80,16 @@ function errorCode(error) {
   return 'j4_smoke_failed';
 }
 
+function parseSandboxFields(text) {
+  const fields = {};
+  for (const line of text.split(/\r?\n/).slice(0, 128)) {
+    const match = line.match(/^\s*([A-Za-z][A-Za-z0-9 _-]{2,80}?):?\s+(Yes|No|Enabled|Disabled|Active|Inactive)\s*$/i);
+    if (!match || !/(sandbox|namespace|seccomp|privilege)/i.test(match[1])) continue;
+    fields[match[1].trim()] = match[2].toLowerCase();
+  }
+  return fields;
+}
+
 let stage = 'launch';
 let browser;
 try {
@@ -103,12 +114,14 @@ try {
     sandboxText = '';
   }
   await sandboxPage.close();
-  evidence.browser_sandbox_status = /\b(yes|enabled|active)\b/i.test(sandboxText) ? 'enabled' : 'unverified';
+  evidence.browser_sandbox_fields = parseSandboxFields(sandboxText);
+  const sandboxValues = Object.values(evidence.browser_sandbox_fields);
+  evidence.browser_sandbox_status = sandboxValues.length > 0 && sandboxValues.every(value => ['yes', 'enabled', 'active'].includes(value)) ? 'enabled' : 'unverified';
   if (evidence.browser_sandbox_status !== 'enabled') throw new Error('Chromium sandbox status unavailable');
   stage = 'gateway_route';
   const page = await browser.newPage();
   await page.goto(`${base}/display?profile=tv`, { waitUntil: 'domcontentloaded' });
-  const result = await page.evaluate(async (path, config) => {
+  const result = await page.evaluate(async ({ path, expiryStartPath }) => {
     const start = await fetch(path, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -153,24 +166,31 @@ try {
       headers: { 'content-type': 'application/json' },
       body: '{}',
     });
+    if (stale.status !== 404) throw new Error(`one-shot start capability was reusable: ${stale.status}`);
     const invalidate = await fetch(`/__harness/invalidate/${encodeURIComponent(sessionId)}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}',
     });
+    if (!invalidate.ok) throw new Error(`harness authority invalidation failed: ${invalidate.status}`);
     const staleOutput = await fetch(capabilityUrl);
     const staleCount = await fetch('/__harness/output-count');
-    if (!invalidate.ok) throw new Error('harness authority invalidation failed');
-    const expiryStart = await fetch(config.expiryStartPath, {
+    if (!staleCount.ok) throw new Error(`stale output count failed: ${staleCount.status}`);
+    const expiryStart = await fetch(expiryStartPath, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}',
     });
+    if (!expiryStart.ok) throw new Error(`expiry delivery start failed: ${expiryStart.status}`);
     const expiryPayload = JSON.parse(await expiryStart.text());
+    if (typeof expiryPayload.gateway_path !== 'string' || expiryPayload.gateway_path.length === 0) {
+      throw new Error('expiry delivery response missing gateway path');
+    }
     const expiryUrl = new URL(expiryPayload.gateway_path, location.origin).href;
     await new Promise(resolve => setTimeout(resolve, 3000));
     const expiredOutput = await fetch(expiryUrl);
     const expiryCount = await fetch('/__harness/output-count');
+    if (!expiryCount.ok) throw new Error(`expiry output count failed: ${expiryCount.status}`);
     return {
       start_status: start.status,
       media_status: media.status,
@@ -194,7 +214,7 @@ try {
       browser_video_width: video.videoWidth,
       browser_video_height: video.videoHeight,
     };
-  }, startPath, { expiryStartPath });
+  }, { path: startPath, expiryStartPath });
 
   const mediaBytes = Uint8Array.from(result.media_bytes);
   evidence.stage = 'assertions';
