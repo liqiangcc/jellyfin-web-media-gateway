@@ -1157,7 +1157,11 @@ fn validate_materialization(
         eprintln!("media_delivery materialization stage=bound");
         return Err(DeliveryError::BrokerRejected);
     }
-    validate_mp4_input(&canonical_path)?;
+    if let Err(error) = validate_mp4_input(&canonical_path) {
+        #[cfg(feature = "control-ui-harness")]
+        eprintln!("media_delivery materialization stage=probe");
+        return Err(error);
+    }
     Ok(())
 }
 
