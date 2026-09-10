@@ -101,7 +101,7 @@ async fn main() {
         .expect("seed Gateway Playback authority");
     let binding = DeliveryBinding::new(&session_id, "control-ui-item", 1, 0, 1, "group-1");
     let resource = |path: &str| UpstreamResource {
-        url: Url::parse(&format!("{fixture_origin}{path}")).unwrap(),
+        url: fixture_origin.join(path.trim_start_matches('/')).unwrap(),
         protocol: StreamProtocol::HttpFile,
         public_headers: Default::default(),
         secret_headers: Default::default(),

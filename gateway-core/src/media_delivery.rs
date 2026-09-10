@@ -317,25 +317,15 @@ impl DeliveryInputBroker for HttpFileDeliveryBroker {
                 .max(Duration::from_millis(1));
             let client = input
                 .pinned_client(Some(request_timeout))
-                .map_err(|_| {
-                    #[cfg(feature = "control-ui-harness")]
-                    eprintln!("media_delivery broker stage=client");
-                    DeliveryError::BrokerRejected
-                })?;
+                .map_err(|_| DeliveryError::BrokerRejected)?;
             let response = client
                 .get(input.url().clone())
                 .headers(input.public_headers().clone())
                 .headers(input.secret_headers().clone())
                 .send()
                 .await
-                .map_err(|_| {
-                    #[cfg(feature = "control-ui-harness")]
-                    eprintln!("media_delivery broker stage=send");
-                    DeliveryError::BrokerRejected
-                })?;
+                .map_err(|_| DeliveryError::BrokerRejected)?;
             if !response.status().is_success() {
-                #[cfg(feature = "control-ui-harness")]
-                eprintln!("media_delivery broker stage=status");
                 return Err(DeliveryError::BrokerRejected);
             }
             if response
@@ -351,19 +341,11 @@ impl DeliveryInputBroker for HttpFileDeliveryBroker {
                 .create_new(true)
                 .open(&path)
                 .await
-                .map_err(|_| {
-                    #[cfg(feature = "control-ui-harness")]
-                    eprintln!("media_delivery broker stage=open");
-                    DeliveryError::BrokerRejected
-                })?;
+                .map_err(|_| DeliveryError::BrokerRejected)?;
             let mut size_bytes = 0u64;
             let mut stream = response.bytes_stream();
             while let Some(chunk) = stream.next().await {
-                let chunk = chunk.map_err(|_| {
-                    #[cfg(feature = "control-ui-harness")]
-                    eprintln!("media_delivery broker stage=chunk");
-                    DeliveryError::BrokerRejected
-                })?;
+                let chunk = chunk.map_err(|_| DeliveryError::BrokerRejected)?;
                 size_bytes = size_bytes
                     .checked_add(chunk.len() as u64)
                     .ok_or(DeliveryError::InputLimitExceeded)?;
@@ -372,19 +354,11 @@ impl DeliveryInputBroker for HttpFileDeliveryBroker {
                 }
                 file.write_all(&chunk)
                     .await
-                    .map_err(|_| {
-                        #[cfg(feature = "control-ui-harness")]
-                        eprintln!("media_delivery broker stage=write");
-                        DeliveryError::BrokerRejected
-                    })?;
+                    .map_err(|_| DeliveryError::BrokerRejected)?;
             }
             file.flush()
                 .await
-                .map_err(|_| {
-                    #[cfg(feature = "control-ui-harness")]
-                    eprintln!("media_delivery broker stage=flush");
-                    DeliveryError::BrokerRejected
-                })?;
+                .map_err(|_| DeliveryError::BrokerRejected)?;
             drop(file);
 
             BrokerMaterialization::from_server_owned_path(
@@ -1592,8 +1566,8 @@ mod tests {
         for (whitelist, input) in whitelists.into_iter().zip(inputs) {
             assert_eq!(args[whitelist + 1], "file");
             assert!(whitelist < input);
-            assert_eq!(args[input - 2], "mp4");
-            assert_eq!(args[input - 3], "-f");
+            assert_eq!(args[input - 2], "-f");
+            assert_eq!(args[input - 1], "mp4");
         }
         assert!(args.iter().all(|arg| !arg.contains("://")));
     }
