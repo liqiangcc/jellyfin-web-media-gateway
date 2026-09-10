@@ -1210,7 +1210,9 @@ fn inspect_mp4_boxes(
             return Err(DeliveryError::BrokerRejected);
         } else if is_mp4_container(box_type) {
             let child_start = if box_type == b"meta" {
-                payload_start.checked_add(4).ok_or(DeliveryError::BrokerRejected)?
+                payload_start
+                    .checked_add(4)
+                    .ok_or(DeliveryError::BrokerRejected)?
             } else {
                 payload_start
             };
@@ -1750,8 +1752,11 @@ mod tests {
         }
 
         let self_contained = workspace.join("self-contained.mp4");
-        std::fs::write(&self_contained, mp4_with_data_reference(1, b"https://inert.example"))
-            .unwrap();
+        std::fs::write(
+            &self_contained,
+            mp4_with_data_reference(1, b"https://inert.example"),
+        )
+        .unwrap();
         assert!(validate_mp4_input(&self_contained).is_ok());
         let external = workspace.join("external.mp4");
         std::fs::write(&external, mp4_with_data_reference(0, b"relative-media.m4a")).unwrap();
