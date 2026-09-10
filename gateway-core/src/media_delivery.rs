@@ -1293,15 +1293,15 @@ mod tests {
             .is_err()
         );
         let authority = Arc::new(Authority::default());
-        let (mut request, _) = request(
+        let (mut incomplete_request, _) = request(
             authority,
             PathBuf::from("video"),
             PathBuf::from("audio"),
             unix_seconds(),
         );
-        request.shape.tracks.pop();
+        incomplete_request.shape.tracks.pop();
         assert_eq!(
-            validate_request(&request, unix_seconds()),
+            validate_request(&incomplete_request, unix_seconds()),
             Err(DeliveryError::IncompleteTrackGroup)
         );
         let (mut dash_request, _) = request(
