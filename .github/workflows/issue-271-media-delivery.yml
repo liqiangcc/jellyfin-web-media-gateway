@@ -169,15 +169,17 @@ jobs:
         shell: bash
         run: |
           trap 'if [[ -f media-delivery-harness.pid ]]; then kill "$(cat media-delivery-harness.pid)" 2>/dev/null || true; fi' EXIT
-          MEDIA_DELIVERY_PORT=8787 ./target/debug/media-delivery-harness > media-delivery-harness.log 2>&1 &
+          MEDIA_DELIVERY_PORT=8787 MEDIA_DELIVERY_TTL_SECONDS=2 ./target/debug/media-delivery-harness > media-delivery-harness.log 2>&1 &
           echo $! > media-delivery-harness.pid
           for i in $(seq 1 30); do grep -q '^MEDIA_DELIVERY_START_PATH=' media-delivery-harness.log && break; sleep 1; done
           base_url="$(sed -n 's/^MEDIA_DELIVERY_HARNESS_URL=//p' media-delivery-harness.log | head -n 1)"
           start_path="$(sed -n 's/^MEDIA_DELIVERY_START_PATH=//p' media-delivery-harness.log | head -n 1)"
+          expiry_start_path="$(sed -n 's/^MEDIA_DELIVERY_EXPIRY_START_PATH=//p' media-delivery-harness.log | head -n 1)"
           test -n "$base_url"
           test -n "$start_path"
+          test -n "$expiry_start_path"
           npm install --no-save playwright-core@1.55.0
-          CANDIDATE_SHA="$CANDIDATE_SHA" MEDIA_DELIVERY_HARNESS_URL="$base_url" MEDIA_DELIVERY_START_PATH="$start_path" node scripts/media-delivery-j4.mjs
+          CANDIDATE_SHA="$CANDIDATE_SHA" MEDIA_DELIVERY_HARNESS_URL="$base_url" MEDIA_DELIVERY_START_PATH="$start_path" MEDIA_DELIVERY_EXPIRY_START_PATH="$expiry_start_path" node scripts/media-delivery-j4.mjs
       - name: Emit bounded redacted provenance
         if: always()
         shell: bash --noprofile --norc -euo pipefail {0}
@@ -206,11 +208,15 @@ jobs:
             } > "$evidence_dir/failure.txt"
           fi
           if [[ -f media-delivery-harness.log ]]; then
-            grep -E '^MEDIA_DELIVERY_(HARNESS_URL|START_PATH|AUTHORITY)=' media-delivery-harness.log \
-              | sed -E 's#(https?://)[^ ]+#\1<redacted>#g' \
-              | head -n 8 > "$evidence_dir/harness-stage.txt" || true
+            awk -F= '
+              /^MEDIA_DELIVERY_HARNESS_URL=/ { print "MEDIA_DELIVERY_HARNESS_URL=<present>"; next }
+              /^MEDIA_DELIVERY_START_PATH=/ { print "MEDIA_DELIVERY_START_PATH=<present>"; next }
+              /^MEDIA_DELIVERY_EXPIRY_START_PATH=/ { print "MEDIA_DELIVERY_EXPIRY_START_PATH=<present>"; next }
+              /^MEDIA_DELIVERY_AUTHORITY=/ { print "MEDIA_DELIVERY_AUTHORITY=<symbolic>"; next }
+            ' media-delivery-harness.log | head -n 8 > "$evidence_dir/harness-stage.txt" || true
           fi
           ! grep -Eiq 'cookie|authorization|bearer|sessdata|signed-url|fixture-secret|media\.example' "$evidence_dir"/*
+          ! grep -Eq '/api/v1/media-delivery/p-[0-9a-f]{20,}/start' "$evidence_dir"/*
           ! grep -Eiq 'cookie|authorization|bearer|sessdata|signed-url|fixture-secret|media\.example' "$evidence_dir/manifest.txt"
           test "$(wc -c < "$evidence_dir/manifest.txt")" -lt 2048
           sha256sum gateway-core/src/media_delivery.rs > "$evidence_dir/source-sha256sums.txt"

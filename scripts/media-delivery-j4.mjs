@@ -1,15 +1,19 @@
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright-core';
 
 const base = process.env.MEDIA_DELIVERY_HARNESS_URL;
 const startPath = process.env.MEDIA_DELIVERY_START_PATH;
+const expiryStartPath = process.env.MEDIA_DELIVERY_EXPIRY_START_PATH;
 const candidate = process.env.CANDIDATE_SHA;
 const output = process.env.MEDIA_DELIVERY_PROOF || 'media-delivery-j4-proof.json';
-if (!base || !startPath || !candidate) throw new Error('missing hosted media-delivery harness inputs');
+if (!base || !startPath || !expiryStartPath || !candidate) throw new Error('missing hosted media-delivery harness inputs');
 
 const evidence = {
   candidate_sha: candidate,
   browser: 'isolated Playwright Chromium (sandbox enabled)',
+  browser_sandbox_status: 'unverified',
+  browser_no_disable_switches: false,
   authority_entry: 'GatewayService::start_media_delivery',
   route: 'POST /api/v1/media-delivery/{token}/start',
   stage: 'launch',
@@ -21,6 +25,11 @@ const evidence = {
   range_status: null,
   range_content_range: null,
   stale_start_status: null,
+  stale_output_status: null,
+  stale_cleanup_output_count: null,
+  expiry_start_status: null,
+  expired_output_status: null,
+  expiry_cleanup_output_count: null,
   browser_src_is_gateway_capability: false,
   browser_loadeddata: false,
   browser_frame_decoded: false,
@@ -71,15 +80,35 @@ function errorCode(error) {
 }
 
 let stage = 'launch';
-const browser = await chromium.launch({
-  executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome',
-  headless: true,
-});
+let browser;
 try {
+  browser = await chromium.launch({
+    executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome',
+    headless: true,
+    chromiumSandbox: true,
+  });
+  const processArgs = execFileSync('ps', ['-eo', 'args='], { encoding: 'utf8' });
+  const chromeArgs = processArgs
+    .split('\n')
+    .filter(line => /(^|\s|\/)(google-chrome|chrome|chromium)(\s|$)/i.test(line))
+    .join('\n');
+  evidence.browser_no_disable_switches = !/--no-sandbox|--disable-setuid-sandbox/i.test(chromeArgs);
+  if (!evidence.browser_no_disable_switches) throw new Error('Chromium sandbox disabling switch observed');
+  const sandboxPage = await browser.newPage();
+  let sandboxText = '';
+  try {
+    await sandboxPage.goto('chrome://sandbox', { waitUntil: 'domcontentloaded' });
+    sandboxText = await sandboxPage.locator('body').innerText();
+  } catch {
+    sandboxText = '';
+  }
+  await sandboxPage.close();
+  evidence.browser_sandbox_status = /\b(yes|enabled|active)\b/i.test(sandboxText) ? 'enabled' : 'unverified';
+  if (evidence.browser_sandbox_status !== 'enabled') throw new Error('Chromium sandbox status unavailable');
   stage = 'gateway_route';
   const page = await browser.newPage();
   await page.goto(`${base}/display?profile=tv`, { waitUntil: 'domcontentloaded' });
-  const result = await page.evaluate(async path => {
+  const result = await page.evaluate(async (path, config) => {
     const start = await fetch(path, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -88,6 +117,8 @@ try {
     const body = await start.text();
     if (!start.ok) throw new Error(`delivery start failed: ${start.status}: ${body}`);
     const payload = JSON.parse(body);
+    const sessionId = payload.binding?.session_id;
+    if (typeof sessionId !== 'string' || sessionId.length === 0) throw new Error('delivery binding missing session');
     const capabilityUrl = new URL(payload.gateway_path, location.origin).href;
     const media = await fetch(capabilityUrl);
     const bytes = new Uint8Array(await media.arrayBuffer());
@@ -122,6 +153,24 @@ try {
       headers: { 'content-type': 'application/json' },
       body: '{}',
     });
+    const invalidate = await fetch(`/__harness/invalidate/${encodeURIComponent(sessionId)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    const staleOutput = await fetch(capabilityUrl);
+    const staleCount = await fetch('/__harness/output-count');
+    if (!invalidate.ok) throw new Error('harness authority invalidation failed');
+    const expiryStart = await fetch(config.expiryStartPath, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    const expiryPayload = JSON.parse(await expiryStart.text());
+    const expiryUrl = new URL(expiryPayload.gateway_path, location.origin).href;
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    const expiredOutput = await fetch(expiryUrl);
+    const expiryCount = await fetch('/__harness/output-count');
     return {
       start_status: start.status,
       media_status: media.status,
@@ -131,6 +180,11 @@ try {
       range_status: range.status,
       range_content_range: range.headers.get('content-range'),
       stale_start_status: stale.status,
+      stale_output_status: staleOutput.status,
+      stale_cleanup_output_count: await staleCount.json(),
+      expiry_start_status: expiryStart.status,
+      expired_output_status: expiredOutput.status,
+      expiry_cleanup_output_count: await expiryCount.json(),
       browser_src_is_gateway_capability: new URL(video.src).pathname.startsWith('/media/delivery/'),
       browser_loadeddata: loadeddata,
       browser_frame_decoded: frameDecoded,
@@ -140,7 +194,7 @@ try {
       browser_video_width: video.videoWidth,
       browser_video_height: video.videoHeight,
     };
-  }, startPath);
+  }, startPath, { expiryStartPath });
 
   const mediaBytes = Uint8Array.from(result.media_bytes);
   evidence.stage = 'assertions';
@@ -154,6 +208,8 @@ try {
   }
   if (evidence.range_status !== 206 || !/^bytes 0-15\//.test(evidence.range_content_range || '')) throw new Error('Gateway byte-range resource check failed');
   if (evidence.stale_start_status !== 404) throw new Error('one-shot start capability was reusable');
+  if (evidence.stale_output_status !== 410 || evidence.stale_cleanup_output_count !== 0) throw new Error('stale Gateway output was not revoked and cleaned');
+  if (evidence.expiry_start_status !== 200 || ![404, 410].includes(evidence.expired_output_status) || evidence.expiry_cleanup_output_count !== 0) throw new Error('expired Gateway output was not rejected and cleaned');
   fs.writeFileSync(output, `${JSON.stringify(evidence, null, 2)}\n`);
 } catch (error) {
   evidence.stage = stage;
@@ -161,5 +217,5 @@ try {
   fs.writeFileSync(output, `${JSON.stringify(evidence, null, 2)}\n`);
   throw error;
 } finally {
-  await browser.close();
+  if (browser) await browser.close();
 }

@@ -911,6 +911,11 @@ impl MediaDeliverySupervisor {
         })
     }
 
+    #[cfg(feature = "control-ui-harness")]
+    pub fn published_output_count(&self) -> usize {
+        self.outputs.lock().map(|outputs| outputs.len()).unwrap_or(0)
+    }
+
     fn retain_live_outputs(&self, outputs: &mut HashMap<String, OutputRecord>) {
         let now = Instant::now();
         outputs.retain(|_, record| {
@@ -1253,18 +1258,16 @@ fn validate_data_reference_box(
         if size < 12 || size > box_end - offset {
             return Err(DeliveryError::BrokerRejected);
         }
-        if box_type == b"urn " || box_type == b"rdrf" {
+        if box_type != b"url " {
             return Err(DeliveryError::BrokerRejected);
         }
-        if box_type == b"url " {
-            let flags = u32::from_be_bytes(
-                bytes[offset + 8..offset + 12]
-                    .try_into()
-                    .map_err(|_| DeliveryError::BrokerRejected)?,
-            ) & 0x00ff_ffff;
-            if flags & 1 == 0 {
-                return Err(DeliveryError::BrokerRejected);
-            }
+        let flags = u32::from_be_bytes(
+            bytes[offset + 8..offset + 12]
+                .try_into()
+                .map_err(|_| DeliveryError::BrokerRejected)?,
+        ) & 0x00ff_ffff;
+        if flags & 1 == 0 {
+            return Err(DeliveryError::BrokerRejected);
         }
         offset += size;
     }
@@ -1762,6 +1765,18 @@ mod tests {
         std::fs::write(&external, mp4_with_data_reference(0, b"relative-media.m4a")).unwrap();
         assert_eq!(
             validate_mp4_input(&external),
+            Err(DeliveryError::BrokerRejected)
+        );
+        let unknown = workspace.join("unknown-dref.mp4");
+        let mut unknown_bytes = mp4_with_data_reference(1, b"self-contained");
+        let marker = unknown_bytes
+            .windows(4)
+            .position(|window| window == b"url ")
+            .unwrap();
+        unknown_bytes[marker..marker + 4].copy_from_slice(b"xxxx");
+        std::fs::write(&unknown, unknown_bytes).unwrap();
+        assert_eq!(
+            validate_mp4_input(&unknown),
             Err(DeliveryError::BrokerRejected)
         );
         remove_workspace(&workspace);

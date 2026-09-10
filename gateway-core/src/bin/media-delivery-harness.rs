@@ -154,14 +154,31 @@ async fn main() {
         inputs: vec![video, audio],
         authority: service.playback_delivery_authority(session_id.clone()),
         timeout: DEFAULT_DELIVERY_TIMEOUT,
-        output_ttl: DEFAULT_DELIVERY_TTL,
+        output_ttl: env::var("MEDIA_DELIVERY_TTL_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(std::time::Duration::from_secs)
+            .unwrap_or(DEFAULT_DELIVERY_TTL),
         max_output_bytes: MAX_DELIVERY_OUTPUT_BYTES,
+    };
+    let expiry_request = DeliveryRequest {
+        binding: request.binding.clone(),
+        shape: request.shape.clone(),
+        inputs: request.inputs.clone(),
+        authority: request.authority.clone(),
+        timeout: request.timeout,
+        output_ttl: request.output_ttl,
+        max_output_bytes: request.max_output_bytes,
     };
     let start_path = service
         .queue_media_delivery(request, Arc::new(HttpFileDeliveryBroker::new()))
         .expect("queue server-owned delivery");
+    let expiry_start_path = service
+        .queue_media_delivery(expiry_request, Arc::new(HttpFileDeliveryBroker::new()))
+        .expect("queue expiry delivery");
     println!("MEDIA_DELIVERY_HARNESS_URL=http://{address}");
     println!("MEDIA_DELIVERY_START_PATH={start_path}");
+    println!("MEDIA_DELIVERY_EXPIRY_START_PATH={expiry_start_path}");
     println!("MEDIA_DELIVERY_AUTHORITY=GatewayService::start_media_delivery");
     axum::serve(listener, service.router())
         .await

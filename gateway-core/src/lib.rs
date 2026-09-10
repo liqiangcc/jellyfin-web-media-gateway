@@ -905,6 +905,11 @@ impl GatewayService {
                 "/api/v1/media-delivery/{token}/start",
                 post(start_media_delivery_handler),
             )
+            .route(
+                "/__harness/invalidate/{session_id}",
+                post(harness_invalidate_handler),
+            )
+            .route("/__harness/output-count", get(harness_output_count_handler))
             .route("/metrics", get(metrics_handler))
             .route("/proof/paths", get(proof_paths_handler))
             .route("/display", get(display_handler))
@@ -997,6 +1002,37 @@ impl GatewayService {
                 http_surface_guard,
             ))
             .with_state(self.state.clone())
+    }
+}
+
+async fn harness_invalidate_handler(
+    State(state): State<Arc<GatewayState>>,
+    Path(session_id): Path<String>,
+) -> Response {
+    #[cfg(feature = "control-ui-harness")]
+    {
+        return match state.control.invalidate_harness_session(&session_id) {
+            Ok(()) => StatusCode::NO_CONTENT.into_response(),
+            Err(ControlLookupError::NotFound) => StatusCode::NOT_FOUND.into_response(),
+            Err(ControlLookupError::AmbiguousDisplay) => StatusCode::CONFLICT.into_response(),
+        };
+    }
+    #[cfg(not(feature = "control-ui-harness"))]
+    {
+        let _ = (state, session_id);
+        StatusCode::NOT_FOUND.into_response()
+    }
+}
+
+async fn harness_output_count_handler(State(state): State<Arc<GatewayState>>) -> Response {
+    #[cfg(feature = "control-ui-harness")]
+    {
+        return Json(state.media_delivery.published_output_count()).into_response();
+    }
+    #[cfg(not(feature = "control-ui-harness"))]
+    {
+        let _ = state;
+        StatusCode::NOT_FOUND.into_response()
     }
 }
 
