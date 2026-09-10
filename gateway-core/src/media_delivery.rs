@@ -1572,8 +1572,8 @@ mod tests {
         assert!(args.iter().all(|arg| !arg.contains("://")));
     }
 
-    #[test]
-    fn materialization_rejects_workspace_escape_symlinks_and_disguised_manifests() {
+    #[tokio::test]
+    async fn materialization_rejects_workspace_escape_symlinks_and_disguised_manifests() {
         let workspace = delivery_workspace();
         std::fs::create_dir_all(&workspace).unwrap();
         let outside = workspace
@@ -1581,16 +1581,17 @@ mod tests {
             .unwrap()
             .join(format!("delivery-outside-{}", Uuid::new_v4().simple()));
         std::fs::write(&outside, b"not an input").unwrap();
-        let target = ValidatedTarget {
-            host: "media.example.test".into(),
-            addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 443)],
-        };
+        let target_url = Url::parse("https://8.8.8.8/input").unwrap();
+        let target = EgressPolicy::default()
+            .validate_and_resolve(&target_url, &crate::security::EgressScope::PublicWeb)
+            .await
+            .unwrap();
         let input = ValidatedDeliveryInput::new(
             DeliveryInputCapability::new_server_owned(
                 "video-1",
                 "video-ref",
                 UpstreamResource {
-                    url: Url::parse("https://media.example.test/input").unwrap(),
+                    url: target_url,
                     protocol: StreamProtocol::HttpFile,
                     public_headers: HeaderMap::new(),
                     secret_headers: HeaderMap::new(),

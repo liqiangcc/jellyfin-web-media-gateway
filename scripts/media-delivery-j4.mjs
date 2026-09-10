@@ -67,8 +67,9 @@ try {
       headers: { 'content-type': 'application/json' },
       body: '{}',
     });
-    const payload = await start.json();
-    if (!start.ok) throw new Error(`delivery start failed: ${start.status}`);
+    const body = await start.text();
+    if (!start.ok) throw new Error(`delivery start failed: ${start.status}: ${body}`);
+    const payload = JSON.parse(body);
     const media = await fetch(payload.gateway_path);
     const bytes = new Uint8Array(await media.arrayBuffer());
     const range = await fetch(payload.gateway_path, { headers: { Range: 'bytes=0-15' } });
