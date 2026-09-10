@@ -1,15 +1,14 @@
+use axum::Router;
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::StatusCode;
+use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use axum::response::Response;
 use axum::routing::get;
-use axum::Router;
 use gateway_core::{
-    DeliveryBinding, DeliveryInputCapability, DeliveryRequest, EgressScope,
-    HttpFileDeliveryBroker, GatewayService, UpstreamResource, DEFAULT_DELIVERY_TIMEOUT,
-    DEFAULT_DELIVERY_TTL,
-    MAX_DELIVERY_OUTPUT_BYTES,
+    DEFAULT_DELIVERY_TIMEOUT, DEFAULT_DELIVERY_TTL, DeliveryBinding, DeliveryInputCapability,
+    DeliveryRequest, EgressScope, GatewayService, HttpFileDeliveryBroker,
+    MAX_DELIVERY_OUTPUT_BYTES, UpstreamResource,
 };
 use site_adapter_api::{MediaShapeV1, MediaTrack, MediaTrackKind, StreamProtocol};
 use std::env;
@@ -108,10 +107,12 @@ async fn main() {
         secret_headers: Default::default(),
         egress_scope: EgressScope::ConfiguredLocalService("synthetic-fixture".into()),
     };
-    let video = DeliveryInputCapability::new_server_owned("video-1", "video-ref", resource("/video.mp4"))
-        .expect("video capability");
-    let audio = DeliveryInputCapability::new_server_owned("audio-1", "audio-ref", resource("/audio.m4a"))
-        .expect("audio capability");
+    let video =
+        DeliveryInputCapability::new_server_owned("video-1", "video-ref", resource("/video.mp4"))
+            .expect("video capability");
+    let audio =
+        DeliveryInputCapability::new_server_owned("audio-1", "audio-ref", resource("/audio.m4a"))
+            .expect("audio capability");
     let shape = MediaShapeV1 {
         version: site_adapter_api::MEDIA_SHAPE_VERSION,
         tracks: vec![

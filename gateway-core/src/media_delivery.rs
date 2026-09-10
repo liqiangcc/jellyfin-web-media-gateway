@@ -17,10 +17,10 @@ use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
 use serde::Serialize;
 use site_adapter_api::{MediaShapeV1, MediaTrackKind, StreamProtocol};
-use std::io::Read;
 use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -1184,14 +1184,7 @@ fn validate_mp4_input(path: &Path) -> Result<(), DeliveryError> {
 fn contains_nested_reference(bytes: &[u8]) -> bool {
     let text = String::from_utf8_lossy(bytes).to_ascii_lowercase();
     [
-        "#extm3u",
-        "#ext-x-",
-        "#extinf",
-        "<?xml",
-        "http://",
-        "https://",
-        "file://",
-        "://",
+        "#extm3u", "#ext-x-", "#extinf", "<?xml", "http://", "https://", "file://", "://",
     ]
     .iter()
     .any(|marker| text.contains(marker))
@@ -1590,10 +1583,7 @@ mod tests {
         std::fs::write(&outside, b"not an input").unwrap();
         let target = ValidatedTarget {
             host: "media.example.test".into(),
-            addresses: vec![SocketAddr::new(
-                IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
-                443,
-            )],
+            addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 443)],
         };
         let input = ValidatedDeliveryInput::new(
             DeliveryInputCapability::new_server_owned(
