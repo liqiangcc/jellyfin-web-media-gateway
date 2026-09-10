@@ -913,7 +913,10 @@ impl MediaDeliverySupervisor {
 
     #[cfg(feature = "control-ui-harness")]
     pub fn published_output_count(&self) -> usize {
-        self.outputs.lock().map(|outputs| outputs.len()).unwrap_or(0)
+        self.outputs
+            .lock()
+            .map(|outputs| outputs.len())
+            .unwrap_or(0)
     }
 
     fn retain_live_outputs(&self, outputs: &mut HashMap<String, OutputRecord>) {

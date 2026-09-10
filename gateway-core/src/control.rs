@@ -331,9 +331,10 @@ impl ControlService {
     pub fn invalidate_harness_session(&self, session_id: &str) -> Result<(), ControlLookupError> {
         let session = self.session(session_id)?;
         let mut record = session.lock().expect("control session poisoned");
-        record
-            .playback
-            .switch_item("control-ui-invalidated-item", "control-ui-harness-invalidated");
+        record.playback.switch_item(
+            "control-ui-invalidated-item",
+            "control-ui-harness-invalidated",
+        );
         append_event(
             &mut record,
             session_id,
