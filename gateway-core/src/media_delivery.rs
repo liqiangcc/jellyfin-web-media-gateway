@@ -25,8 +25,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncWriteExt;
-use tokio::time::sleep;
 use tokio::time::Instant as TokioInstant;
+use tokio::time::sleep;
 use url::Url;
 use uuid::Uuid;
 
