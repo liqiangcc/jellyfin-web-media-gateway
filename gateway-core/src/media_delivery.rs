@@ -1120,23 +1120,41 @@ fn validate_materialization(
         || materialization.container != input.container
         || materialization.path.as_os_str().is_empty()
     {
+        #[cfg(feature = "control-ui-harness")]
+        eprintln!("media_delivery materialization stage=metadata");
         return Err(DeliveryError::BrokerRejected);
     }
     if materialization.size_bytes == 0 || materialization.size_bytes > MAX_DELIVERY_INPUT_BYTES {
         return Err(DeliveryError::InputLimitExceeded);
     }
     let metadata = std::fs::symlink_metadata(&materialization.path)
-        .map_err(|_| DeliveryError::BrokerRejected)?;
+        .map_err(|_| {
+            #[cfg(feature = "control-ui-harness")]
+            eprintln!("media_delivery materialization stage=stat");
+            DeliveryError::BrokerRejected
+        })?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
+        #[cfg(feature = "control-ui-harness")]
+        eprintln!("media_delivery materialization stage=file");
         return Err(DeliveryError::BrokerRejected);
     }
     let canonical_workspace =
-        std::fs::canonicalize(workspace).map_err(|_| DeliveryError::BrokerRejected)?;
+        std::fs::canonicalize(workspace).map_err(|_| {
+            #[cfg(feature = "control-ui-harness")]
+            eprintln!("media_delivery materialization stage=workspace");
+            DeliveryError::BrokerRejected
+        })?;
     let canonical_path =
-        std::fs::canonicalize(&materialization.path).map_err(|_| DeliveryError::BrokerRejected)?;
+        std::fs::canonicalize(&materialization.path).map_err(|_| {
+            #[cfg(feature = "control-ui-harness")]
+            eprintln!("media_delivery materialization stage=canonical");
+            DeliveryError::BrokerRejected
+        })?;
     if !canonical_path.starts_with(&canonical_workspace)
         || metadata.len() != materialization.size_bytes
     {
+        #[cfg(feature = "control-ui-harness")]
+        eprintln!("media_delivery materialization stage=bound");
         return Err(DeliveryError::BrokerRejected);
     }
     validate_mp4_input(&canonical_path)?;
