@@ -169,7 +169,7 @@ jobs:
         shell: bash
         run: |
           trap 'if [[ -f media-delivery-harness.pid ]]; then kill "$(cat media-delivery-harness.pid)" 2>/dev/null || true; fi' EXIT
-          MEDIA_DELIVERY_PORT=8787 MEDIA_DELIVERY_TTL_SECONDS=2 ./target/debug/media-delivery-harness > media-delivery-harness.log 2>&1 &
+          MEDIA_DELIVERY_PORT=8787 MEDIA_DELIVERY_TTL_SECONDS=30 MEDIA_DELIVERY_EXPIRY_TTL_SECONDS=2 ./target/debug/media-delivery-harness > media-delivery-harness.log 2>&1 &
           echo $! > media-delivery-harness.pid
           for i in $(seq 1 30); do grep -q '^MEDIA_DELIVERY_START_PATH=' media-delivery-harness.log && break; sleep 1; done
           base_url="$(sed -n 's/^MEDIA_DELIVERY_HARNESS_URL=//p' media-delivery-harness.log | head -n 1)"

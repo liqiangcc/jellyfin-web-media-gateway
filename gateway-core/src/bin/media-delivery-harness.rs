@@ -15,6 +15,7 @@ use std::env;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use url::Url;
 
@@ -148,17 +149,15 @@ async fn main() {
             },
         ],
     };
+    let primary_ttl = env_duration("MEDIA_DELIVERY_TTL_SECONDS", DEFAULT_DELIVERY_TTL);
+    let expiry_ttl = env_duration("MEDIA_DELIVERY_EXPIRY_TTL_SECONDS", Duration::from_secs(2));
     let request = DeliveryRequest {
         binding: binding.clone(),
         shape,
         inputs: vec![video, audio],
         authority: service.playback_delivery_authority(session_id.clone()),
         timeout: DEFAULT_DELIVERY_TIMEOUT,
-        output_ttl: env::var("MEDIA_DELIVERY_TTL_SECONDS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .map(std::time::Duration::from_secs)
-            .unwrap_or(DEFAULT_DELIVERY_TTL),
+        output_ttl: primary_ttl,
         max_output_bytes: MAX_DELIVERY_OUTPUT_BYTES,
     };
     let expiry_request = DeliveryRequest {
@@ -167,7 +166,7 @@ async fn main() {
         inputs: request.inputs.clone(),
         authority: request.authority.clone(),
         timeout: request.timeout,
-        output_ttl: request.output_ttl,
+        output_ttl: expiry_ttl,
         max_output_bytes: request.max_output_bytes,
     };
     let start_path = service
@@ -190,4 +189,12 @@ fn unix_seconds() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn env_duration(name: &str, fallback: Duration) -> Duration {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(fallback)
 }

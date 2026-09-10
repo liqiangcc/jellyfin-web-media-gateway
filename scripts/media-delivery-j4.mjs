@@ -122,103 +122,146 @@ try {
   const page = await browser.newPage();
   await page.goto(`${base}/display?profile=tv`, { waitUntil: 'domcontentloaded' });
   const result = await page.evaluate(async ({ path, expiryStartPath }) => {
-    const start = await fetch(path, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: '{}',
-    });
-    const body = await start.text();
-    if (!start.ok) throw new Error(`delivery start failed: ${start.status}: ${body}`);
-    const payload = JSON.parse(body);
-    const sessionId = payload.binding?.session_id;
-    if (typeof sessionId !== 'string' || sessionId.length === 0) throw new Error('delivery binding missing session');
-    const capabilityUrl = new URL(payload.gateway_path, location.origin).href;
-    const media = await fetch(capabilityUrl);
-    const bytes = new Uint8Array(await media.arrayBuffer());
-    const range = await fetch(capabilityUrl, { headers: { Range: 'bytes=0-15' } });
-    const video = document.createElement('video');
-    video.preload = 'auto';
-    video.muted = true;
-    video.playsInline = true;
-    video.src = capabilityUrl;
-    document.body.append(video);
-    const loadeddata = await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Chromium media loadeddata timeout')), 10000);
-      video.onloadeddata = () => {
-        clearTimeout(timeout);
-        resolve(true);
-      };
-      video.onerror = () => {
-        clearTimeout(timeout);
-        reject(new Error('Chromium could not decode Gateway fMP4 output'));
-      };
-      video.load();
-    });
-    let frameDecoded = video.readyState >= 2;
-    if (frameDecoded && typeof video.requestVideoFrameCallback === 'function') {
-      frameDecoded = await Promise.race([
-        new Promise(resolve => video.requestVideoFrameCallback(() => resolve(true))),
-        new Promise(resolve => setTimeout(() => resolve(false), 5000)),
-      ]);
-    }
-    const stale = await fetch(path, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: '{}',
-    });
-    if (stale.status !== 404) throw new Error(`one-shot start capability was reusable: ${stale.status}`);
-    const invalidate = await fetch(`/__harness/invalidate/${encodeURIComponent(sessionId)}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: '{}',
-    });
-    if (!invalidate.ok) throw new Error(`harness authority invalidation failed: ${invalidate.status}`);
-    const staleOutput = await fetch(capabilityUrl);
-    const staleCount = await fetch('/__harness/output-count');
-    if (!staleCount.ok) throw new Error(`stale output count failed: ${staleCount.status}`);
-    const expiryStart = await fetch(expiryStartPath, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: '{}',
-    });
-    if (!expiryStart.ok) throw new Error(`expiry delivery start failed: ${expiryStart.status}`);
-    const expiryPayload = JSON.parse(await expiryStart.text());
-    if (typeof expiryPayload.gateway_path !== 'string' || expiryPayload.gateway_path.length === 0) {
-      throw new Error('expiry delivery response missing gateway path');
-    }
-    const expiryUrl = new URL(expiryPayload.gateway_path, location.origin).href;
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    const expiredOutput = await fetch(expiryUrl);
-    const expiryCount = await fetch('/__harness/output-count');
-    if (!expiryCount.ok) throw new Error(`expiry output count failed: ${expiryCount.status}`);
-    return {
-      start_status: start.status,
-      media_status: media.status,
-      media_content_type: media.headers.get('content-type'),
-      media_content_length: Number(media.headers.get('content-length')),
-      media_bytes: Array.from(bytes),
-      range_status: range.status,
-      range_content_range: range.headers.get('content-range'),
-      stale_start_status: stale.status,
-      stale_output_status: staleOutput.status,
-      stale_cleanup_output_count: await staleCount.json(),
-      expiry_start_status: expiryStart.status,
-      expired_output_status: expiredOutput.status,
-      expiry_cleanup_output_count: await expiryCount.json(),
-      browser_src_is_gateway_capability: new URL(video.src).pathname.startsWith('/media/delivery/'),
-      browser_loadeddata: loadeddata,
-      browser_frame_decoded: frameDecoded,
-      browser_ready_state: video.readyState,
-      browser_duration_seconds: Number.isFinite(video.duration) ? video.duration : null,
-      browser_current_time_seconds: video.currentTime,
-      browser_video_width: video.videoWidth,
-      browser_video_height: video.videoHeight,
+    const observed = {
+      start_status: null,
+      media_status: null,
+      media_content_type: null,
+      media_content_length: null,
+      media_bytes_length: null,
+      range_status: null,
+      range_content_range: null,
+      stale_start_status: null,
+      stale_output_status: null,
+      stale_cleanup_output_count: null,
+      expiry_start_status: null,
+      expired_output_status: null,
+      expiry_cleanup_output_count: null,
+      browser_src_is_gateway_capability: false,
+      browser_loadeddata: false,
+      browser_frame_decoded: false,
+      browser_ready_state: null,
+      browser_duration_seconds: null,
+      browser_current_time_seconds: null,
+      browser_video_width: null,
+      browser_video_height: null,
     };
+    const classify = error => {
+      const message = String(error?.message || error);
+      if (message.includes('expiry delivery start failed')) return 'expiry_start_failed';
+      if (message.includes('Chromium')) return 'browser_decode_failed';
+      if (message.includes('delivery start failed')) return 'gateway_start_failed';
+      return 'gateway_route_failed';
+    };
+    try {
+      const start = await fetch(path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      observed.start_status = start.status;
+      const body = await start.text();
+      if (!start.ok) throw new Error(`delivery start failed: ${start.status}`);
+      const payload = JSON.parse(body);
+      const sessionId = payload.binding?.session_id;
+      if (typeof sessionId !== 'string' || sessionId.length === 0) throw new Error('delivery binding missing session');
+      const capabilityUrl = new URL(payload.gateway_path, location.origin).href;
+      const media = await fetch(capabilityUrl);
+      observed.media_status = media.status;
+      observed.media_content_type = media.headers.get('content-type');
+      observed.media_content_length = Number(media.headers.get('content-length'));
+      const bytes = new Uint8Array(await media.arrayBuffer());
+      observed.media_bytes_length = bytes.length;
+      const range = await fetch(capabilityUrl, { headers: { Range: 'bytes=0-15' } });
+      observed.range_status = range.status;
+      observed.range_content_range = range.headers.get('content-range');
+      const video = document.createElement('video');
+      video.preload = 'auto';
+      video.muted = true;
+      video.playsInline = true;
+      video.src = capabilityUrl;
+      document.body.append(video);
+      const loadeddata = await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Chromium media loadeddata timeout')), 10000);
+        video.onloadeddata = () => {
+          clearTimeout(timeout);
+          resolve(true);
+        };
+        video.onerror = () => {
+          clearTimeout(timeout);
+          reject(new Error('Chromium could not decode Gateway fMP4 output'));
+        };
+        video.load();
+      });
+      let frameDecoded = video.readyState >= 2;
+      if (frameDecoded && typeof video.requestVideoFrameCallback === 'function') {
+        frameDecoded = await Promise.race([
+          new Promise(resolve => video.requestVideoFrameCallback(() => resolve(true))),
+          new Promise(resolve => setTimeout(() => resolve(false), 5000)),
+        ]);
+      }
+      Object.assign(observed, {
+        browser_src_is_gateway_capability: new URL(video.src).pathname.startsWith('/media/delivery/'),
+        browser_loadeddata: loadeddata,
+        browser_frame_decoded: frameDecoded,
+        browser_ready_state: video.readyState,
+        browser_duration_seconds: Number.isFinite(video.duration) ? video.duration : null,
+        browser_current_time_seconds: video.currentTime,
+        browser_video_width: video.videoWidth,
+        browser_video_height: video.videoHeight,
+      });
+      const expiryStart = await fetch(expiryStartPath, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      observed.expiry_start_status = expiryStart.status;
+      if (!expiryStart.ok) throw new Error(`expiry delivery start failed: ${expiryStart.status}`);
+      const expiryPayload = JSON.parse(await expiryStart.text());
+      if (typeof expiryPayload.gateway_path !== 'string' || expiryPayload.gateway_path.length === 0) {
+        throw new Error('expiry delivery response missing gateway path');
+      }
+      const expiryUrl = new URL(expiryPayload.gateway_path, location.origin).href;
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      const expiredOutput = await fetch(expiryUrl);
+      observed.expired_output_status = expiredOutput.status;
+      const expiryCount = await fetch('/__harness/output-count');
+      if (!expiryCount.ok) throw new Error(`expiry output count failed: ${expiryCount.status}`);
+      observed.expiry_cleanup_output_count = await expiryCount.json();
+      if (![404, 410].includes(observed.expired_output_status) || observed.expiry_cleanup_output_count !== 1) {
+        throw new Error('expired Gateway output was not rejected while primary remained');
+      }
+      const stale = await fetch(path, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      observed.stale_start_status = stale.status;
+      if (stale.status !== 404) throw new Error(`one-shot start capability was reusable: ${stale.status}`);
+      const invalidate = await fetch(`/__harness/invalidate/${encodeURIComponent(sessionId)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      });
+      if (!invalidate.ok) throw new Error(`harness authority invalidation failed: ${invalidate.status}`);
+      const staleOutput = await fetch(capabilityUrl);
+      observed.stale_output_status = staleOutput.status;
+      const staleCount = await fetch('/__harness/output-count');
+      if (!staleCount.ok) throw new Error(`stale output count failed: ${staleCount.status}`);
+      observed.stale_cleanup_output_count = await staleCount.json();
+      return { ok: true, ...observed, media_bytes: Array.from(bytes) };
+    } catch (error) {
+      return { ok: false, ...observed, error_code: classify(error) };
+    }
   }, { path: startPath, expiryStartPath });
 
+  Object.assign(evidence, result);
+  if (!result.ok) {
+    evidence.error_code = result.error_code || 'gateway_route_failed';
+    throw new Error(evidence.error_code);
+  }
   const mediaBytes = Uint8Array.from(result.media_bytes);
   evidence.stage = 'assertions';
-  Object.assign(evidence, result, { media_bytes: mediaBytes.length, boxes: parseBoxes(mediaBytes) });
+  Object.assign(evidence, { media_bytes: mediaBytes.length, boxes: parseBoxes(mediaBytes) });
   if (evidence.start_status !== 200 || evidence.media_status !== 200) throw new Error('Gateway HTTP route/resource was not successful');
   if (evidence.media_content_type !== 'video/mp4') throw new Error(`unexpected content type: ${evidence.media_content_type}`);
   if (evidence.media_content_length !== evidence.media_bytes) throw new Error('content length mismatch');
@@ -229,11 +272,11 @@ try {
   if (evidence.range_status !== 206 || !/^bytes 0-15\//.test(evidence.range_content_range || '')) throw new Error('Gateway byte-range resource check failed');
   if (evidence.stale_start_status !== 404) throw new Error('one-shot start capability was reusable');
   if (evidence.stale_output_status !== 410 || evidence.stale_cleanup_output_count !== 0) throw new Error('stale Gateway output was not revoked and cleaned');
-  if (evidence.expiry_start_status !== 200 || ![404, 410].includes(evidence.expired_output_status) || evidence.expiry_cleanup_output_count !== 0) throw new Error('expired Gateway output was not rejected and cleaned');
+  if (evidence.expiry_start_status !== 200 || ![404, 410].includes(evidence.expired_output_status) || evidence.expiry_cleanup_output_count !== 1) throw new Error('expired Gateway output was not rejected while primary remained');
   fs.writeFileSync(output, `${JSON.stringify(evidence, null, 2)}\n`);
 } catch (error) {
   evidence.stage = stage;
-  evidence.error_code = errorCode(error);
+  if (!evidence.error_code) evidence.error_code = errorCode(error);
   fs.writeFileSync(output, `${JSON.stringify(evidence, null, 2)}\n`);
   throw error;
 } finally {
