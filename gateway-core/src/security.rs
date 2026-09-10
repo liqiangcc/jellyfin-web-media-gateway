@@ -600,6 +600,14 @@ impl StructuredCommand {
         command.args(self.args);
         command
     }
+
+    /// Consume the same structured argv for an async process without
+    /// converting it to a shell command string.
+    pub fn into_tokio_command(self) -> tokio::process::Command {
+        let mut command = tokio::process::Command::new(self.program);
+        command.args(self.args);
+        command
+    }
 }
 
 #[cfg(test)]

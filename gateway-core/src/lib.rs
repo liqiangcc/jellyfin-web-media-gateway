@@ -35,6 +35,7 @@ pub mod control;
 mod control_contract_tests;
 pub mod control_view;
 pub mod display_session;
+pub mod media_delivery;
 pub mod security;
 mod source_session;
 pub use auth::{
@@ -69,6 +70,12 @@ pub use display_session::{
     DisplayRegistration, DisplayRegistrationResponse, DisplaySessionError,
     DisplaySessionErrorResponse, DisplaySessionService, LiveDisplayView, WebDisplayErrorCode,
     WebDisplayObservation,
+};
+pub use media_delivery::{
+    BrokerInput, DEFAULT_DELIVERY_TIMEOUT, DEFAULT_DELIVERY_TTL, DELIVERY_CONTRACT_VERSION,
+    DeliveryAuthority, DeliveryBinding, DeliveryCancellation, DeliveryError, DeliveryFailureClass,
+    DeliveryInputBroker, DeliveryInputCapability, DeliveryRequest, DeliveryResult,
+    MAX_DELIVERY_OUTPUT_BYTES, MediaDeliverySupervisor,
 };
 pub use security::{
     EgressDnsResolver, EgressPolicy, EgressPolicyError, EgressResolutionFuture, EgressScope,
@@ -242,6 +249,7 @@ struct GatewayState {
     display_sessions: DisplaySessionService,
     source_sessions: source_session::SourceSessionService,
     auth_routes: auth_route::AuthRouteCoordinator,
+    media_delivery: media_delivery::MediaDeliverySupervisor,
 }
 
 #[derive(Clone)]
@@ -478,10 +486,12 @@ impl GatewayService {
     }
 
     pub fn with_registry(max_capabilities: usize, registry: Arc<SiteAdapterRegistry>) -> Self {
+        let egress_policy = Arc::new(RwLock::new(EgressPolicy::default()));
         Self {
             state: Arc::new(GatewayState {
                 store: Arc::new(CapabilityStore::new(max_capabilities)),
-                egress_policy: Arc::new(RwLock::new(EgressPolicy::default())),
+                media_delivery: media_delivery::MediaDeliverySupervisor::new(egress_policy.clone()),
+                egress_policy,
                 http_authorities: Arc::new(RwLock::new(HttpAuthorityPolicy::default())),
                 active_streams: Arc::new(AtomicUsize::new(0)),
                 proof_paths: Arc::new(RwLock::new(ProofPaths {
@@ -686,10 +696,12 @@ impl GatewayService {
         registry: Arc<SiteAdapterRegistry>,
     ) -> Self {
         let vault = SessionVault::default();
+        let egress_policy = Arc::new(RwLock::new(EgressPolicy::default()));
         Self {
             state: Arc::new(GatewayState {
                 store: Arc::new(CapabilityStore::new(max_capabilities)),
-                egress_policy: Arc::new(RwLock::new(EgressPolicy::default())),
+                media_delivery: media_delivery::MediaDeliverySupervisor::new(egress_policy.clone()),
+                egress_policy,
                 http_authorities: Arc::new(RwLock::new(HttpAuthorityPolicy::default())),
                 active_streams: Arc::new(AtomicUsize::new(0)),
                 proof_paths: Arc::new(RwLock::new(ProofPaths {
@@ -719,6 +731,13 @@ impl GatewayService {
 
     pub fn max_capabilities(&self) -> usize {
         self.state.store.max_entries
+    }
+
+    /// Return the Gateway-owned separated A/V delivery supervisor. Callers
+    /// must obtain `DeliveryInputCapability` values from server-side resolve
+    /// state and provide the Playback authority and broker for the attempt.
+    pub fn media_delivery(&self) -> media_delivery::MediaDeliverySupervisor {
+        self.state.media_delivery.clone()
     }
 
     #[cfg(test)]
@@ -810,6 +829,10 @@ impl GatewayService {
             .route(
                 "/stream/{token}/{session}/{item}/{revision}/{resource}",
                 get(stream_handler).head(stream_handler),
+            )
+            .route(
+                "/media/delivery/{token}/{session}/{item}/{revision}/{generation}/{display_generation}/{group}",
+                get(delivery_stream_handler).head(delivery_stream_handler),
             )
             .route("/metrics", get(metrics_handler))
             .route("/proof/paths", get(proof_paths_handler))
@@ -2043,6 +2066,34 @@ async fn stream_handler(
         }
     });
     response_from_parts(status, response_headers, Body::from_stream(guarded))
+}
+
+async fn delivery_stream_handler(
+    State(state): State<Arc<GatewayState>>,
+    Path((token, session, item, revision, generation, display_generation, group)): Path<(
+        String,
+        String,
+        String,
+        u64,
+        u64,
+        u64,
+        String,
+    )>,
+    method: Method,
+    request_headers: HeaderMap,
+) -> Response {
+    let binding = media_delivery::DeliveryBinding::new(
+        session,
+        item,
+        revision,
+        generation,
+        display_generation,
+        group,
+    );
+    state
+        .media_delivery
+        .serve(&token, &binding, method, &request_headers)
+        .await
 }
 
 async fn fetch_upstream(
