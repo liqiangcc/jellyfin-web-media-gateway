@@ -253,6 +253,12 @@ struct GatewayState {
     source_sessions: source_session::SourceSessionService,
     auth_routes: auth_route::AuthRouteCoordinator,
     media_delivery: media_delivery::MediaDeliverySupervisor,
+    pending_media_deliveries: Arc<Mutex<HashMap<String, PendingMediaDelivery>>>,
+}
+
+struct PendingMediaDelivery {
+    request: media_delivery::DeliveryRequest,
+    broker: Arc<dyn media_delivery::DeliveryInputBroker>,
 }
 
 #[derive(Clone)]
@@ -508,6 +514,7 @@ impl GatewayService {
                 display_sessions: DisplaySessionService::default(),
                 source_sessions: source_session::SourceSessionService::new(registry),
                 auth_routes: auth_route::AuthRouteCoordinator::new(SessionVault::default()),
+                pending_media_deliveries: Arc::new(Mutex::new(HashMap::new())),
             }),
         }
     }
@@ -720,6 +727,7 @@ impl GatewayService {
                 display_sessions: DisplaySessionService::default(),
                 source_sessions: source_session::SourceSessionService::new(registry),
                 auth_routes: auth_route::AuthRouteCoordinator::fake_for_tests(vault),
+                pending_media_deliveries: Arc::new(Mutex::new(HashMap::new())),
             }),
         }
     }
@@ -743,6 +751,19 @@ impl GatewayService {
         self.state.media_delivery.clone()
     }
 
+    /// Return the server-owned Playback authority for an internal delivery
+    /// request. This is for trusted resolver/display integration code; HTTP
+    /// callers never provide or replace this authority.
+    pub fn playback_delivery_authority(
+        &self,
+        session_id: impl Into<String>,
+    ) -> Arc<dyn media_delivery::DeliveryAuthority> {
+        Arc::new(media_delivery::PlaybackDeliveryAuthority::new(
+            self.state.control.clone(),
+            session_id,
+        ))
+    }
+
     /// Start a generic separated-track delivery attempt under this Gateway's
     /// PlaybackSession authority. The caller still supplies server-owned
     /// capabilities and a broker; no site-specific or synthetic media is
@@ -762,6 +783,28 @@ impl GatewayService {
             .media_delivery
             .start(request, broker, cancellation)
             .await
+    }
+
+    /// Register a server-owned delivery request for the HTTP handoff route.
+    /// The returned path is an opaque, one-shot start capability; callers must
+    /// still obtain all request inputs through the normal resolver/broker
+    /// boundary before registering it.
+    pub fn queue_media_delivery(
+        &self,
+        request: media_delivery::DeliveryRequest,
+        broker: Arc<dyn media_delivery::DeliveryInputBroker>,
+    ) -> Result<String, media_delivery::DeliveryError> {
+        let mut pending = self
+            .state
+            .pending_media_deliveries
+            .lock()
+            .map_err(|_| media_delivery::DeliveryError::CleanupFailed)?;
+        if pending.len() >= media_delivery::MAX_DELIVERY_OUTPUTS {
+            return Err(media_delivery::DeliveryError::ConcurrencyLimitExceeded);
+        }
+        let token = format!("p-{}", Uuid::new_v4().simple());
+        pending.insert(token.clone(), PendingMediaDelivery { request, broker });
+        Ok(format!("/api/v1/media-delivery/{token}/start"))
     }
 
     #[cfg(test)]
@@ -857,6 +900,10 @@ impl GatewayService {
             .route(
                 "/media/delivery/{token}/{session}/{item}/{revision}/{generation}/{display_generation}/{group}",
                 get(delivery_stream_handler).head(delivery_stream_handler),
+            )
+            .route(
+                "/api/v1/media-delivery/{token}/start",
+                post(start_media_delivery_handler),
             )
             .route("/metrics", get(metrics_handler))
             .route("/proof/paths", get(proof_paths_handler))
@@ -2118,6 +2165,28 @@ async fn delivery_stream_handler(
         .media_delivery
         .serve(&token, &binding, method, &request_headers)
         .await
+}
+
+async fn start_media_delivery_handler(
+    State(state): State<Arc<GatewayState>>,
+    Path(token): Path<String>,
+) -> Response {
+    let pending = state
+        .pending_media_deliveries
+        .lock()
+        .ok()
+        .and_then(|mut pending| pending.remove(&token));
+    let Some(PendingMediaDelivery { request, broker }) = pending else {
+        return (StatusCode::NOT_FOUND, "DELIVERY_START_NOT_FOUND").into_response();
+    };
+    let service = GatewayService { state };
+    match service
+        .start_media_delivery(request, broker, DeliveryCancellation::default())
+        .await
+    {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+    }
 }
 
 async fn fetch_upstream(

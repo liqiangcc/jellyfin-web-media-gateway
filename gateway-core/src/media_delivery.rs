@@ -15,7 +15,9 @@ use axum::http::header::{ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_T
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
+use serde::Serialize;
 use site_adapter_api::{MediaShapeV1, MediaTrackKind, StreamProtocol};
+use std::io::Read;
 use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
@@ -45,7 +47,7 @@ const MAX_DELIVERY_CONTAINER_BYTES: usize = 32;
 
 /// The full CAS identity of one delivery attempt. No field is derived from a
 /// short-lived URL or from browser-provided state.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DeliveryBinding {
     pub session_id: String,
     pub item_id: String,
@@ -445,7 +447,7 @@ impl fmt::Debug for DeliveryRequest {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DeliveryResult {
     pub contract_version: u32,
     pub binding: DeliveryBinding,
@@ -724,7 +726,7 @@ impl MediaDeliverySupervisor {
                 deadline,
             )
             .await??;
-            validate_materialization(&validated, &acquired)?;
+            validate_materialization(&validated, &acquired, workspace)?;
             inputs.push((track.kind, acquired.path));
         }
 
@@ -1112,6 +1114,7 @@ fn valid_container(value: &str) -> bool {
 fn validate_materialization(
     input: &ValidatedDeliveryInput,
     materialization: &BrokerMaterialization,
+    workspace: &Path,
 ) -> Result<(), DeliveryError> {
     if materialization.protocol != input.protocol
         || materialization.container != input.container
@@ -1122,12 +1125,76 @@ fn validate_materialization(
     if materialization.size_bytes == 0 || materialization.size_bytes > MAX_DELIVERY_INPUT_BYTES {
         return Err(DeliveryError::InputLimitExceeded);
     }
-    let metadata =
-        std::fs::metadata(&materialization.path).map_err(|_| DeliveryError::BrokerRejected)?;
-    if !metadata.is_file() || metadata.len() != materialization.size_bytes {
+    let metadata = std::fs::symlink_metadata(&materialization.path)
+        .map_err(|_| DeliveryError::BrokerRejected)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(DeliveryError::BrokerRejected);
     }
+    let canonical_workspace =
+        std::fs::canonicalize(workspace).map_err(|_| DeliveryError::BrokerRejected)?;
+    let canonical_path =
+        std::fs::canonicalize(&materialization.path).map_err(|_| DeliveryError::BrokerRejected)?;
+    if !canonical_path.starts_with(&canonical_workspace)
+        || metadata.len() != materialization.size_bytes
+    {
+        return Err(DeliveryError::BrokerRejected);
+    }
+    validate_mp4_input(&canonical_path)?;
     Ok(())
+}
+
+const MEDIA_PROBE_BYTES: usize = 64 * 1024;
+
+fn validate_mp4_input(path: &Path) -> Result<(), DeliveryError> {
+    let mut file = std::fs::File::open(path).map_err(|_| DeliveryError::BrokerRejected)?;
+    let mut prefix = vec![0u8; MEDIA_PROBE_BYTES];
+    let bytes_read = file
+        .read(&mut prefix)
+        .map_err(|_| DeliveryError::BrokerRejected)?;
+    prefix.truncate(bytes_read);
+    if prefix.len() < 16 || &prefix[4..8] != b"ftyp" {
+        return Err(DeliveryError::BrokerRejected);
+    }
+    let first_box_size = u32::from_be_bytes(prefix[0..4].try_into().unwrap()) as usize;
+    if first_box_size < 16 || first_box_size > prefix.len() {
+        return Err(DeliveryError::BrokerRejected);
+    }
+    if contains_nested_reference(&prefix) {
+        return Err(DeliveryError::BrokerRejected);
+    }
+    let mut carry = prefix[prefix.len().saturating_sub(32)..].to_vec();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let bytes_read = file
+            .read(&mut chunk)
+            .map_err(|_| DeliveryError::BrokerRejected)?;
+        if bytes_read == 0 {
+            break;
+        }
+        let mut window = carry;
+        window.extend_from_slice(&chunk[..bytes_read]);
+        if contains_nested_reference(&window) {
+            return Err(DeliveryError::BrokerRejected);
+        }
+        carry = window[window.len().saturating_sub(32)..].to_vec();
+    }
+    Ok(())
+}
+
+fn contains_nested_reference(bytes: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(bytes).to_ascii_lowercase();
+    [
+        "#extm3u",
+        "#ext-x-",
+        "#extinf",
+        "<?xml",
+        "http://",
+        "https://",
+        "file://",
+        "://",
+    ]
+    .iter()
+    .any(|marker| text.contains(marker))
 }
 
 fn valid_upstream_url(url: &Url) -> bool {
@@ -1175,8 +1242,14 @@ fn ffmpeg_command(
         .arg("-y")
         .arg("-protocol_whitelist")
         .arg("file")
+        .arg("-f")
+        .arg("mp4")
         .arg("-i")
         .arg(video.as_os_str().to_os_string())
+        .arg("-protocol_whitelist")
+        .arg("file")
+        .arg("-f")
+        .arg("mp4")
         .arg("-i")
         .arg(audio.as_os_str().to_os_string())
         .arg("-map")
@@ -1188,7 +1261,7 @@ fn ffmpeg_command(
         .arg("-c:a")
         .arg("copy")
         .arg("-movflags")
-        .arg("+faststart")
+        .arg("+frag_keyframe+empty_moov+default_base_moof")
         .arg("-fs")
         .arg(max_output_bytes.to_string())
         .arg("-f")
@@ -1317,14 +1390,16 @@ mod tests {
         fn acquire<'a>(
             &'a self,
             input: &'a ValidatedDeliveryInput,
-            _workspace: &'a Path,
+            workspace: &'a Path,
         ) -> DeliveryBrokerFuture<'a> {
             Box::pin(async move {
-                let path = self
+                let source = self
                     .files
                     .get(input.access_ref())
                     .cloned()
                     .ok_or(DeliveryError::BrokerRejected)?;
+                let path = workspace.join(format!("test-input-{}", input.track_id()));
+                std::fs::copy(source, &path).map_err(|_| DeliveryError::BrokerRejected)?;
                 let size = std::fs::metadata(&path)
                     .map_err(|_| DeliveryError::BrokerRejected)?
                     .len();
@@ -1483,17 +1558,107 @@ mod tests {
             .argv()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
-        let whitelist = args
+        let whitelists: Vec<_> = args
             .iter()
-            .position(|arg| arg == "-protocol_whitelist")
-            .expect("protocol whitelist");
-        let first_input = args
+            .enumerate()
+            .filter_map(|(index, arg)| (arg == "-protocol_whitelist").then_some(index))
+            .collect();
+        let inputs: Vec<_> = args
             .iter()
-            .position(|arg| arg == "-i")
-            .expect("first input");
-        assert_eq!(args[whitelist + 1], "file");
-        assert!(whitelist < first_input);
+            .enumerate()
+            .filter_map(|(index, arg)| (arg == "-i").then_some(index))
+            .collect();
+        assert_eq!(whitelists.len(), 2);
+        assert_eq!(inputs.len(), 2);
+        for (whitelist, input) in whitelists.into_iter().zip(inputs) {
+            assert_eq!(args[whitelist + 1], "file");
+            assert!(whitelist < input);
+            assert_eq!(args[input - 2], "mp4");
+            assert_eq!(args[input - 3], "-f");
+        }
         assert!(args.iter().all(|arg| !arg.contains("://")));
+    }
+
+    #[test]
+    fn materialization_rejects_workspace_escape_symlinks_and_disguised_manifests() {
+        let workspace = delivery_workspace();
+        std::fs::create_dir_all(&workspace).unwrap();
+        let outside = workspace
+            .parent()
+            .unwrap()
+            .join(format!("delivery-outside-{}", Uuid::new_v4().simple()));
+        std::fs::write(&outside, b"not an input").unwrap();
+        let target = ValidatedTarget {
+            host: "media.example.test".into(),
+            addresses: vec![SocketAddr::new(
+                IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)),
+                443,
+            )],
+        };
+        let input = ValidatedDeliveryInput::new(
+            DeliveryInputCapability::new_server_owned(
+                "video-1",
+                "video-ref",
+                UpstreamResource {
+                    url: Url::parse("https://media.example.test/input").unwrap(),
+                    protocol: StreamProtocol::HttpFile,
+                    public_headers: HeaderMap::new(),
+                    secret_headers: HeaderMap::new(),
+                    egress_scope: EgressScope::PublicWeb,
+                },
+            )
+            .unwrap(),
+            target,
+            StreamProtocol::HttpFile,
+            "mp4".into(),
+        )
+        .unwrap();
+        let escaped = BrokerInput::from_server_owned_path(
+            outside.clone(),
+            std::fs::metadata(&outside).unwrap().len(),
+            StreamProtocol::HttpFile,
+            "mp4",
+        )
+        .unwrap();
+        assert_eq!(
+            validate_materialization(&input, &escaped, &workspace),
+            Err(DeliveryError::BrokerRejected)
+        );
+
+        let manifest = workspace.join("manifest.mp4");
+        std::fs::write(&manifest, b"#EXTM3U\nhttps://outside.example/segment.mp4\n").unwrap();
+        let materialization = BrokerInput::from_server_owned_path(
+            manifest.clone(),
+            std::fs::metadata(&manifest).unwrap().len(),
+            StreamProtocol::HttpFile,
+            "mp4",
+        )
+        .unwrap();
+        assert_eq!(
+            validate_materialization(&input, &materialization, &workspace),
+            Err(DeliveryError::BrokerRejected)
+        );
+
+        let valid = workspace.join("valid.mp4");
+        std::fs::write(&valid, b"\0\0\0\x18ftypisom\0\0\0\0isom").unwrap();
+        #[cfg(unix)]
+        {
+            let link = workspace.join("link.mp4");
+            std::os::unix::fs::symlink(&valid, &link).unwrap();
+            let linked = BrokerInput::from_server_owned_path(
+                link,
+                std::fs::metadata(&valid).unwrap().len(),
+                StreamProtocol::HttpFile,
+                "mp4",
+            )
+            .unwrap();
+            assert_eq!(
+                validate_materialization(&input, &linked, &workspace),
+                Err(DeliveryError::BrokerRejected)
+            );
+        }
+        remove_workspace(&workspace);
+        let _ = std::fs::remove_file(outside);
     }
 
     #[tokio::test]

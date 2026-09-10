@@ -8,6 +8,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/issue-271-media-delivery.yml"
+      - "scripts/media-delivery-j4.mjs"
   workflow_dispatch:
     inputs:
       candidate_sha:
@@ -71,6 +72,7 @@ jobs:
       - name: Run delivery lifecycle and R007 matrix
         run: |
           cargo test -p gateway-core --lib media_delivery::tests -- --nocapture
+          cargo test -p gateway-core --lib media_delivery::tests::materialization_rejects_workspace_escape_symlinks_and_disguised_manifests -- --exact --nocapture
           cargo test -p gateway-core --test playback_concurrency -- --test-threads=1
           cargo test -p gateway-core --test media_gateway -- --test-threads=1
 
@@ -98,6 +100,13 @@ jobs:
           grep -q 'EgressPolicy' gateway-core/src/media_delivery.rs
           grep -q 'display_generation' gateway-core/src/media_delivery.rs
           grep -q 'media/delivery' gateway-core/src/lib.rs
+          grep -q 'api/v1/media-delivery/{token}/start' gateway-core/src/lib.rs
+          grep -q 'validate_materialization.*workspace' gateway-core/src/media_delivery.rs
+          test "$(grep -c -- '-protocol_whitelist' gateway-core/src/media_delivery.rs)" -ge 2
+          test "$(grep -c -- 'arg(\"-f\")' gateway-core/src/media_delivery.rs)" -ge 2
+      - name: Run hosted negative input-boundary regression
+        run: |
+          cargo test -p gateway-core --lib media_delivery::tests::materialization_rejects_workspace_escape_symlinks_and_disguised_manifests -- --exact --nocapture
       - name: Emit bounded redacted provenance
         shell: bash --noprofile --norc -euo pipefail {0}
         run: |
@@ -154,8 +163,21 @@ jobs:
           test -s "$fixture_dir/audio.m4a"
           echo "MEDIA_DELIVERY_FIXTURE_VIDEO=$fixture_dir/video.mp4" >> "$GITHUB_ENV"
           echo "MEDIA_DELIVERY_FIXTURE_AUDIO=$fixture_dir/audio.m4a" >> "$GITHUB_ENV"
-      - name: Run exact-Candidate synthetic HTTP-file projection
-        run: cargo test -p gateway-core --lib media_delivery::tests::synthetic_fmp4_fixture_is_remuxed_and_projected -- --exact --nocapture
+      - name: Build exact-Candidate media delivery harness on hosted x64
+        run: cargo build -p gateway-core --features control-ui-harness --bin media-delivery-harness
+      - name: Run Gateway HTTP route through hosted Chromium
+        shell: bash
+        run: |
+          trap 'if [[ -f media-delivery-harness.pid ]]; then kill "$(cat media-delivery-harness.pid)" 2>/dev/null || true; fi' EXIT
+          MEDIA_DELIVERY_PORT=8787 ./target/debug/media-delivery-harness > media-delivery-harness.log 2>&1 &
+          echo $! > media-delivery-harness.pid
+          for i in $(seq 1 30); do grep -q '^MEDIA_DELIVERY_START_PATH=' media-delivery-harness.log && break; sleep 1; done
+          base_url="$(sed -n 's/^MEDIA_DELIVERY_HARNESS_URL=//p' media-delivery-harness.log | head -n 1)"
+          start_path="$(sed -n 's/^MEDIA_DELIVERY_START_PATH=//p' media-delivery-harness.log | head -n 1)"
+          test -n "$base_url"
+          test -n "$start_path"
+          npm install --no-save playwright-core@1.55.0
+          CANDIDATE_SHA="$CANDIDATE_SHA" MEDIA_DELIVERY_HARNESS_URL="$base_url" MEDIA_DELIVERY_START_PATH="$start_path" node scripts/media-delivery-j4.mjs
       - name: Emit bounded redacted provenance
         shell: bash --noprofile --norc -euo pipefail {0}
         run: |
@@ -166,10 +188,15 @@ jobs:
             echo "git_head=$(git rev-parse HEAD)"
             echo "runner_arch=$(uname -m)"
             echo "delivery=server_remux_fmp4_http_file"
+            echo "authority_entry=GatewayService::start_media_delivery"
+            echo "http_route=POST /api/v1/media-delivery/{token}/start"
+            echo "browser=isolated Playwright Chromium"
             echo "projection=short_lived_gateway_capability"
             echo "inputs=server_owned_broker_only"
             echo "secret_policy=upstream_url_headers_and_refs_server_only"
           } > "$evidence_dir/manifest.txt"
+          cp media-delivery-j4-proof.json "$evidence_dir/"
+          ! grep -Eiq 'cookie|authorization|bearer|sessdata|signed-url|fixture-secret|media\.example' "$evidence_dir"/*
           ! grep -Eiq 'cookie|authorization|bearer|sessdata|signed-url|fixture-secret|media\.example' "$evidence_dir/manifest.txt"
           test "$(wc -c < "$evidence_dir/manifest.txt")" -lt 2048
           sha256sum gateway-core/src/media_delivery.rs > "$evidence_dir/source-sha256sums.txt"
