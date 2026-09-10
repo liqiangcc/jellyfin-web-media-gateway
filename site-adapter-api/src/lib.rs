@@ -29,6 +29,18 @@ const MAX_PAGE_URL_BYTES: usize = 2048;
 const MAX_OBSERVATION_CANDIDATES: usize = 16;
 const MAX_CANDIDATE_ID_BYTES: usize = 128;
 const MAX_ACCESS_REF_BYTES: usize = 256;
+pub const MAX_MEDIA_TRACKS: usize = 16;
+const MAX_MEDIA_GROUP_BYTES: usize = 128;
+const MAX_MEDIA_CODEC_BYTES: usize = 128;
+const MAX_MEDIA_CONTAINER_BYTES: usize = 64;
+const MAX_MEDIA_MIME_BYTES: usize = 128;
+const MAX_MEDIA_LANGUAGE_BYTES: usize = 64;
+pub const MAX_MEDIA_EXPIRY_UNIX_SECONDS: u64 = 4_102_444_800;
+
+/// Version of the generic media shape carried alongside legacy stream fields.
+/// The shape is site-neutral and describes only media tracks and their
+/// server-owned pairing metadata; source locators remain plugin-owned.
+pub const MEDIA_SHAPE_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BrowserMediaKind {
@@ -69,6 +81,15 @@ pub enum BrowserExpiryHint {
 pub struct BrowserMediaCandidate {
     pub id: String,
     pub kind: BrowserMediaKind,
+    /// Opaque pairing identity. The Browser Worker never interprets it.
+    pub group_id: Option<String>,
+    pub codec: Option<String>,
+    pub container: Option<String>,
+    pub mime_type: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub bitrate: Option<u64>,
+    pub language: Option<String>,
     pub protocol: StreamProtocol,
     pub status: BrowserStatusClass,
     pub range: BrowserRangeSupport,
@@ -76,6 +97,8 @@ pub struct BrowserMediaCandidate {
     /// Opaque reference to server-owned media state, never a URL or secret.
     pub access_ref: String,
     pub expiry: BrowserExpiryHint,
+    /// Optional server-observed absolute expiry; never inferred from a URL.
+    pub expires_at: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -296,6 +319,23 @@ pub fn validate_browser_observation(observation: &BrowserObservation) -> Result<
         if !bounded_text(&candidate.id, MAX_CANDIDATE_ID_BYTES)
             || contains_secret_marker(&candidate.id)
             || !bounded_opaque_ref(&candidate.access_ref)
+            || !bounded_optional_metadata(candidate.group_id.as_deref(), MAX_MEDIA_GROUP_BYTES)
+            || !bounded_optional_metadata(candidate.codec.as_deref(), MAX_MEDIA_CODEC_BYTES)
+            || !bounded_optional_metadata(candidate.container.as_deref(), MAX_MEDIA_CONTAINER_BYTES)
+            || !bounded_optional_metadata(candidate.mime_type.as_deref(), MAX_MEDIA_MIME_BYTES)
+            || !bounded_optional_metadata(candidate.language.as_deref(), MAX_MEDIA_LANGUAGE_BYTES)
+            || candidate
+                .width
+                .is_some_and(|value| value == 0 || value > 16_384)
+            || candidate
+                .height
+                .is_some_and(|value| value == 0 || value > 16_384)
+            || candidate
+                .bitrate
+                .is_some_and(|value| value == 0 || value > 1_000_000_000)
+            || candidate
+                .expires_at
+                .is_some_and(|value| value == 0 || value > MAX_MEDIA_EXPIRY_UNIX_SECONDS)
         {
             return Err(AdapterError::InvalidObservation);
         }
@@ -353,6 +393,15 @@ fn bounded_opaque_ref(value: &str) -> bool {
         && !contains_secret_marker(value)
 }
 
+fn bounded_optional_metadata(value: Option<&str>, max: usize) -> bool {
+    value.is_none_or(|value| {
+        !value.is_empty()
+            && value.len() <= max
+            && value.chars().all(|character| !character.is_control())
+            && !contains_secret_marker(value)
+    })
+}
+
 fn is_http_token_character(character: char) -> bool {
     character.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(character)
 }
@@ -402,6 +451,121 @@ impl NavigationDirection {
 pub enum StreamProtocol {
     HttpFile,
     Hls,
+    Dash,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaTrackKind {
+    Muxed,
+    Video,
+    Audio,
+}
+
+impl MediaTrackKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Muxed => "muxed",
+            Self::Video => "video",
+            Self::Audio => "audio",
+        }
+    }
+}
+
+impl From<BrowserMediaKind> for MediaTrackKind {
+    fn from(value: BrowserMediaKind) -> Self {
+        match value {
+            BrowserMediaKind::Muxed => Self::Muxed,
+            BrowserMediaKind::Video => Self::Video,
+            BrowserMediaKind::Audio => Self::Audio,
+        }
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct MediaTrack {
+    pub id: String,
+    pub kind: MediaTrackKind,
+    pub group_id: Option<String>,
+    pub protocol: StreamProtocol,
+    pub codec: Option<String>,
+    pub container: Option<String>,
+    pub mime_type: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub bitrate: Option<u64>,
+    pub language: Option<String>,
+    /// Server-owned opaque access reference; never a URL or credential.
+    pub access_ref: Option<String>,
+    /// Unix seconds, bounded by the contract. `None` means no observed expiry.
+    pub expires_at: Option<u64>,
+}
+
+impl fmt::Debug for MediaTrack {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("MediaTrack")
+            .field("id", &self.id)
+            .field("kind", &self.kind)
+            .field("group_id", &self.group_id)
+            .field("protocol", &self.protocol)
+            .field("codec", &self.codec)
+            .field("container", &self.container)
+            .field("mime_type", &self.mime_type)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("bitrate", &self.bitrate)
+            .field("language", &self.language)
+            .field(
+                "access_ref",
+                &self.access_ref.as_ref().map(|_| "<redacted>"),
+            )
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MediaShapeV1 {
+    pub version: u32,
+    pub tracks: Vec<MediaTrack>,
+}
+
+impl MediaShapeV1 {
+    pub fn legacy_from_streams(streams: &[ResolvedStream]) -> Self {
+        Self {
+            version: MEDIA_SHAPE_VERSION,
+            tracks: streams
+                .iter()
+                .map(|stream| MediaTrack {
+                    id: stream.id.clone(),
+                    kind: MediaTrackKind::Muxed,
+                    group_id: None,
+                    protocol: stream.protocol,
+                    codec: None,
+                    container: None,
+                    mime_type: None,
+                    width: None,
+                    height: None,
+                    bitrate: None,
+                    language: None,
+                    access_ref: stream.upstream_access_ref.clone(),
+                    expires_at: None,
+                })
+                .collect(),
+        }
+    }
+
+    pub fn track(&self, id: &str) -> Option<&MediaTrack> {
+        self.tracks.iter().find(|track| track.id == id)
+    }
+
+    pub fn is_expired(&self, now_unix_seconds: u64) -> bool {
+        self.tracks.iter().any(|track| {
+            track
+                .expires_at
+                .is_some_and(|expires_at| expires_at <= now_unix_seconds)
+        })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -431,6 +595,29 @@ pub struct ResolvedMedia {
     pub streams: Vec<ResolvedStream>,
     pub subtitles: Vec<ResolvedSubtitle>,
     pub protection: MediaProtection,
+    /// Explicit compatibility path: legacy stream-only adapters use
+    /// `ResolvedMedia::legacy`, while new adapters provide MediaShapeV1.
+    pub shape: MediaShapeV1,
+}
+
+impl ResolvedMedia {
+    pub fn legacy(
+        title: impl Into<String>,
+        source_site: impl Into<String>,
+        streams: Vec<ResolvedStream>,
+        subtitles: Vec<ResolvedSubtitle>,
+        protection: MediaProtection,
+    ) -> Self {
+        let shape = MediaShapeV1::legacy_from_streams(&streams);
+        Self {
+            title: title.into(),
+            source_site: source_site.into(),
+            streams,
+            subtitles,
+            protection,
+            shape,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

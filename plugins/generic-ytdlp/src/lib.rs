@@ -692,6 +692,7 @@ pub fn parse_machine_output(bytes: &[u8]) -> Result<ResolvedMedia, ParseError> {
         let protocol = match stream.protocol.as_str() {
             "http-file" => StreamProtocol::HttpFile,
             "hls" => StreamProtocol::Hls,
+            "dash" => StreamProtocol::Dash,
             _ => return Err(ParseError::UnsupportedProtocol),
         };
         if stream.url.len() > MAX_URL_BYTES {
@@ -728,13 +729,13 @@ pub fn parse_machine_output(bytes: &[u8]) -> Result<ResolvedMedia, ParseError> {
             upstream_access_ref: None,
         });
     }
-    Ok(ResolvedMedia {
-        title: output.title,
-        source_site: SITE_ID.into(),
+    Ok(ResolvedMedia::legacy(
+        output.title,
+        SITE_ID,
         streams,
-        subtitles: Vec::new(),
-        protection: MediaProtection::Clear,
-    })
+        Vec::new(),
+        MediaProtection::Clear,
+    ))
 }
 
 fn has_control(value: &str) -> bool {

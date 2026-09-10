@@ -1,0 +1,146 @@
+name: issue-268-media-contract
+
+on:
+  pull_request:
+    paths:
+      - "site-adapter-api/**"
+      - "plugins/bilibili/**"
+      - "plugins/generic-direct/**"
+      - "plugins/generic-ytdlp/**"
+      - "gateway-core/src/browser.rs"
+      - "gateway-core/src/browser_chromium.rs"
+      - "gateway-core/src/source_session.rs"
+      - "gateway-core/src/lib.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/issue-268-media-contract.yml"
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: "Exact candidate commit to verify"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: issue-268-media-contract-${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha || github.sha }}
+
+jobs:
+  hosted-x64:
+    name: J1 hosted x64 format lint and workspace tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: '[[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]'
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - name: Assert exact candidate and hosted x64
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(uname -m)" = x86_64
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Workspace tests
+        run: cargo test --workspace --all-targets -- --test-threads=1
+
+  paired-shape:
+    name: J2 hosted x64 MediaShapeV1 and paired A/V conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: '[[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]'
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Assert exact candidate and hosted x64
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(uname -m)" = x86_64
+      - name: Shape and pairing fixtures
+        run: |
+          cargo test -p site-adapter-api --lib conformance::tests -- --nocapture
+          cargo test -p bilibili --lib paired_video_audio_observation_projects_generic_shape -- --exact --nocapture
+          cargo test -p bilibili --lib incomplete_paired_group_is_rejected_without_fallback -- --exact --nocapture
+          cargo test -p bilibili --lib deterministic_observation_handoff_resolves_without_secret_output -- --exact --nocapture
+          cargo test -p gateway-core --lib source_session::tests -- --nocapture
+
+  architecture-boundary:
+    name: J3 hosted x64 architecture and public projection guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Validate candidate identity
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: '[[ "$CANDIDATE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]'
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - name: Assert exact candidate and site-neutral core
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(uname -m)" = x86_64
+          if git grep -n -i -E 'bilibili|sessdata|BV[0-9A-Za-z]{10,}' -- gateway-core/src; then
+            echo "concrete site knowledge crossed Core/API boundary" >&2
+            exit 1
+          fi
+          if sed -n '/pub struct SessionMediaStream/,/}/p' gateway-core/src/source_session.rs | grep -Eiq 'url|cookie|authorization|access_ref|public_headers|signed'; then
+            echo "server-owned media material crossed public projection" >&2
+            exit 1
+          fi
+          grep -q 'pub enum MediaTrackKind' site-adapter-api/src/lib.rs
+          grep -q 'pub const MEDIA_SHAPE_VERSION' site-adapter-api/src/lib.rs
+          grep -q 'Dash' site-adapter-api/src/lib.rs
+          grep -q 'MediaTrackKind::from(observed.kind)' plugins/bilibili/src/lib.rs
+      - name: Emit bounded provenance artifact
+        shell: bash --noprofile --norc -euo pipefail {0}
+        run: |
+          evidence_dir="$GITHUB_WORKSPACE/issue-268-media-contract-evidence"
+          mkdir -p "$evidence_dir"
+          {
+            echo "candidate_sha=$CANDIDATE_SHA"
+            echo "git_head=$(git rev-parse HEAD)"
+            echo "runner_arch=$(uname -m)"
+            echo "shape_version=1"
+            echo "pairing=opaque_group_id"
+            echo "public_projection=role_group_codec_container_only"
+            echo "secret_policy=server_owned_refs_redacted"
+          } > "$evidence_dir/manifest.txt"
+          sha256sum \
+            site-adapter-api/src/lib.rs \
+            site-adapter-api/src/conformance.rs \
+            plugins/bilibili/src/lib.rs \
+            gateway-core/src/source_session.rs \
+            .github/workflows/issue-268-media-contract.yml \
+            > "$evidence_dir/source-sha256sums.txt"
+          grep -Eiq 'cookie|authorization|bearer|sessdata|signed-url|fixture-secret' "$evidence_dir/manifest.txt" && exit 1 || true
+          test "$(wc -c < "$evidence_dir/manifest.txt")" -lt 2048
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: issue-268-media-contract-evidence-${{ env.CANDIDATE_SHA }}
+          path: issue-268-media-contract-evidence
+          if-no-files-found: error
+          retention-days: 14

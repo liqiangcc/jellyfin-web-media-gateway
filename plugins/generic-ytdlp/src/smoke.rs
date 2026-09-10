@@ -14,6 +14,7 @@ pub fn render_success_summary(
         .map(|stream| match stream.protocol {
             StreamProtocol::HttpFile => "http-file",
             StreamProtocol::Hls => "hls",
+            StreamProtocol::Dash => "dash",
         })
         .unwrap_or("n/a");
     let mut output = String::new();

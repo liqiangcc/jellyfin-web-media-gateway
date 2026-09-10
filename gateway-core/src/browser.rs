@@ -1511,12 +1511,21 @@ mod tests {
         let candidate = BrowserMediaCandidate {
             id: "resource-1".into(),
             kind: BrowserMediaKind::Muxed,
+            group_id: None,
+            codec: None,
+            container: Some("mp4".into()),
+            mime_type: Some("video/mp4".into()),
+            width: None,
+            height: None,
+            bitrate: None,
+            language: None,
             protocol: StreamProtocol::HttpFile,
             status: BrowserStatusClass::Success,
             range: BrowserRangeSupport::Supported,
             egress_allowed: true,
             access_ref: "opaque-media-ref".into(),
             expiry: BrowserExpiryHint::NoneObserved,
+            expires_at: None,
         };
         worker
             .publish_observation(

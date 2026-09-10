@@ -67,19 +67,20 @@ impl SiteAdapter for GenericDirectAdapter {
         }
         let url = Url::parse(&locator.opaque_payload).map_err(|_| AdapterError::InvalidInput)?;
         let protocol = Self::protocol(&url).ok_or(AdapterError::UnsupportedLocator)?;
-        Ok(ResolvedMedia {
-            title: "generic-direct media".into(),
-            source_site: "generic".into(),
-            streams: vec![ResolvedStream {
-                id: "primary".into(),
-                protocol,
-                url,
-                public_headers: BTreeMap::new(),
-                upstream_access_ref: None,
-            }],
-            subtitles: Vec::new(),
-            protection: MediaProtection::Clear,
-        })
+        let streams = vec![ResolvedStream {
+            id: "primary".into(),
+            protocol,
+            url,
+            public_headers: BTreeMap::new(),
+            upstream_access_ref: None,
+        }];
+        Ok(ResolvedMedia::legacy(
+            "generic-direct media",
+            "generic",
+            streams,
+            Vec::new(),
+            MediaProtection::Clear,
+        ))
     }
 }
 

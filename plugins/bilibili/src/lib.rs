@@ -9,10 +9,11 @@ use serde::{Deserialize, Serialize};
 use site_adapter_api::{
     AdapterError, AuthenticatedSessionHandoff, BROWSER_AUTH_OBSERVATION_VERSION,
     BrowserAuthObservation, BrowserAuthState, BrowserExpiryHint, BrowserMediaKind,
-    BrowserObservation, BrowserStatusClass, MediaProtection, NavigationContext, RecognizeResult,
-    ResolveContext, ResolvedMedia, ResolvedStream, ServerOwnedObservation, SiteAdapter,
-    SiteAdapterRegistry, SourceLocator, StreamProtocol, validate_browser_auth_observation,
-    validate_browser_observation, validate_server_owned_observation,
+    BrowserObservation, BrowserStatusClass, MediaProtection, MediaShapeV1, MediaTrack,
+    MediaTrackKind, NavigationContext, RecognizeResult, ResolveContext, ResolvedMedia,
+    ResolvedStream, ServerOwnedObservation, SiteAdapter, SiteAdapterRegistry, SourceLocator,
+    StreamProtocol, validate_browser_auth_observation, validate_browser_observation,
+    validate_server_owned_observation,
 };
 use url::Url;
 
@@ -266,19 +267,22 @@ impl SiteAdapter for BilibiliAdapter {
             return Err(AdapterError::ContentNotFound);
         }
 
-        let mut candidate = None;
+        let mut muxed_candidate = None;
+        let mut paired_candidates = std::collections::BTreeMap::<
+            String,
+            Vec<(
+                &site_adapter_api::BrowserMediaCandidate,
+                &site_adapter_api::ServerOwnedMedia,
+            )>,
+        >::new();
         for observed in &observation.candidates {
-            if observed.kind != BrowserMediaKind::Muxed
-                || !matches!(
-                    observed.protocol,
-                    StreamProtocol::HttpFile | StreamProtocol::Hls
-                )
-                || observed.status != BrowserStatusClass::Success
+            if !matches!(
+                observed.protocol,
+                StreamProtocol::HttpFile | StreamProtocol::Hls | StreamProtocol::Dash
+            ) || observed.status != BrowserStatusClass::Success
                 || !observed.egress_allowed
+                || observed.expiry == BrowserExpiryHint::Expired
             {
-                continue;
-            }
-            if observed.expiry == BrowserExpiryHint::Expired {
                 continue;
             }
             let handoff = server_observation.media.iter().find(|media| {
@@ -288,54 +292,122 @@ impl SiteAdapter for BilibiliAdapter {
                     && media.protocol == observed.protocol
             });
             if let Some(handoff) = handoff {
-                candidate = Some((observed, handoff));
-                break;
+                match observed.kind {
+                    BrowserMediaKind::Muxed => {
+                        if muxed_candidate.is_none() {
+                            muxed_candidate = Some((observed, handoff));
+                        }
+                    }
+                    BrowserMediaKind::Video | BrowserMediaKind::Audio => {
+                        if let Some(group_id) = observed.group_id.as_ref() {
+                            paired_candidates
+                                .entry(group_id.clone())
+                                .or_default()
+                                .push((observed, handoff));
+                        }
+                    }
+                }
             }
         }
-        let (observed, handoff) = candidate.ok_or_else(|| {
-            if observation
-                .candidates
-                .iter()
-                .any(|candidate| candidate.expiry == BrowserExpiryHint::Expired)
-            {
-                AdapterError::ObservationExpired
-            } else if observation.candidates.iter().any(|candidate| {
-                matches!(
-                    candidate.kind,
-                    BrowserMediaKind::Video | BrowserMediaKind::Audio
-                )
-            }) {
-                AdapterError::UnsupportedMedia
-            } else if observation
-                .candidates
-                .iter()
-                .any(|candidate| !candidate.egress_allowed)
-            {
-                AdapterError::EgressRejected
+
+        let selected = if let Some(candidate) = muxed_candidate {
+            vec![candidate]
+        } else {
+            let complete_groups: Vec<_> = paired_candidates
+                .into_iter()
+                .filter_map(|(group_id, candidates)| {
+                    let has_video = candidates
+                        .iter()
+                        .any(|(candidate, _)| candidate.kind == BrowserMediaKind::Video);
+                    let has_audio = candidates
+                        .iter()
+                        .any(|(candidate, _)| candidate.kind == BrowserMediaKind::Audio);
+                    (candidates.len() == 2 && has_video && has_audio)
+                        .then_some((group_id, candidates))
+                })
+                .collect();
+            if complete_groups.len() == 1 {
+                complete_groups
+                    .into_iter()
+                    .next()
+                    .expect("complete group")
+                    .1
             } else {
-                AdapterError::UnsupportedMedia
+                Vec::new()
             }
-        })?;
-        if observed.expiry == BrowserExpiryHint::Expired {
-            return Err(AdapterError::ObservationExpired);
+        };
+        if selected.is_empty() {
+            return Err({
+                if observation
+                    .candidates
+                    .iter()
+                    .any(|candidate| candidate.expiry == BrowserExpiryHint::Expired)
+                {
+                    AdapterError::ObservationExpired
+                } else if observation.candidates.iter().any(|candidate| {
+                    matches!(
+                        candidate.kind,
+                        BrowserMediaKind::Video | BrowserMediaKind::Audio
+                    )
+                }) {
+                    AdapterError::UnsupportedMedia
+                } else if observation
+                    .candidates
+                    .iter()
+                    .any(|candidate| !candidate.egress_allowed)
+                {
+                    AdapterError::EgressRejected
+                } else {
+                    AdapterError::UnsupportedMedia
+                }
+            });
         }
-        if handoff.url.host_str().is_none() {
+        if selected
+            .iter()
+            .any(|(_, handoff)| handoff.url.host_str().is_none())
+        {
             return Err(AdapterError::InvalidObservation);
         }
-        Ok(ResolvedMedia {
-            title: bounded_title(&observation.page_title),
-            source_site: SITE_ID.into(),
-            streams: vec![ResolvedStream {
+        let streams = selected
+            .iter()
+            .map(|(observed, handoff)| ResolvedStream {
                 id: observed.id.clone(),
                 protocol: handoff.protocol,
                 url: handoff.url.clone(),
                 public_headers: handoff.public_headers.clone(),
-                // The URL is already held in the server-owned handoff.  Do
-                // not copy the opaque capability reference into display media.
+                // The URL/ref are held in the server-owned handoff. Do not
+                // copy the opaque capability reference into display media.
                 upstream_access_ref: None,
-            }],
+            })
+            .collect::<Vec<_>>();
+        let shape = MediaShapeV1 {
+            version: site_adapter_api::MEDIA_SHAPE_VERSION,
+            tracks: selected
+                .iter()
+                .map(|(observed, handoff)| MediaTrack {
+                    id: observed.id.clone(),
+                    kind: MediaTrackKind::from(observed.kind),
+                    group_id: observed.group_id.clone(),
+                    protocol: handoff.protocol,
+                    codec: observed.codec.clone(),
+                    container: observed.container.clone(),
+                    mime_type: observed.mime_type.clone(),
+                    width: observed.width,
+                    height: observed.height,
+                    bitrate: observed.bitrate,
+                    language: observed.language.clone(),
+                    access_ref: Some(handoff.access_ref.clone()),
+                    expires_at: observed.expires_at,
+                })
+                .collect(),
+        };
+        Ok(ResolvedMedia {
+            title: bounded_title(&observation.page_title),
+            source_site: SITE_ID.into(),
+            streams,
             subtitles: Vec::new(),
             protection: MediaProtection::Clear,
+            shape,
         })
     }
 
@@ -477,12 +549,21 @@ mod tests {
             candidates: vec![site_adapter_api::BrowserMediaCandidate {
                 id: candidate.into(),
                 kind: BrowserMediaKind::Muxed,
+                group_id: None,
+                codec: None,
+                container: Some("mp4".into()),
+                mime_type: Some("video/mp4".into()),
+                width: None,
+                height: None,
+                bitrate: None,
+                language: None,
                 protocol: StreamProtocol::HttpFile,
                 status: BrowserStatusClass::Success,
                 range: BrowserRangeSupport::Supported,
                 egress_allowed: true,
                 access_ref: "media-ref-1".into(),
                 expiry: BrowserExpiryHint::NoneObserved,
+                expires_at: None,
             }],
         }
     }
@@ -500,6 +581,82 @@ mod tests {
                     .unwrap(),
                 public_headers: BTreeMap::new(),
             }],
+        }
+    }
+
+    fn paired_observation() -> BrowserObservation {
+        BrowserObservation {
+            schema_version: BROWSER_OBSERVATION_VERSION,
+            observation_id: "obs-paired".into(),
+            page_url: format!("https://www.bilibili.com/video/{BVID}/?p=1"),
+            page_title: "Synthetic paired media".into(),
+            event_count: 6,
+            resource_count: 2,
+            candidates: vec![
+                site_adapter_api::BrowserMediaCandidate {
+                    id: "video-track".into(),
+                    kind: BrowserMediaKind::Video,
+                    group_id: Some("av-main".into()),
+                    codec: Some("avc1.640028".into()),
+                    container: Some("fmp4".into()),
+                    mime_type: Some("video/mp4".into()),
+                    width: Some(1920),
+                    height: Some(1080),
+                    bitrate: Some(2_000_000),
+                    language: None,
+                    protocol: StreamProtocol::Dash,
+                    status: BrowserStatusClass::Success,
+                    range: BrowserRangeSupport::Supported,
+                    egress_allowed: true,
+                    access_ref: "paired-video-ref".into(),
+                    expiry: BrowserExpiryHint::ShortLived,
+                    expires_at: Some(site_adapter_api::MAX_MEDIA_EXPIRY_UNIX_SECONDS),
+                },
+                site_adapter_api::BrowserMediaCandidate {
+                    id: "audio-track".into(),
+                    kind: BrowserMediaKind::Audio,
+                    group_id: Some("av-main".into()),
+                    codec: Some("mp4a.40.2".into()),
+                    container: Some("m4a".into()),
+                    mime_type: Some("audio/mp4".into()),
+                    width: None,
+                    height: None,
+                    bitrate: Some(128_000),
+                    language: Some("und".into()),
+                    protocol: StreamProtocol::Dash,
+                    status: BrowserStatusClass::Success,
+                    range: BrowserRangeSupport::Supported,
+                    egress_allowed: true,
+                    access_ref: "paired-audio-ref".into(),
+                    expiry: BrowserExpiryHint::ShortLived,
+                    expires_at: Some(site_adapter_api::MAX_MEDIA_EXPIRY_UNIX_SECONDS),
+                },
+            ],
+        }
+    }
+
+    fn paired_server() -> ServerOwnedObservation {
+        ServerOwnedObservation {
+            schema_version: BROWSER_OBSERVATION_VERSION,
+            observation_id: "obs-paired".into(),
+            media: vec![
+                ServerOwnedMedia {
+                    observation_id: "obs-paired".into(),
+                    candidate_id: "video-track".into(),
+                    access_ref: "paired-video-ref".into(),
+                    protocol: StreamProtocol::Dash,
+                    url: Url::parse("https://media.example.invalid/video.init").unwrap(),
+                    public_headers: BTreeMap::new(),
+                },
+                ServerOwnedMedia {
+                    observation_id: "obs-paired".into(),
+                    candidate_id: "audio-track".into(),
+                    access_ref: "paired-audio-ref".into(),
+                    protocol: StreamProtocol::Dash,
+                    url: Url::parse("https://media.example.invalid/audio.init").unwrap(),
+                    public_headers: BTreeMap::new(),
+                },
+            ],
         }
     }
 
@@ -556,6 +713,37 @@ mod tests {
         assert!(media.streams[0].public_headers.is_empty());
         assert!(media.streams[0].upstream_access_ref.is_none());
         assert!(!format!("{media:?}").contains("media-ref-1"));
+    }
+
+    #[test]
+    fn paired_video_audio_observation_projects_generic_shape() {
+        let adapter = BilibiliAdapter;
+        let media = adapter
+            .resolve_observation(&locator(1), &paired_observation(), &paired_server())
+            .unwrap();
+        assert_eq!(media.streams.len(), 2);
+        assert_eq!(media.shape.version, site_adapter_api::MEDIA_SHAPE_VERSION);
+        assert_eq!(media.shape.tracks[0].kind, MediaTrackKind::Video);
+        assert_eq!(media.shape.tracks[1].kind, MediaTrackKind::Audio);
+        assert_eq!(media.shape.tracks[0].group_id.as_deref(), Some("av-main"));
+        assert_eq!(media.shape.tracks[1].group_id.as_deref(), Some("av-main"));
+        assert_eq!(media.shape.tracks[0].codec.as_deref(), Some("avc1.640028"));
+        assert_eq!(media.shape.tracks[1].codec.as_deref(), Some("mp4a.40.2"));
+        assert!(!format!("{media:?}").contains("paired-video-ref"));
+    }
+
+    #[test]
+    fn incomplete_paired_group_is_rejected_without_fallback() {
+        let adapter = BilibiliAdapter;
+        let mut observation = paired_observation();
+        observation.candidates.pop();
+        observation.resource_count = 1;
+        let mut server = paired_server();
+        server.media.pop();
+        assert_eq!(
+            adapter.resolve_observation(&locator(1), &observation, &server),
+            Err(AdapterError::UnsupportedMedia)
+        );
     }
 
     #[test]

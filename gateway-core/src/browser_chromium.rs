@@ -995,6 +995,20 @@ fn build_resource_record(
     let candidate = BrowserMediaCandidate {
         id: candidate_id.clone(),
         kind,
+        group_id: None,
+        codec: None,
+        container: Some(
+            content_type
+                .split('/')
+                .next_back()
+                .unwrap_or("unknown")
+                .into(),
+        ),
+        mime_type: Some(content_type.clone()),
+        width: None,
+        height: None,
+        bitrate: None,
+        language: None,
         protocol,
         status: browser_status(status),
         range: if headers.contains_key("accept-ranges") || headers.contains_key("content-range") {
@@ -1005,6 +1019,7 @@ fn build_resource_record(
         egress_allowed: true,
         access_ref: access_ref.clone(),
         expiry: browser_expiry(status, headers.get("cache-control")),
+        expires_at: None,
     };
     let server_media = ServerOwnedMedia {
         observation_id: format!("observation-{operation_id:?}"),
