@@ -17,7 +17,22 @@ Required capabilities after publication: github-read-write, repository-static-an
 Current package state: status:draft, owner-free
 ```
 
-The revision is based on the accepted architecture and implementation chain through the production Bilibili Site Plugin (#237), generic Browser Observation Bridge (#240), generic Browser Worker/auth foundations (#243/#248/#251/#255/#257/#259), MediaShapeV1 (#268), and policy-bound media delivery (#271). #246 is a separate authorized-account target Task and remains independently `status:blocked`; it is not a dependency or alternate route for this public scope.
+The revision extends the accepted ordinary-Linux browser authority from #154 rather than redefining it. Issue #154 was Final Accepted and merged to `main` as `836e220e6ba4e38377a4e40cff677c9549aa7798`; its accepted Control → Gateway `PlaybackSession` → Web Display route, same-origin media, play/pause/seek/stop, refresh/reconnect, stale/error/concurrency/security behavior and Candidate-bound artifact consumption are the baseline for this Task. #68 adds the real public Bilibili source path to that route.
+
+The direct source-path authorities are the production Bilibili Site Plugin (#237) and generic Browser Observation Bridge (#240). MediaShapeV1 (#268) and policy-bound media delivery (#271) are the direct media-path authorities. #255 may supply the production composition root/adapter registration where the current executable needs it, but this scope may make only the smallest public/no-account composition adjustment required; it must not configure or use an account. The auth-specific implementation surfaces (#243/#248/#251/#257/#259) are code present on `main` and regression surfaces only. They are not hard dependencies for this public/no-login route and must not be invoked. #246 is a separate authorized-account target Task and remains independently `status:blocked`; it is not a dependency or alternate route for this public scope.
+
+### Accepted #154 baseline
+
+The following behavior is inherited from #154 Final Acceptance and must remain unchanged while #68 extends the source ingress:
+
+```text
+ordinary-Linux Control
+→ server-owned PlaybackSession / PlaybackItem
+→ same-origin Gateway media capability
+→ Web Display
+```
+
+The accepted baseline covers the `/display` and `/control` product entrypoints, Display registration/heartbeat and selection, request-id/CAS command authority, play/pause/seek/stop, refresh/reconnect, stale lease/item/revision/display-generation rejection, error/concurrency/security regressions, and exact Candidate-bound runtime/artifact consumption. #68 must exercise those existing authorities with a real public Bilibili source; it must not add a second state store, redefine command semantics, or replace the baseline with an ad-hoc browser or extractor path.
 
 ## Goal
 
@@ -64,7 +79,7 @@ The sample may be replaced only by a live contract/evidence finding that makes i
 ### Playback and delivery
 
 - `SourceSession` validates and prepares the plugin result; it owns no second playback state.
-- `PlaybackSession` and `PlaybackItem` remain the sole playback authority, with session/item/revision/display-generation checks and stale-result rejection.
+- `PlaybackSession` and `PlaybackItem` remain the sole playback authority inherited from #154, with session/item/revision/display-generation checks and stale-result rejection.
 - Direct muxed HTTP-file or HLS uses the existing media path. A validated separated audio/video `MediaShapeV1` uses the generic policy-bound #271 delivery/remux path; this task does not add Bilibili-specific remux logic.
 - Web Display receives only a short-lived same-origin Gateway media capability bound to the current session, item, revision, media generation and resource. It never receives upstream URLs, upstream headers, Browser Worker state, Vault material or profile data.
 - Control commands retain existing R007 request-id/CAS semantics. Refresh and reconnect rebuild from Gateway authority; callbacks from old leases, sessions, items or generations cannot overwrite current state.
@@ -121,11 +136,11 @@ P8 — Historical honesty: old anonymous 4xx/no-media diagnostics remain negativ
 
 `#68` stays `status:draft`, `env:cloud`, owner-free until the Coordinator independently reads back and records all of the following. A Worker cannot claim an Attempt before the gate is complete.
 
-1. **Package and dependency read-back:** live Issue, this `task.md`, `prompt.md`, canonical docs and accepted authorities are mutually consistent. #237/#240/#243/#248/#251/#255/#257/#259, #268 and #271 are checked against current `main`; #246 remains separate and blocked.
+1. **Package and dependency read-back:** live Issue, this `task.md`, `prompt.md`, canonical docs and accepted authorities are mutually consistent. The Coordinator checks #154's Final Acceptance/merge baseline, direct source authorities #237/#240, direct media authorities #268/#271, and the composition root where #255 is actually needed against current `main`. Auth-specific surfaces #243/#248/#251/#257/#259 are regression inputs only, not public-route dependencies; #246 remains separate and blocked.
 2. **Exact implementation Candidate:** freeze one full Candidate SHA/branch/PR and classify movement from the current base as `NONE`, `UNRELATED`, `INTEGRATION_OVERLAP`, `SEMANTIC_AUTHORITY` or `CONTRACT_INVALIDATING`. Moving `main` is not an execution identity.
-3. **GitHub-hosted freshness:** run the required hosted x64 fmt/clippy/workspace/security/regression jobs against that exact Candidate and read back every required job/artifact. No local compilation or target compilation substitutes for this evidence.
+3. **GitHub-hosted freshness:** run the required hosted x64 fmt/clippy/workspace/security/regression jobs against that exact Candidate and read back every required job/artifact. The later live run must consume the exact Candidate-bound package/artifact admitted by those jobs. No local compilation or target compilation substitutes for this evidence.
 4. **Approved ordinary-Linux execution host/control route:** record where Gateway and browser run, the private/loopback or explicitly bounded control path, Host/Origin behavior, browser sandbox mode and the operator route. A tx-node route is not granted by this package; if later selected, the Coordinator must explicitly name it and record its isolation before publication. No public listener or uncontrolled Chrome/CDP route is allowed.
-5. **Low-privilege identity and isolation:** record the dedicated non-root user, workspace, temporary profile, allowed filesystem/network scope, cleanup owner and confirmation that no Vault, production Secret, SSH key, GitHub token, Tailscale auth key, personal browser profile or account material is available to the runtime.
+5. **Artifact admission and low-privilege isolation:** record the exact Candidate-bound artifact/package, manifest and digest, target platform/ABI, runtime asset and helper/worker identity, and a fresh-consumer admission check that starts the same product without the Actions build tree. Then record the dedicated non-root user, workspace, temporary profile, allowed filesystem/network scope, cleanup owner and confirmation that no Vault, production Secret, SSH key, GitHub token, Tailscale auth key, personal browser profile or account material is available to the runtime. Missing, tampered, wrong-platform or wrong-Candidate assets fail closed. The target must never compile, build or install to compensate for missing assets. Reuse the accepted #154/#146 provenance and admission principle where applicable, but do not reuse an old artifact as the new #68 runtime.
 6. **Budgets and cancellation:** freeze wall-clock, navigation/request count, Browser Worker observation size/count, media/output size, concurrent process, storage, retry and cleanup deadlines. Abort on budget or cancellation; do not retry the known 4xx/no-media boundary indefinitely.
 7. **Sanitized Evidence contract:** bind Evidence to Candidate/run/job/host/attempt and record only statuses, bounded phases, media shape/protocol, same-origin capability facts, playback/control/reconnect facts and cleanup. Exclude full URLs, signed queries, headers, cookies, tokens, profile paths, page/media bodies and raw worker stderr.
 8. **Publication state:** only after the above read-back may the Coordinator set `status:ready` and issue a downstream execution entry. This docs revision itself performs no live request and launches no target job.
@@ -140,6 +155,21 @@ P8 — Historical honesty: old anonymous 4xx/no-media diagnostics remain negativ
 | J4 | P6–P8 evidence hygiene | GitHub-hosted and/or approved execution route as explicitly frozen | capability/authority invalidation, expiry, cancellation, no Secret/profile leakage, bounded artifacts and cleanup |
 
 J2 synthetic or controlled evidence cannot be promoted to a real Bilibili claim. J3 is not authorized or scheduled by this package revision.
+
+## Artifact admission for a later ordinary-Linux live run
+
+The future live execution must consume a freshly admitted, exact-Candidate package produced by GitHub-hosted Actions. The package manifest must bind at least:
+
+```text
+Candidate SHA / workflow run / required job IDs
+artifact names, digests and provenance
+target platform / ABI / runtime layout
+Gateway binary and helper/worker hashes
+required static assets and configuration schema/version
+fresh-consumer start result from a directory without the Actions build tree
+```
+
+The ordinary-Linux host receives only this verified package and runs compile-free commands as the dedicated low-privilege identity. It may not run Cargo, install a compiler/dependency/FFmpeg/Chromium package to repair an incomplete package, or fall back to source/fixture injection. The host-side start, stop, cleanup and artifact paths must be bounded and recorded without leaking local paths or secrets. This reuses the provenance/admission principle accepted by #154 and #146 while requiring a new #68 Candidate package; neither old #154 artifacts nor old #146 artifacts are the #68 runtime.
 
 ## Success criteria for the later Task
 
@@ -160,6 +190,7 @@ A future `[EXECUTION REPORT]` or `[BLOCKER REPORT]` must separate implementation
 Attempt / worker / environment
 Contract revision and exact Candidate SHA/PR
 GitHub-hosted freshness run/job/artifact references
+Candidate-bound package/manifest/digest/platform/runtime asset admission and fresh-consumer result
 Execution plane / runner / target host and low-privilege identity class
 Frozen selector: BV14V411W7r5
 Source creation phase and Site Plugin/Browser Worker phase statuses
