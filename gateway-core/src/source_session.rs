@@ -6,7 +6,7 @@
 //! authority stays behind `ControlService`.
 
 use crate::browser::{
-    BrowserObservationHandoff, BrowserNavigationRequest, BrowserWorker, R008NavigationPolicy,
+    BrowserNavigationRequest, BrowserObservationHandoff, BrowserWorker, R008NavigationPolicy,
 };
 use crate::control::{
     ControlCommandError, ControlCommandRequest, ControlCommandResponse, ControlService,
@@ -222,12 +222,15 @@ impl SourceSessionService {
         let acquisition_target = match self.registry.browser_acquisition_target(&locator) {
             Ok(Some(target)) => target,
             Ok(None) | Err(AdapterError::UnsupportedAcquisition) => {
-                return public_browser_failure("SOURCE_BROWSER_ACQUISITION_UNAVAILABLE")
+                return public_browser_failure("SOURCE_BROWSER_ACQUISITION_UNAVAILABLE");
             }
             Err(_) => return public_browser_failure("SOURCE_BROWSER_ACQUISITION_INVALID"),
         };
 
-        let session = match worker.open_session(crate::browser::BrowserAuthMode::Passive).await {
+        let session = match worker
+            .open_session(crate::browser::BrowserAuthMode::Passive)
+            .await
+        {
             Ok(session) => session,
             Err(_) => return public_browser_failure("SOURCE_BROWSER_UNAVAILABLE"),
         };
@@ -928,7 +931,7 @@ mod tests {
         StreamProtocol,
     };
     use std::collections::BTreeMap;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use tower::ServiceExt;
     use url::Url;
 
@@ -1338,10 +1341,7 @@ mod tests {
 
         let worker = FakeBrowserWorker::new();
         let (observation, server_observation) = observation_context();
-        let session = worker
-            .open_session(BrowserAuthMode::Passive)
-            .await
-            .unwrap();
+        let session = worker.open_session(BrowserAuthMode::Passive).await.unwrap();
         worker
             .set_next_observation(
                 session.id(),
@@ -1388,10 +1388,7 @@ mod tests {
         register_display(&service).await;
         let worker = FakeBrowserWorker::new();
         let (observation, server_observation) = observation_context();
-        let session = worker
-            .open_session(BrowserAuthMode::Passive)
-            .await
-            .unwrap();
+        let session = worker.open_session(BrowserAuthMode::Passive).await.unwrap();
         worker
             .set_next_observation(
                 session.id(),

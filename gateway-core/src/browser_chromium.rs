@@ -763,10 +763,10 @@ impl ChromiumBrowserWorker {
             "Network.loadingFinished" => {
                 if let Some(limits) = self.limits
                     && let Some(received) = params
-                    .get("encodedDataLength")
-                    .and_then(Value::as_f64)
-                    .filter(|value| value.is_finite() && *value >= 0.0)
-                    .map(|value| value as u64)
+                        .get("encodedDataLength")
+                        .and_then(Value::as_f64)
+                        .filter(|value| value.is_finite() && *value >= 0.0)
+                        .map(|value| value as u64)
                 {
                     state.observation_bytes = account_received_bytes(
                         Some(limits),

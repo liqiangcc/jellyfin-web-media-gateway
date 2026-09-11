@@ -418,7 +418,9 @@ impl SiteAdapter for BilibiliAdapter {
     ) -> Result<Option<BrowserAcquisitionTarget>, AdapterError> {
         // Page/BVID/part interpretation stays in this plugin. Core receives
         // only the bounded transport instruction after ownership validation.
-        Ok(Some(BrowserAcquisitionTarget::new(self.page_url(locator)?)?))
+        Ok(Some(BrowserAcquisitionTarget::new(
+            self.page_url(locator)?,
+        )?))
     }
 
     fn navigation(&self, locator: &SourceLocator) -> Result<NavigationContext, AdapterError> {
@@ -845,7 +847,10 @@ mod tests {
             .browser_acquisition_target(&locator(3))
             .unwrap()
             .unwrap();
-        assert_eq!(first.url().as_str(), "https://www.bilibili.com/video/BV1xx411c7mD/");
+        assert_eq!(
+            first.url().as_str(),
+            "https://www.bilibili.com/video/BV1xx411c7mD/"
+        );
         assert_eq!(
             third.url().as_str(),
             "https://www.bilibili.com/video/BV1xx411c7mD/?p=3"

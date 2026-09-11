@@ -1101,10 +1101,9 @@ mod tests {
 
     #[test]
     fn acquisition_target_is_bounded_and_debug_redacts_transport() {
-        let target = BrowserAcquisitionTarget::new(
-            Url::parse("https://example.test/watch?p=2").unwrap(),
-        )
-        .unwrap();
+        let target =
+            BrowserAcquisitionTarget::new(Url::parse("https://example.test/watch?p=2").unwrap())
+                .unwrap();
         assert_eq!(target.schema_version(), BROWSER_ACQUISITION_TARGET_VERSION);
         assert_eq!(target.url().as_str(), "https://example.test/watch?p=2");
         assert!(!format!("{target:?}").contains("watch?p=2"));
@@ -1169,10 +1168,9 @@ mod tests {
 
     #[test]
     fn acquisition_target_routes_by_locator_owner_and_legacy_defaults_none() {
-        let target = BrowserAcquisitionTarget::new(
-            Url::parse("https://example.test/plugin-owned").unwrap(),
-        )
-        .unwrap();
+        let target =
+            BrowserAcquisitionTarget::new(Url::parse("https://example.test/plugin-owned").unwrap())
+                .unwrap();
         let mut registry = SiteAdapterRegistry::default();
         registry
             .register(Arc::new(AcquisitionFake {
