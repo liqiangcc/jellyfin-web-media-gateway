@@ -8,8 +8,8 @@
 GitHub Issue: #68
 Task ID: BILIBILI-WEB-E2E
 Task kind: combined (implementation seam + real-source functional verification)
-Planning Base: d50de827e6b444e9476659b7165a8bbcc0b387b4
-Candidate: n/a until a later Publication Gate
+Execution Base: 105b11f702481c55714527cc15d1dc4c9a93c9df
+Final Candidate: n/a until the bounded combined Attempt
 Preferred worker: Codex Cloud, env:cloud
 Required capabilities after publication: github-read-write, repository-static-analysis,
   code-authoring, automated-build, automated-test, cloud-interactive,
@@ -132,13 +132,22 @@ P8 — Historical honesty: old anonymous 4xx/no-media diagnostics remain negativ
      the new product path is reported FAIL/BLOCKED if it meets that boundary.
 ```
 
+## Execution Base and final Candidate lifecycle
+
+The Publication Gate freezes the starting identity, not a Worker-produced implementation Candidate:
+
+1. The Coordinator freezes one exact **Execution Base**: the current accepted `main`/integration SHA, branch or ref identity, and freshness classification (`NONE`, `UNRELATED`, `INTEGRATION_OVERLAP`, `SEMANTIC_AUTHORITY` or `CONTRACT_INVALIDATING`). Existing hosted evidence is recorded as fresh or stale against that base.
+2. The Gate does not require a final Worker Candidate, implementation branch or PR before `status:ready`. A combined Task may still need a focused implementation change.
+3. After `status:ready`, one bounded combined Attempt starts from the frozen Execution Base. If the public route needs implementation, the Worker creates one focused Candidate/PR from that base. If no implementation is needed, the final Candidate is the Execution Base itself.
+4. Before the Worker reports, all required hosted J1/J2/J4 verification, Candidate-bound package/manifest/digest/fresh-consumer admission, and the real public J3 must target the same final Candidate SHA. No mixed-base or moving-main evidence is accepted.
+
 ## Publication Gate (must remain unsatisfied in this revision PR)
 
 `#68` stays `status:draft`, `env:cloud`, owner-free until the Coordinator independently reads back and records all of the following. A Worker cannot claim an Attempt before the gate is complete.
 
 1. **Package and dependency read-back:** live Issue, this `task.md`, `prompt.md`, canonical docs and accepted authorities are mutually consistent. The Coordinator checks #154's Final Acceptance/merge baseline, direct source authorities #237/#240, direct media authorities #268/#271, and the composition root where #255 is actually needed against current `main`. Auth-specific surfaces #243/#248/#251/#257/#259 are regression inputs only, not public-route dependencies; #246 remains separate and blocked.
-2. **Exact implementation Candidate:** freeze one full Candidate SHA/branch/PR and classify movement from the current base as `NONE`, `UNRELATED`, `INTEGRATION_OVERLAP`, `SEMANTIC_AUTHORITY` or `CONTRACT_INVALIDATING`. Moving `main` is not an execution identity.
-3. **GitHub-hosted freshness:** run the required hosted x64 fmt/clippy/workspace/security/regression jobs against that exact Candidate and read back every required job/artifact. The later live run must consume the exact Candidate-bound package/artifact admitted by those jobs. No local compilation or target compilation substitutes for this evidence.
+2. **Execution Base and freshness classification:** freeze the exact accepted `main`/integration identity from which the Attempt will start and classify its movement using `NONE`, `UNRELATED`, `INTEGRATION_OVERLAP`, `SEMANTIC_AUTHORITY` or `CONTRACT_INVALIDATING`. Record whether existing hosted evidence is fresh for this base. This Gate does not require a final Worker Candidate or PR; moving `main` is never an execution identity.
+3. **Final-Candidate verification plan:** record the required hosted J1/J2/J4 jobs, Candidate-bound package/manifest/digest/fresh-consumer admission and real public J3 that must all run against one final Candidate before the report. No local compilation or target compilation substitutes for that evidence.
 4. **Approved ordinary-Linux execution host/control route:** record where Gateway and browser run, the private/loopback or explicitly bounded control path, Host/Origin behavior, browser sandbox mode and the operator route. A tx-node route is not granted by this package; if later selected, the Coordinator must explicitly name it and record its isolation before publication. No public listener or uncontrolled Chrome/CDP route is allowed.
 5. **Artifact admission and low-privilege isolation:** record the exact Candidate-bound artifact/package, manifest and digest, target platform/ABI, runtime asset and helper/worker identity, and a fresh-consumer admission check that starts the same product without the Actions build tree. Then record the dedicated non-root user, workspace, temporary profile, allowed filesystem/network scope, cleanup owner and confirmation that no Vault, production Secret, SSH key, GitHub token, Tailscale auth key, personal browser profile or account material is available to the runtime. Missing, tampered, wrong-platform or wrong-Candidate assets fail closed. The target must never compile, build or install to compensate for missing assets. Reuse the accepted #154/#146 provenance and admission principle where applicable, but do not reuse an old artifact as the new #68 runtime.
 6. **Budgets and cancellation:** freeze wall-clock, navigation/request count, Browser Worker observation size/count, media/output size, concurrent process, storage, retry and cleanup deadlines. Abort on budget or cancellation; do not retry the known 4xx/no-media boundary indefinitely.
@@ -174,7 +183,7 @@ The ordinary-Linux host receives only this verified package and runs compile-fre
 ## Success criteria for the later Task
 
 1. The Coordinator accepts this Contract Revision and completes the Publication Gate.
-2. P1–P8 are reported against one exact Candidate; each claim is separately marked `PASS`, `CONDITIONAL PASS`, `FAIL` or `BLOCKED`.
+2. P1–P8 are reported against one exact final Candidate; each claim is separately marked `PASS`, `CONDITIONAL PASS`, `FAIL` or `BLOCKED`.
 3. The real public source is created through the production Control/API and Bilibili Site Plugin route; no raw media or store injection is used.
 4. Gateway same-origin Web Display playback viability is shown for the actual resolved media shape, with #271 generic remux only when required.
 5. Controls and reconnect preserve one authoritative PlaybackSession and all stale/duplicate paths fail closed.
@@ -212,7 +221,7 @@ At every future Publication Gate, compare this package and all semantic authorit
 ```text
 status:draft + owner-free
 → Contract Revision accepted by Coordinator
-→ dependency/Candidate/host/budget/Evidence Publication Gate
+→ dependency/Execution-Base/host/budget/Evidence Publication Gate
 → status:ready + env:cloud + queue read-back
 → one bounded Worker Attempt
 → [EXECUTION REPORT] or [BLOCKER REPORT]
