@@ -215,7 +215,10 @@ impl SourceSessionService {
         // Keep direct adapters on their existing path.  A browser is needed
         // only when the owning adapter explicitly reports that observation is
         // required; Core does not interpret any site-specific URL semantics.
-        match self.registry.resolve(&locator) {
+        match self
+            .registry
+            .resolve_with_context(&locator, ResolveContext::default())
+        {
             Ok(_) => return self.create(gateway, control, displays, request),
             Err(AdapterError::ObservationRequired) => {}
             Err(error) => return failure_for_adapter(error),
@@ -908,6 +911,7 @@ fn internal_failure() -> CreationOutcome {
 mod tests {
     use super::{SessionMediaView, SourceSessionService};
     use crate::GatewayService;
+    use crate::browser::{BrowserAuthMode, BrowserObservationPayload, FakeBrowserWorker};
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode, header};
     use generic_direct::GenericDirectAdapter;
@@ -954,7 +958,9 @@ mod tests {
         }
 
         fn recognize(&self, input: &str) -> Result<RecognizeResult, AdapterError> {
-            let matched = input.starts_with("fixture://");
+            let matched = input.starts_with("fixture://")
+                || (matches!(self.mode, FixtureMode::Observation)
+                    && input.starts_with("https://www.example.com/fixture"));
             if !matched {
                 return Ok(RecognizeResult {
                     matched: false,
@@ -1245,6 +1251,53 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(command.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn public_browser_seam_consumes_server_owned_observation_before_publication() {
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(FixtureAdapter {
+                plugin: "fixture-public-observation",
+                priority: 100,
+                mode: FixtureMode::Observation,
+            }))
+            .unwrap();
+        let service = service_with_registry(registry);
+        register_display(&service).await;
+
+        let worker = FakeBrowserWorker::new();
+        let (observation, server_observation) = observation_context();
+        let session = worker
+            .open_session(BrowserAuthMode::Passive)
+            .await
+            .unwrap();
+        worker
+            .set_next_observation(
+                session.id(),
+                BrowserObservationPayload {
+                    operation_id: crate::browser::BrowserOperationId::from_value(1),
+                    observation,
+                    server_observation,
+                },
+            )
+            .unwrap();
+
+        let outcome = service
+            .create_public_session_with_worker(
+                super::CreateSessionRequest {
+                    request_id: "public-observation-1".into(),
+                    source: "https://www.example.com/fixture".into(),
+                    display_id: "display-a".into(),
+                },
+                &worker,
+            )
+            .await;
+        let super::CreationOutcome::Success(response) = outcome else {
+            panic!("public browser observation did not publish a session");
+        };
+        assert_eq!(response.source_site, "fixture");
+        assert_eq!(response.media.streams.len(), 1);
     }
 
     #[tokio::test]

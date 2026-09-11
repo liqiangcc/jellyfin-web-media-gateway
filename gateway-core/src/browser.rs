@@ -46,6 +46,7 @@ pub enum BrowserError {
     InvalidInput,
     CandidateCaptureUnavailable,
     CandidateMaterialInvalid,
+    ResourceLimitExceeded,
 }
 
 impl BrowserError {
@@ -65,6 +66,7 @@ impl BrowserError {
             Self::InvalidInput => "INVALID_INPUT",
             Self::CandidateCaptureUnavailable => "CANDIDATE_CAPTURE_UNAVAILABLE",
             Self::CandidateMaterialInvalid => "CANDIDATE_MATERIAL_INVALID",
+            Self::ResourceLimitExceeded => "RESOURCE_LIMIT_EXCEEDED",
         }
     }
 }
@@ -835,6 +837,8 @@ struct FakeSession {
     current_page_url: Option<Url>,
     current_page_title: String,
     observations: HashMap<BrowserOperationId, BrowserObservationPayload>,
+    #[cfg(test)]
+    next_observation: Option<BrowserObservationPayload>,
     candidate_material: Option<BrowserCandidateMaterial>,
 }
 
@@ -1030,6 +1034,26 @@ impl FakeBrowserWorker {
             .len()
     }
 
+    /// Test-only server-owned observation injection. The operation id is
+    /// rebound to the next navigation by the fake worker; production workers
+    /// populate the same ledger from real browser network events.
+    #[cfg(test)]
+    pub(crate) fn set_next_observation(
+        &self,
+        session: &BrowserSessionId,
+        payload: BrowserObservationPayload,
+    ) -> Result<(), BrowserError> {
+        validate_browser_observation(&payload.observation)
+            .map_err(|_| BrowserError::InvalidInput)?;
+        validate_server_owned_observation(&payload.server_observation)
+            .map_err(|_| BrowserError::InvalidInput)?;
+        let mut state = self.lock_state()?;
+        let session_state = Self::session_mut(&mut state, session)?;
+        Self::ensure_open(session_state)?;
+        session_state.next_observation = Some(payload);
+        Ok(())
+    }
+
     #[cfg(test)]
     fn publish_observation(
         &self,
@@ -1201,6 +1225,8 @@ impl BrowserWorker for FakeBrowserWorker {
                 current_page_url: None,
                 current_page_title: String::new(),
                 observations: HashMap::new(),
+                #[cfg(test)]
+                next_observation: None,
                 candidate_material: None,
             };
             Self::push_event(
@@ -1336,6 +1362,13 @@ impl BrowserWorker for FakeBrowserWorker {
             session_state.current_page_url = Some(redacted_event_url(request.url()));
             session_state.current_page_title.clear();
             Self::push_event(session_state, BrowserEventKind::Ready);
+            #[cfg(test)]
+            if let Some(mut payload) = session_state.next_observation.take() {
+                payload.operation_id = request.operation_id();
+                session_state
+                    .observations
+                    .insert(request.operation_id(), payload);
+            }
             Ok(())
         })
     }

@@ -515,7 +515,8 @@ impl GatewayService {
                 display_sessions: DisplaySessionService::default(),
                 source_sessions: source_session::SourceSessionService::new(registry),
                 auth_routes: auth_route::AuthRouteCoordinator::new(SessionVault::default()),
-                public_browser_worker: browser_chromium::ChromiumBrowserWorker::new(),
+                public_browser_worker:
+                    browser_chromium::ChromiumBrowserWorker::for_public_observation(),
                 pending_media_deliveries: Arc::new(Mutex::new(HashMap::new())),
             }),
         }
@@ -729,7 +730,8 @@ impl GatewayService {
                 display_sessions: DisplaySessionService::default(),
                 source_sessions: source_session::SourceSessionService::new(registry),
                 auth_routes: auth_route::AuthRouteCoordinator::fake_for_tests(vault),
-                public_browser_worker: browser_chromium::ChromiumBrowserWorker::new(),
+                public_browser_worker:
+                    browser_chromium::ChromiumBrowserWorker::for_public_observation(),
                 pending_media_deliveries: Arc::new(Mutex::new(HashMap::new())),
             }),
         }
@@ -845,6 +847,31 @@ impl GatewayService {
                 &self.state.display_sessions,
                 request,
                 &self.state.public_browser_worker,
+                egress,
+            )
+            .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn create_public_session_with_worker<W: browser::BrowserWorker + 'static>(
+        &self,
+        request: CreateSessionRequest,
+        worker: &W,
+    ) -> source_session::CreationOutcome {
+        let egress = self
+            .state
+            .egress_policy
+            .read()
+            .expect("egress policy poisoned")
+            .clone();
+        self.state
+            .source_sessions
+            .create_public_browser(
+                self,
+                &self.state.control,
+                &self.state.display_sessions,
+                request,
+                worker,
                 egress,
             )
             .await
