@@ -768,11 +768,8 @@ impl ChromiumBrowserWorker {
                         .filter(|value| value.is_finite() && *value >= 0.0)
                         .map(|value| value as u64)
                 {
-                    state.observation_bytes = account_received_bytes(
-                        Some(limits),
-                        state.observation_bytes,
-                        received,
-                    )?;
+                    state.observation_bytes =
+                        account_received_bytes(Some(limits), state.observation_bytes, received)?;
                 }
             }
             "Page.frameNavigated" => {

@@ -7,11 +7,10 @@
 
 use serde::{Deserialize, Serialize};
 use site_adapter_api::{
-    AdapterError, AuthenticatedSessionHandoff, BrowserAcquisitionTarget,
-    BROWSER_AUTH_OBSERVATION_VERSION,
-    BrowserAuthObservation, BrowserAuthState, BrowserExpiryHint, BrowserMediaKind,
-    BrowserObservation, BrowserStatusClass, MediaProtection, MediaShapeV1, MediaTrack,
-    MediaTrackKind, NavigationContext, RecognizeResult, ResolveContext, ResolvedMedia,
+    AdapterError, AuthenticatedSessionHandoff, BROWSER_AUTH_OBSERVATION_VERSION,
+    BrowserAcquisitionTarget, BrowserAuthObservation, BrowserAuthState, BrowserExpiryHint,
+    BrowserMediaKind, BrowserObservation, BrowserStatusClass, MediaProtection, MediaShapeV1,
+    MediaTrack, MediaTrackKind, NavigationContext, RecognizeResult, ResolveContext, ResolvedMedia,
     ResolvedStream, ServerOwnedObservation, SiteAdapter, SiteAdapterRegistry, SourceLocator,
     StreamProtocol, validate_browser_auth_observation, validate_browser_observation,
     validate_server_owned_observation,

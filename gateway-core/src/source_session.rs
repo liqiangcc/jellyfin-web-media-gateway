@@ -1341,16 +1341,12 @@ mod tests {
 
         let worker = FakeBrowserWorker::new();
         let (observation, server_observation) = observation_context();
-        let session = worker.open_session(BrowserAuthMode::Passive).await.unwrap();
         worker
-            .set_next_observation(
-                session.id(),
-                BrowserObservationPayload {
-                    operation_id: crate::browser::BrowserOperationId::from_value(1),
-                    observation,
-                    server_observation,
-                },
-            )
+            .set_next_observation_for_next_session(BrowserObservationPayload {
+                operation_id: crate::browser::BrowserOperationId::from_value(1),
+                observation,
+                server_observation,
+            })
             .unwrap();
 
         let outcome = service
@@ -1388,16 +1384,12 @@ mod tests {
         register_display(&service).await;
         let worker = FakeBrowserWorker::new();
         let (observation, server_observation) = observation_context();
-        let session = worker.open_session(BrowserAuthMode::Passive).await.unwrap();
         worker
-            .set_next_observation(
-                session.id(),
-                BrowserObservationPayload {
-                    operation_id: crate::browser::BrowserOperationId::from_value(1),
-                    observation,
-                    server_observation,
-                },
-            )
+            .set_next_observation_for_next_session(BrowserObservationPayload {
+                operation_id: crate::browser::BrowserOperationId::from_value(1),
+                observation,
+                server_observation,
+            })
             .unwrap();
 
         let outcome = service

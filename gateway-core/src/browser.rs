@@ -848,6 +848,8 @@ struct FakeState {
     profiles: HashMap<ProfileAttachmentRef, Instant>,
     panels: HashMap<PanelSessionId, PanelRecord>,
     cancelled: HashSet<BrowserOperationId>,
+    #[cfg(test)]
+    pending_observation: Option<BrowserObservationPayload>,
 }
 
 /// In-memory deterministic worker used by contract tests and future hosted
@@ -1054,6 +1056,22 @@ impl FakeBrowserWorker {
         Ok(())
     }
 
+    /// Test-only injection for a SourceSession that owns session creation;
+    /// the payload is attached to the next opened fake session.
+    #[cfg(test)]
+    pub(crate) fn set_next_observation_for_next_session(
+        &self,
+        payload: BrowserObservationPayload,
+    ) -> Result<(), BrowserError> {
+        validate_browser_observation(&payload.observation)
+            .map_err(|_| BrowserError::InvalidInput)?;
+        validate_server_owned_observation(&payload.server_observation)
+            .map_err(|_| BrowserError::InvalidInput)?;
+        let mut state = self.lock_state()?;
+        state.pending_observation = Some(payload);
+        Ok(())
+    }
+
     #[cfg(test)]
     fn publish_observation(
         &self,
@@ -1213,6 +1231,8 @@ impl BrowserWorker for FakeBrowserWorker {
     fn open_session(&self, mode: BrowserAuthMode) -> BrowserFuture<'_, BrowserSession> {
         Box::pin(async move {
             let mut state = self.lock_state()?;
+            #[cfg(test)]
+            let pending_observation = state.pending_observation.take();
             let session = BrowserSession {
                 id: BrowserSessionId::new(),
                 mode,
@@ -1226,7 +1246,7 @@ impl BrowserWorker for FakeBrowserWorker {
                 current_page_title: String::new(),
                 observations: HashMap::new(),
                 #[cfg(test)]
-                next_observation: None,
+                next_observation: pending_observation,
                 candidate_material: None,
             };
             Self::push_event(
