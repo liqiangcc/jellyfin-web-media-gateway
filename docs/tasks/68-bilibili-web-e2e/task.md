@@ -1,382 +1,223 @@
-# Task — BILIBILI-WEB-E2E
+# Task Contract — BILIBILI-WEB-E2E (Public / No-Login Contract Revision)
 
-> Coordinator planning note (2026-09-08): #165/#166 is an independent browser-source research branch. This existing unpublished generic-ytdlp contract is retained and must not consume browser-derived media. After accepted source portability and any required generic media/plugin implementation, formally revise this contract and repeat Publication Gate. See `docs/research/bilibili-browser-acquisition.md`. No current Claim/dependency is silently relaxed.
+> **Contract Revision (2026-09-11):** This package replaces the stale generic-ytdlp-only route. The first product attempt is a public, non-DRM Bilibili video with no account or login. It composes the accepted production Bilibili Site Plugin, generic Browser Worker observation, server-owned media contracts, PlaybackSession, and the generic Web Display path. This revision is a contract/package change only; it does not authorize a live attempt or claim playback.
 
 ## Metadata
 
 ```text
 GitHub Issue: #68
 Task ID: BILIBILI-WEB-E2E
-Task kind: implementation + real-source functional E2E verification
-Planning Base: b17a27ca5d8c2f76cddc4c7cf3fdaa239169593a
-Preferred worker: cloud-codex with authenticated SSH tx-node and accepted #146 browser path
-Eligible environment after publication: env:cloud
-Hard publication dependencies: #67 R20-or-later Final Acceptance PASS; #49 Web MVP Final Accepted; #146 R3-or-later execution authority remains valid
-Accepted authorities: #44 SourceSession; #45 Web Display; #47 Control; #49 hosted Web MVP; #60/#66/#73 generic-ytdlp runtime/security; #71 Navigation authority remains independent
-Freshness policy: dependency-aware
+Task kind: combined (implementation seam + real-source functional verification)
+Planning Base: d50de827e6b444e9476659b7165a8bbcc0b387b4
+Candidate: n/a until a later Publication Gate
+Preferred worker: Codex Cloud, env:cloud
+Required capabilities after publication: github-read-write, repository-static-analysis,
+  code-authoring, automated-build, automated-test, cloud-interactive,
+  an explicitly approved ordinary-Linux browser/control route
+Current package state: status:draft, owner-free
 ```
 
-> #68 is the first real user-visible Bilibili playback closure. It composes already accepted Gateway/Web authorities with one accepted real Bilibili `ResolvedMedia` result. It does not add login, navigation, Native Site Panel, DASH/remux, production enablement or performance claims.
+The revision extends the accepted ordinary-Linux browser authority from #154 rather than redefining it. Issue #154 was Final Accepted and merged to `main` as `836e220e6ba4e38377a4e40cff677c9549aa7798`; its accepted Control → Gateway `PlaybackSession` → Web Display route, same-origin media, play/pause/seek/stop, refresh/reconnect, stale/error/concurrency/security behavior and Candidate-bound artifact consumption are the baseline for this Task. #68 adds the real public Bilibili source path to that route.
 
-## Publication gate — unresolved until #67 PASS
+The direct source-path authorities are the production Bilibili Site Plugin (#237) and generic Browser Observation Bridge (#240). MediaShapeV1 (#268) and policy-bound media delivery (#271) are the direct media-path authorities. #255 may supply the production composition root/adapter registration where the current executable needs it, but this scope may make only the smallest public/no-account composition adjustment required; it must not configure or use an account. The auth-specific implementation surfaces (#243/#248/#251/#257/#259) are code present on `main` and regression surfaces only. They are not hard dependencies for this public/no-login route and must not be invoked. #246 is a separate authorized-account target Task and remains independently `status:blocked`; it is not a dependency or alternate route for this public scope.
 
-This Task Package is deliberately materialized early as a planning buffer, but **must remain `status:draft`** until #67 is Final Accepted.
+### Accepted #154 baseline
 
-Before publication the Coordinator must freeze all of the following from actual #67 Evidence and accepted #146 runbook. No phone deployment/readiness/Runner/management task is a dependency for this functional stage:
+The following behavior is inherited from #154 Final Acceptance and must remain unchanged while #68 extends the source ingress:
 
 ```text
-#67 Final Acceptance / exact accepted Candidate
-frozen selector: BV14V411W7r5
-accepted real-source protocol: http-file | hls
-accepted stream_count / first-playback shape
-accepted offline runtime artifact identity from #79, if still relevant to execution
-exact #68 Execution Candidate / Planning Base after freshness classification
-real-source Evidence routing: external-codex/ssh tx-node + identified isolated browser host/access path; #146 accepted runbook SHA/uid/gid; no public listener
+ordinary-Linux Control
+→ server-owned PlaybackSession / PlaybackItem
+→ same-origin Gateway media capability
+→ Web Display
 ```
 
-If #67 returns `FAIL`, `BLOCKED`, or a result requiring DASH/separate A/V/remux, **do not publish #68**. Route the evidence-driven generic repair Task first.
+The accepted baseline covers the `/display` and `/control` product entrypoints, Display registration/heartbeat and selection, request-id/CAS command authority, play/pause/seek/stop, refresh/reconnect, stale lease/item/revision/display-generation rejection, error/concurrency/security regressions, and exact Candidate-bound runtime/artifact consumption. #68 must exercise those existing authorities with a real public Bilibili source; it must not add a second state store, redefine command semantics, or replace the baseline with an ad-hoc browser or extractor path.
 
 ## Goal
 
-Prove that the current accepted Web-only product path can consume the exact Bilibili source shape accepted by #67 and deliver one coherent user journey:
+Close one public, no-login product journey for the frozen sample `BV14V411W7r5`, without weakening any Site Plugin, EgressPolicy, Secret, Browser Worker, MediaShape, or PlaybackSession authority:
 
 ```text
-Control enters frozen public Bilibili URL
-→ SiteAdapterRegistry
-→ generic-ytdlp
-→ accepted real-source ResolvedMedia
-→ SourceSession preparation
-→ Gateway same-origin media capability
-→ registered Web Display <video>
-→ Control play / pause / seek / stop
-→ refresh / reconnect
-→ one authoritative PlaybackSession remains coherent
+Control submits the frozen public Bilibili URL
+→ SiteAdapterRegistry recognizes a Bilibili SourceLocator
+→ production Bilibili Site Plugin requests generic Browser Worker observation
+→ Browser Worker performs bounded EgressPolicy-governed public-web work
+→ plugin interprets bounded observation into server-owned ResolvedMedia / MediaShapeV1
+→ SourceSession prepares and publishes one PlaybackSession / PlaybackItem
+→ direct muxed/HLS delivery, or generic #271 remux delivery for separated A/V
+→ Gateway same-origin media capability reaches Web Display
+→ bounded play / pause / seek / stop / refresh / reconnect
 ```
 
-This is **not** a second extraction verification. #67 owns the real-site extraction compatibility conclusion; #68 proves product composition and browser playback/control over that accepted source shape.
+The Browser Worker is generic infrastructure. Bilibili URL, page, media-selection and observation interpretation remain in `plugins/bilibili`; no Bilibili knowledge is added to Core or the generic worker. The Gateway remains the only `PlaybackSession` authority.
 
-## Frozen source scope
+## Frozen public source scope
 
-Unless Coordinator revises it at Publication Gate:
+Unless the Coordinator performs a later documented Contract Revision at Publication Gate:
 
 ```text
 site: Bilibili
 mode: public / no-login / non-DRM
 selector: BV14V411W7r5
-source URL: task input only; do not persist full source/resolved/signed URLs in durable Evidence
+account: none
+Auth Mode: none
 ```
 
-Only the exact media protocol/shape accepted by #67 may be claimed by this Task.
+The sample may be replaced only by a live contract/evidence finding that makes it unusable. Such a replacement requires a Coordinator-recorded revision; a Worker must not silently substitute a different video. Full page, resolved, signed, Cookie-bearing or upstream URLs never enter durable Evidence.
 
-## Accepted product authorities
+## Contract route and authority boundaries
 
-### #49 Web MVP
+### Source and observation
 
-The accepted hosted product journey already proves the generic composition:
+1. Control submits only the public source input through the existing session API. It cannot submit `ResolvedMedia`, `SourceLocator`, an upstream URL, a header, a media generation, or an Egress decision.
+2. `SiteAdapterRegistry` recognizes the input and routes it to the production Bilibili Site Plugin. Generic yt-dlp is not a Core fallback and is not the sole route of this revision.
+3. The plugin owns Bilibili source semantics and requests a generic, bounded Browser Worker operation. The worker emits only versioned, size-limited, redacted observations and server-owned handoff references.
+4. Every browser request and redirect is admitted by the central `EgressPolicy`. The public route cannot use an open proxy, private-network exception, arbitrary caller authority, fingerprint bypass, CAPTCHA bypass, DRM bypass, paywall bypass or region/access-control bypass.
+5. The plugin interprets the generic observation and produces a server-owned `ResolvedMedia`/`MediaShapeV1`. Public headers remain free of Cookie, Authorization, bearer, profile and other Secret material.
+
+### Playback and delivery
+
+- `SourceSession` validates and prepares the plugin result; it owns no second playback state.
+- `PlaybackSession` and `PlaybackItem` remain the sole playback authority inherited from #154, with session/item/revision/display-generation checks and stale-result rejection.
+- Direct muxed HTTP-file or HLS uses the existing media path. A validated separated audio/video `MediaShapeV1` uses the generic policy-bound #271 delivery/remux path; this task does not add Bilibili-specific remux logic.
+- Web Display receives only a short-lived same-origin Gateway media capability bound to the current session, item, revision, media generation and resource. It never receives upstream URLs, upstream headers, Browser Worker state, Vault material or profile data.
+- Control commands retain existing R007 request-id/CAS semantics. Refresh and reconnect rebuild from Gateway authority; callbacks from old leases, sessions, items or generations cannot overwrite current state.
+
+## In scope
+
+1. Minimal production composition needed for the route above, while keeping site semantics in the Bilibili plugin and generic runtime boundaries unchanged.
+2. Public/no-login observation and media handoff through existing server-owned APIs.
+3. Browser playback viability for the accepted media shape, followed by bounded play, pause, seek and stop.
+4. Control and Web Display refresh/reconnect on the same `PlaybackSession`.
+5. Failure, stale-authority, cleanup, Egress and Secret-boundary evidence for the product path.
+6. A future exact-Candidate runbook that another Worker can execute without raw media injection, direct store mutation, ad-hoc extractor CLI use or the old chat.
+
+## Out of scope and hard prohibitions
+
+- Any account, test account, login, QR/password/verification-code flow, Auth Mode, Cookie, Authorization, bearer token, profile, Vault session or token reuse/injection.
+- CAPTCHA, DRM, paywall, region/access-control, fingerprint, proxy, TLS, SSRF or Egress bypass.
+- Phone/TV deployment, VNC, CDP, physical autoplay/audibility, Jellyfin acceptance, #191 or #195.
+- Live Bilibili requests, tx-node access, target browser activity, or target traffic from this docs revision. This package remains `status:draft` and does not itself authorize a live attempt.
+- Changes to #246. #246 stays `status:blocked`, owner-free, and retains its separate written-authorization/disposable-account/approved-channel gate.
+- Generic Browser Worker site knowledge, Bilibili branches in Core, a second Secret owner, open proxy behavior, or weakening R008/Egress/SSRF/Vault/PlaybackSession/#271 authority.
+- Relabelling old diagnostics as success or repeating an old navigation probe without new product-path evidence.
+- Local/tx-node build, test, package or install. Required build/test/package evidence is GitHub-hosted Actions; an approved ordinary-Linux host may only run a later verified artifact and bounded live route after Publication Gate.
+
+## Historical evidence and failure interpretation
+
+The following records remain append-only historical evidence: #67, #166, #188, #223, #226, #229 and #232. Their anonymous/diagnostic paths must not be reclassified as product playback. In particular, the old anonymous browser route stabilized at an upstream/navigation `4xx` with no media request. A new public product-path attempt that reaches the same boundary is an explicit `FAIL` or `BLOCKED` result with sanitized evidence; it is not permission to bypass Egress, TLS, access controls or to retry indefinitely.
+
+A later Coordinator may revise the source contract only when new evidence establishes a different product-relevant condition. The revision must identify the exact Candidate, execution plane, failure phase and affected claim.
+
+## Claims for a future execution
 
 ```text
-GET /
-→ /display?profile=tv
-→ real Display registration/heartbeat
-→ /control
-→ live Display selector
-→ POST /api/v1/sessions
-→ SourceSession publication
-→ server-owned rendering view
-→ Gateway media path
-→ /control?session_id=<id>
-→ play/pause/seek/stop
-→ Control + Display refresh/reconnect
+P1 — Public source authority: the frozen input enters through the production
+     Bilibili Site Plugin and existing session API; no raw media/URL injection.
+P2 — Generic observation boundary: Browser Worker facts are generic, bounded,
+     redacted and EgressPolicy-governed; Bilibili interpretation stays in the plugin.
+P3 — Media contract: the plugin result is server-owned ResolvedMedia/MediaShapeV1;
+     direct muxed/HLS and separated A/V through generic #271 are handled without
+     leaking upstream URL/header/Secret material.
+P4 — Playback authority: one PlaybackSession/PlaybackItem drives same-origin
+     Web Display media and preserves R007 revision/generation semantics.
+P5 — User controls: play/pause/seek/stop and Control/Display refresh/reconnect
+     operate on that same authority with stale and duplicate commands rejected.
+P6 — Security and cleanup: Egress/SSRF, capability binding, cancellation, expiry,
+     bounded resources, cleanup and redacted evidence remain fail-closed.
+P7 — Public-only scope: no account, Auth Mode, Cookie, profile, token, DRM,
+     CAPTCHA, paywall, region or access-control bypass is used or claimed.
+P8 — Historical honesty: old anonymous 4xx/no-media diagnostics remain negative;
+     the new product path is reported FAIL/BLOCKED if it meets that boundary.
 ```
 
-#68 must reuse these production routes/authorities. It may add only the minimal real-source glue required by the accepted generic-ytdlp result.
+## Publication Gate (must remain unsatisfied in this revision PR)
 
-### #44 / SourceSession
+`#68` stays `status:draft`, `env:cloud`, owner-free until the Coordinator independently reads back and records all of the following. A Worker cannot claim an Attempt before the gate is complete.
 
-- source input remains `CreateSessionRequest { request_id, source, display_id }`;
-- Registry recognition/resolution remains server-owned;
-- caller cannot inject `ResolvedMedia`, `SourceLocator`, upstream URL/header, item/session revision or Egress authority;
-- prepared media paths remain Gateway capabilities.
+1. **Package and dependency read-back:** live Issue, this `task.md`, `prompt.md`, canonical docs and accepted authorities are mutually consistent. The Coordinator checks #154's Final Acceptance/merge baseline, direct source authorities #237/#240, direct media authorities #268/#271, and the composition root where #255 is actually needed against current `main`. Auth-specific surfaces #243/#248/#251/#257/#259 are regression inputs only, not public-route dependencies; #246 remains separate and blocked.
+2. **Exact implementation Candidate:** freeze one full Candidate SHA/branch/PR and classify movement from the current base as `NONE`, `UNRELATED`, `INTEGRATION_OVERLAP`, `SEMANTIC_AUTHORITY` or `CONTRACT_INVALIDATING`. Moving `main` is not an execution identity.
+3. **GitHub-hosted freshness:** run the required hosted x64 fmt/clippy/workspace/security/regression jobs against that exact Candidate and read back every required job/artifact. The later live run must consume the exact Candidate-bound package/artifact admitted by those jobs. No local compilation or target compilation substitutes for this evidence.
+4. **Approved ordinary-Linux execution host/control route:** record where Gateway and browser run, the private/loopback or explicitly bounded control path, Host/Origin behavior, browser sandbox mode and the operator route. A tx-node route is not granted by this package; if later selected, the Coordinator must explicitly name it and record its isolation before publication. No public listener or uncontrolled Chrome/CDP route is allowed.
+5. **Artifact admission and low-privilege isolation:** record the exact Candidate-bound artifact/package, manifest and digest, target platform/ABI, runtime asset and helper/worker identity, and a fresh-consumer admission check that starts the same product without the Actions build tree. Then record the dedicated non-root user, workspace, temporary profile, allowed filesystem/network scope, cleanup owner and confirmation that no Vault, production Secret, SSH key, GitHub token, Tailscale auth key, personal browser profile or account material is available to the runtime. Missing, tampered, wrong-platform or wrong-Candidate assets fail closed. The target must never compile, build or install to compensate for missing assets. Reuse the accepted #154/#146 provenance and admission principle where applicable, but do not reuse an old artifact as the new #68 runtime.
+6. **Budgets and cancellation:** freeze wall-clock, navigation/request count, Browser Worker observation size/count, media/output size, concurrent process, storage, retry and cleanup deadlines. Abort on budget or cancellation; do not retry the known 4xx/no-media boundary indefinitely.
+7. **Sanitized Evidence contract:** bind Evidence to Candidate/run/job/host/attempt and record only statuses, bounded phases, media shape/protocol, same-origin capability facts, playback/control/reconnect facts and cleanup. Exclude full URLs, signed queries, headers, cookies, tokens, profile paths, page/media bodies and raw worker stderr.
+8. **Publication state:** only after the above read-back may the Coordinator set `status:ready` and issue a downstream execution entry. This docs revision itself performs no live request and launches no target job.
 
-### #45 / Web Display
+## Future verification matrix
 
-- page registration/lease remains distinct from Playback display generation;
-- Display rendering derives current session/item/revision from server authority;
-- stale lease/session/item/generation relationships fail closed.
+| Job | Claims | Execution plane / runner | Required evidence |
+|---|---|---|---|
+| J1 | P2–P7 regressions | GitHub-hosted x64 Actions | exact SHA fmt, clippy, workspace tests, plugin/worker/SourceSession/Playback/Egress/security checks |
+| J2 | P3–P5 product composition | GitHub-hosted x64 Actions | server-owned Control → Display route with bounded controlled observation/media fixture; no seed store mutation or raw media injection |
+| J3 | P1–P8 public journey | Coordinator-approved ordinary-Linux execution route | same exact Candidate; real Control source creation for `BV14V411W7r5`, generic Browser Worker observation, media load/progress, controls, reconnect and sanitized failure/cleanup evidence |
+| J4 | P6–P8 evidence hygiene | GitHub-hosted and/or approved execution route as explicitly frozen | capability/authority invalidation, expiry, cancellation, no Secret/profile leakage, bounded artifacts and cleanup |
 
-### #47 / Control + R007
+J2 synthetic or controlled evidence cannot be promoted to a real Bilibili claim. J3 is not authorized or scheduled by this package revision.
 
-- Control is View + Intent, not a second playback state store;
-- command ingress remains request-id + expected-session-revision authority;
-- play/pause/seek/stop semantics are unchanged.
+## Artifact admission for a later ordinary-Linux live run
 
-### #60/#66/#73/#79 / generic-ytdlp runtime
-
-- production default remains disabled unless separately enabled by an explicit production gate;
-- this Task may use the accepted verification/product composition seam needed to reproduce the #67 accepted source shape;
-- R008 remains the only extractor/upstream network authority;
-- no Cookie/Auth/profile/proxy bypass or alternate extractor path.
-
-## Required product journey
-
-### P1 — Display readiness
-
-1. Start exact Candidate Gateway in an isolated test environment.
-2. Open `/display?profile=tv` through the product route.
-3. Register/heartbeat one real Display session.
-4. Confirm Control can discover/select that Display using the accepted live-display view.
-
-No synthetic Display authority or direct store mutation may construct the success path.
-
-### P2 — Real Bilibili source creation
-
-From product Control, submit the frozen public Bilibili URL using the accepted creation API.
-
-Required path:
+The future live execution must consume a freshly admitted, exact-Candidate package produced by GitHub-hosted Actions. The package manifest must bind at least:
 
 ```text
-POST /api/v1/sessions
-{ request_id, source, display_id }
-→ SiteAdapterRegistry
-→ generic-ytdlp
-→ exact accepted #67 media shape
-→ SourceSession
-→ PlaybackSession
+Candidate SHA / workflow run / required job IDs
+artifact names, digests and provenance
+target platform / ABI / runtime layout
+Gateway binary and helper/worker hashes
+required static assets and configuration schema/version
+fresh-consumer start result from a directory without the Actions build tree
 ```
 
-The user-visible journey must not require ad-hoc Python/yt-dlp CLI execution, raw `ResolvedMedia` injection, or proof-only seed APIs.
+The ordinary-Linux host receives only this verified package and runs compile-free commands as the dedicated low-privilege identity. It may not run Cargo, install a compiler/dependency/FFmpeg/Chromium package to repair an incomplete package, or fall back to source/fixture injection. The host-side start, stop, cleanup and artifact paths must be bounded and recorded without leaking local paths or secrets. This reuses the provenance/admission principle accepted by #154 and #146 while requiring a new #68 Candidate package; neither old #154 artifacts nor old #146 artifacts are the #68 runtime.
 
-### P3 — Gateway rendering path
+## Success criteria for the later Task
 
-The attached Display must obtain the server-owned current rendering view and load only Gateway same-origin media paths.
-
-Required:
-
-- current `session_id` / `item_id` / `item_revision` match Playback authority;
-- media protocol matches the #67 accepted first-playback shape;
-- browser does not receive arbitrary caller-selected upstream URLs/Secret headers;
-- stale/foreign rendering context is rejected.
-
-### P4 — Browser playback
-
-In hosted/headless Chromium where deterministic browser media behavior is supportable, or in a Coordinator-approved real browser Evidence step if network/browser policy requires it, prove the accepted media path reaches the `<video>` element far enough to establish product playback viability.
-
-Evidence should prefer bounded browser facts such as:
-
-```text
-media element source is Gateway same-origin
-readyState / loadedmetadata / canplay class
-currentTime progresses or equivalent bounded playback observation
-no browser network request bypasses Gateway media authority
-```
-
-Do not claim physical-TV autoplay/audible behavior; that remains separate physical-target Evidence.
-
-### P5 — Control commands
-
-On the same session:
-
-```text
-play
-→ pause
-→ seek
-→ play
-→ stop
-```
-
-Prove:
-
-- accepted R007 request-id/CAS semantics;
-- item/session revision coherence;
-- Display callbacks/telemetry cannot overwrite newer authority;
-- no duplicate command mutation from retries.
-
-### P6 — Refresh / reconnect
-
-Prove both:
-
-- Control refresh / event reconnect;
-- Display page refresh / lease reconnect.
-
-Both rebuild from Gateway authority and preserve the current session/item unless an accepted command changed it.
-
-## Claims
-
-```text
-B1 — Real source enters only through accepted product source/session authority.
-B2 — #67 accepted Bilibili media shape is reproduced without alternate extractor or raw-media injection.
-B3 — Web Display receives only current server-owned Gateway media paths.
-B4 — Browser media path is product-viable for the accepted http-file/HLS shape.
-B5 — play/pause/seek/stop preserve existing R007 authority.
-B6 — Control/Display refresh and stale callbacks cannot create a second state authority.
-B7 — no Cookie/Auth/profile/signed URL/raw worker stderr/upstream payload leaks into durable Evidence.
-B8 — first real Bilibili Web playback is closed without navigation/login/BrowserWorker/DASH/remux/performance scope creep.
-```
-
-## Deterministic verification
-
-### J1 — Product composition / exact Candidate
-
-GitHub-hosted Ubuntu unless Coordinator records another execution plane.
-
-Prove:
-
-- exact Candidate identity;
-- product Display registration and live selector;
-- product Control source creation;
-- real accepted SiteAdapter path selected;
-- session/rendering path coherence;
-- no proof-only/store-injection success path.
-
-### J2 — Browser journey
-
-Use product `/control` + `/display` routes and the exact accepted media shape. The live ordinary-Linux step uses accepted #146 low-privilege tx-node execution and its isolated browser access path; record SSH/actual browser host separately from hosted Actions. Do not inspect or reuse the user browser profile, disable Chromium sandbox/autoplay policy, or expose Gateway/CDP publicly.
-
-Prove:
-
-- same-origin Gateway media path reaches `<video>`;
-- bounded media readiness/playback observation;
-- Control play/pause/seek/stop;
-- Control and Display refresh/reconnect;
-- browser console/network/storage leak negatives.
-
-If public-network access is required for the exact real source, separate deterministic product mechanics from the permitted real-source Evidence step, but both must use the same exact Candidate and accepted product path.
-
-### J3 — failure / security matrix
-
-Cover:
-
-- invalid/no-match source;
-- offline/expired/missing Display;
-- stale expected session revision;
-- request-id mismatch;
-- stale lease/callback/context;
-- missing session/media projection;
-- upstream/extractor bounded failure propagation;
-- no partial session/media authority on failed creation.
-
-### J4 — regressions
-
-Exact Candidate:
-
-- fmt / clippy / workspace tests;
-- #44 SourceSession;
-- #45 Web Display;
-- #47 Control/R007;
-- #49 hosted Web MVP;
-- R001/R008/security;
-- generic-ytdlp conformance/runtime boundaries;
-- #71 navigation regressions where current main integration requires them.
-
-All required jobs assert the exact Candidate SHA.
-
-## Success criteria
-
-1. #67 was Final Accepted PASS before publication and the exact accepted media protocol/shape is recorded.
-2. B1-B8 PASS on one exact Candidate.
-3. Product Control creates the real Bilibili session through accepted public/service APIs.
-4. Display consumes the current server-owned Gateway media rendering path.
-5. Browser playback viability is demonstrated for the #67 accepted first-playback media shape.
-6. play/pause/seek/stop and reconnect paths preserve one authoritative PlaybackSession.
-7. failure/security matrix shows no partial/duplicate authority or Secret leakage.
-8. no navigation/login/Native Panel/DASH/remux/performance/production-enable scope is pulled in.
-9. Worker reports and STOPs; it does not auto-start #72/Auth/performance work.
+1. The Coordinator accepts this Contract Revision and completes the Publication Gate.
+2. P1–P8 are reported against one exact Candidate; each claim is separately marked `PASS`, `CONDITIONAL PASS`, `FAIL` or `BLOCKED`.
+3. The real public source is created through the production Control/API and Bilibili Site Plugin route; no raw media or store injection is used.
+4. Gateway same-origin Web Display playback viability is shown for the actual resolved media shape, with #271 generic remux only when required.
+5. Controls and reconnect preserve one authoritative PlaybackSession and all stale/duplicate paths fail closed.
+6. No account/Auth Mode/Secret/bypass/phone/TV/#246 scope is introduced.
+7. Historical anonymous diagnostics remain negative and any repeated 4xx/no-media boundary is reported honestly.
+8. Worker reports one bounded Attempt, releases ownership and stops; Coordinator alone reviews, accepts, revises, blocks or closes #68.
 
 ## Evidence contract
 
-`[EXECUTION REPORT]` must include bounded Evidence:
+A future `[EXECUTION REPORT]` or `[BLOCKER REPORT]` must separate implementation result, verification result and Coordinator decision and include:
 
 ```text
 Attempt / worker / environment
-Planning/Evidence Base
-Candidate SHA / PR
-#67 accepted source Evidence reference
-frozen selector: BV14V411W7r5
-accepted protocol: http-file | hls
-accepted stream shape summary
-Display registration/rendering result
-session creation result
-browser media readiness/playback observation
-Control command results
-refresh/reconnect result
-security/leak scan
-B1-B8
-freshness classification
-unverified/out-of-scope
+Contract revision and exact Candidate SHA/PR
+GitHub-hosted freshness run/job/artifact references
+Candidate-bound package/manifest/digest/platform/runtime asset admission and fresh-consumer result
+Execution plane / runner / target host and low-privilege identity class
+Frozen selector: BV14V411W7r5
+Source creation phase and Site Plugin/Browser Worker phase statuses
+ResolvedMedia/MediaShapeV1 protocol and stream-shape summary
+Gateway same-origin media capability and PlaybackSession/item/revision facts
+play/pause/seek/stop and Control/Display refresh/reconnect observations
+Egress/SSRF, stale/expiry/cancellation/cleanup and Secret-leak negatives
+P1-P8 result, historical-boundary result, unverified/out-of-scope items
 ```
 
-Never publish:
+Never publish source/resolved/signed URLs, Cookie/Authorization/bearer material, profile/Vault data, page or media payloads, raw worker stderr, arbitrary filesystem paths or unredacted browser/network storage.
 
-- full resolved/signed media URL;
-- Cookie / Authorization / bearer token;
-- profile/account/Vault material;
-- raw worker stderr;
-- page/media payload;
-- lease token;
-- arbitrary local filesystem paths.
+## Freshness and integration rules
 
-## Freshness / Integration Contract
-
-Semantic authorities include:
-
-```text
-#67 accepted generic-ytdlp Bilibili result
-site-adapter-api/**
-plugins/generic-ytdlp/**
-gateway-core/src/source_session.rs
-gateway-core/src/display_session.rs
-gateway-core/src/control.rs
-gateway-core/src/playback.rs
-gateway-core/src/lib.rs
-R001/R008 security/media capability surfaces
-```
-
-At Publication Gate, Coordinator must compare the eventual #67 accepted Candidate and current main. Classify movement as `NONE | UNRELATED | INTEGRATION_OVERLAP | SEMANTIC_AUTHORITY | CONTRACT_INVALIDATING` and freeze an exact #68 Candidate/Base.
-
-This early Task Package intentionally leaves the exact execution identity unresolved. Do not silently substitute moving `main`.
-
-## Out of scope
-
-- Bilibili multipart/previous/next (#72);
-- login/Cookie/profile/Auth;
-- BrowserWorker/Native Site Panel;
-- DASH/separate audio-video composition/remux/FFmpeg;
-- Jellyfin-specific DisplayAdapter work;
-- physical-TV audible/autoplay certification;
-- phone CPU/RSS/thermal/soak/performance (#9);
-- production generic-ytdlp enablement/hardening.
+At every future Publication Gate, compare this package and all semantic authorities with current `main`. Relevant authorities include `site-adapter-api`, `plugins/bilibili`, generic Browser Worker, `gateway-core` SourceSession/Playback/Display/Control, R008 Egress/security, MediaShapeV1 and #271 delivery. A change to source interpretation, observation handoff, media shape, capability binding or Playback authority is `SEMANTIC_AUTHORITY` or `CONTRACT_INVALIDATING` and requires Coordinator review before execution.
 
 ## Completion protocol
 
 ```text
-status:draft
-→ #67 Final Acceptance PASS
-→ Coordinator fills unresolved Evidence/Candidate fields
-→ Publication Gate
-→ status:ready
-→ Worker claim / Attempt N
-→ J1-J4
+status:draft + owner-free
+→ Contract Revision accepted by Coordinator
+→ dependency/Candidate/host/budget/Evidence Publication Gate
+→ status:ready + env:cloud + queue read-back
+→ one bounded Worker Attempt
 → [EXECUTION REPORT] or [BLOCKER REPORT]
 → status:review or status:blocked
-→ release owner
-→ STOP
+→ release owner → Coordinator review
 ```
 
-Worker cannot set `status:done`, close #68, start #72, or weaken accepted security/runtime authority.
-
-
-### Non-phone revision and integration selectors
-
-Required capabilities: github-read-write, code-authoring, automated-build/test, authenticated SSH tx-node, accepted isolated browser path (MCP or repository-owned Playwright). Scope remains product composition; Worker produces a new exact Candidate and all real/hosted Evidence targets it. #147 is independent; a missing required navigation run is a concrete verification dependency, not permission to skip it.
-
-Freshness policy: dependency-aware; strict-main reason: n/a. Semantic authorities/domains and B1–B8 mapping: source/session/plugin/runtime → B1/B2/B7/B8; Playback/Control → B5/B6; Display/media → B3/B4/B6/B7; #146 privilege/browser boundary → B4/B7. Integration surfaces: Cargo workspace/dependencies, router, shared workflows/toolchain. Task-owned: minimal real-source registration/composition and relevant product browser harness/tests; no source-specific Core semantics.
-
-JI1: workspace fmt/clippy/tests plus source-session/display/Control/R007 product regression on exact Integration Candidate. JI2: #49 browser composition/reconnect and R001/R008/plugin-boundary checks when router/build overlap. A conflict changing live source/rendering semantics requires affected B1–B8/live journey reruns. Unrelated main/doc changes preserve exact-Candidate evidence; no moving-main rule.
-
-User-visible runbook delivery is required: exact build/start/stop, explicit verification-only plugin enablement, loopback/private browser access, one normal activation if required, source input and clear cleanup. It must permit another Codex to reproduce the journey without raw media injection or the old chat. Cleanup leaves only approved #146 resources; persistent production services and phone deployment remain out of scope.
-
-### Artifact admission for the new product Candidate
-
-All #68 binaries and test executables are built on GitHub-hosted Actions and transferred as verified artifacts; tx-node only runs compile-free commands. Reuse #146 R3's accepted packaging/admission mechanism, but regenerate its manifests and binaries for the exact #68 product Candidate. The old #67 runtime artifact is a source-compatibility baseline, not the #68 product executable.
-
-Inspect the actual product binary/assets for compile-time paths (including CARGO_MANIFEST_DIR or embedded fixture/worker paths), package required runtime assets, and prove a fresh consumer without the original Actions build tree can start the same product used by the real browser journey. Bind Candidate/run/artifact/ABI/worker/helper hashes and target layout before launch. Missing, tampered or wrong-Candidate assets fail without execution. No fallback to cargo/source compilation or fixture injection on the target.
+The Worker cannot set `status:done`, close #68, modify #246, start an authenticated route, start #72, or silently broaden this public scope.
