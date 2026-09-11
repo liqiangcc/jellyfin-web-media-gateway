@@ -135,11 +135,16 @@ jobs:
         run: |
           set -euo pipefail
           assert_no_match() {
+            local grep_flags='-REn'
+            if [ "${1:-}" = '--ignore-case' ]; then
+              grep_flags='-REni'
+              shift
+            fi
             local pattern="$1"
             shift
             local output rc
             output="$(mktemp)"
-            if grep -REn -- "$pattern" "$@" >"$output" 2>&1; then
+            if grep "$grep_flags" -- "$pattern" "$@" >"$output" 2>&1; then
               cat "$output"
               rm -f "$output"
               echo "forbidden match found" >&2
@@ -170,7 +175,7 @@ jobs:
           production_browser_source="$RUNNER_TEMP/browser-production-source.txt"
           awk '/#\[cfg\(test\)\]/{exit} {print}' gateway-core/src/browser_chromium.rs >"$production_browser_source"
           assert_no_match '--no-sandbox|--disable-setuid-sandbox|--disable-namespace-sandbox|remote-debugging-address=0\.0\.0\.0' "$production_browser_source"
-          assert_no_match 'Cookie:|Authorization:|sessdata|GITHUB_TOKEN|GH_TOKEN' gateway-core/src/source_session.rs gateway-runtime/src experiments/issue-68-public-e2e
+          assert_no_match --ignore-case 'Cookie:|Authorization:|sessdata|GITHUB_TOKEN|GH_TOKEN' gateway-core/src/source_session.rs gateway-runtime/src experiments/issue-68-public-e2e
           assert_match 'create_public_browser|BrowserObservationHandoff|R008NavigationPolicy::public_web' gateway-core/src/source_session.rs
           assert_match 'bilibili_account_ref: Option|bilibili_account_label: Option' gateway-runtime/src/lib.rs
           assert_no_match 'gateway\.log|session\.json|https://www\.bilibili\.com/video/BV14V411W7r5' experiments/issue-68-public-e2e
