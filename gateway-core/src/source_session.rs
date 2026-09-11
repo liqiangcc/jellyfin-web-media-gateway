@@ -24,7 +24,6 @@ use site_adapter_api::{
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
-use url::Url;
 use uuid::Uuid;
 
 const MAX_REQUEST_ID_BYTES: usize = 128;
@@ -215,24 +214,28 @@ impl SourceSessionService {
         // Keep direct adapters on their existing path.  A browser is needed
         // only when the owning adapter explicitly reports that observation is
         // required; Core does not interpret any site-specific URL semantics.
-        match self
-            .registry
-            .resolve_with_context(&locator, ResolveContext::default())
-        {
+        match self.registry.resolve(&locator) {
             Ok(_) => return self.create(gateway, control, displays, request),
             Err(AdapterError::ObservationRequired) => {}
             Err(error) => return failure_for_adapter(error),
         }
-        let navigation_url = match Url::parse(&request.source) {
-            Ok(url) if matches!(url.scheme(), "http" | "https") => url,
-            _ => return public_browser_failure("SOURCE_BROWSER_NAVIGATION_INVALID"),
+        let acquisition_target = match self.registry.browser_acquisition_target(&locator) {
+            Ok(Some(target)) => target,
+            Ok(None) | Err(AdapterError::UnsupportedAcquisition) => {
+                return public_browser_failure("SOURCE_BROWSER_ACQUISITION_UNAVAILABLE")
+            }
+            Err(_) => return public_browser_failure("SOURCE_BROWSER_ACQUISITION_INVALID"),
         };
 
         let session = match worker.open_session(crate::browser::BrowserAuthMode::Passive).await {
             Ok(session) => session,
             Err(_) => return public_browser_failure("SOURCE_BROWSER_UNAVAILABLE"),
         };
-        let operation = BrowserNavigationRequest::new(navigation_url);
+        // The owning plugin supplied this target. Core does not parse or
+        // reproduce site URL/BVID/part semantics; R008 authorizes the target
+        // before the generic worker consumes it.
+        let operation = BrowserNavigationRequest::new(acquisition_target.url().clone());
+        drop(acquisition_target);
         let operation_id = operation.operation_id();
         let result = worker
             .navigate(
@@ -911,7 +914,9 @@ fn internal_failure() -> CreationOutcome {
 mod tests {
     use super::{SessionMediaView, SourceSessionService};
     use crate::GatewayService;
-    use crate::browser::{BrowserAuthMode, BrowserObservationPayload, FakeBrowserWorker};
+    use crate::browser::{
+        BrowserAuthMode, BrowserObservationPayload, BrowserWorker, FakeBrowserWorker,
+    };
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode, header};
     use generic_direct::GenericDirectAdapter;
@@ -994,39 +999,18 @@ mod tests {
         }
 
         fn resolve(&self, _locator: &SourceLocator) -> Result<ResolvedMedia, AdapterError> {
-            let stream = |id: &str, headers: BTreeMap<String, String>| ResolvedStream {
-                id: id.into(),
-                protocol: StreamProtocol::HttpFile,
-                url: Url::parse("https://example.test/fixture.mp4").unwrap(),
-                public_headers: headers,
-                upstream_access_ref: None,
-            };
-            let streams = match self.mode {
-                FixtureMode::Rollback => vec![
-                    stream("primary", BTreeMap::new()),
-                    stream(
-                        "broken",
-                        BTreeMap::from([("invalid header".into(), "value".into())]),
-                    ),
-                ],
-                FixtureMode::SecretReference => vec![ResolvedStream {
-                    upstream_access_ref: Some("fixture-secret-ref".into()),
-                    ..stream("primary", BTreeMap::new())
-                }],
-                _ => vec![stream("primary", BTreeMap::new())],
-            };
-            Ok(ResolvedMedia::legacy(
-                "fixture media",
-                self.site_id(),
-                streams,
-                vec![],
-                MediaProtection::Clear,
-            ))
+            if matches!(
+                self.mode,
+                FixtureMode::Observation | FixtureMode::AuthenticatedObservation
+            ) {
+                return Err(AdapterError::ObservationRequired);
+            }
+            fixture_resolved_media(self)
         }
 
         fn resolve_with_context(
             &self,
-            locator: &SourceLocator,
+            _locator: &SourceLocator,
             context: ResolveContext<'_>,
         ) -> Result<ResolvedMedia, AdapterError> {
             if matches!(
@@ -1041,7 +1025,22 @@ mod tests {
             {
                 return Err(AdapterError::AccessRequired);
             }
-            self.resolve(locator)
+            fixture_resolved_media(self)
+        }
+
+        fn browser_acquisition_target(
+            &self,
+            _locator: &SourceLocator,
+        ) -> Result<Option<site_adapter_api::BrowserAcquisitionTarget>, AdapterError> {
+            if matches!(self.mode, FixtureMode::Observation) {
+                return Ok(Some(
+                    site_adapter_api::BrowserAcquisitionTarget::new(
+                        Url::parse("https://www.example.com/fixture").unwrap(),
+                    )
+                    .unwrap(),
+                ));
+            }
+            Ok(None)
         }
 
         fn navigation(
@@ -1066,6 +1065,77 @@ mod tests {
                 collection_id: Some("fixture-collection".into()),
                 current_index: Some(1),
             })
+        }
+    }
+
+    fn fixture_resolved_media(adapter: &FixtureAdapter) -> Result<ResolvedMedia, AdapterError> {
+        let stream = |id: &str, headers: BTreeMap<String, String>| ResolvedStream {
+            id: id.into(),
+            protocol: StreamProtocol::HttpFile,
+            url: Url::parse("https://example.test/fixture.mp4").unwrap(),
+            public_headers: headers,
+            upstream_access_ref: None,
+        };
+        let streams = match adapter.mode {
+            FixtureMode::Rollback => vec![
+                stream("primary", BTreeMap::new()),
+                stream(
+                    "broken",
+                    BTreeMap::from([("invalid header".into(), "value".into())]),
+                ),
+            ],
+            FixtureMode::SecretReference => vec![ResolvedStream {
+                upstream_access_ref: Some("fixture-secret-ref".into()),
+                ..stream("primary", BTreeMap::new())
+            }],
+            _ => vec![stream("primary", BTreeMap::new())],
+        };
+        Ok(ResolvedMedia::legacy(
+            "fixture media",
+            adapter.site_id(),
+            streams,
+            vec![],
+            MediaProtection::Clear,
+        ))
+    }
+
+    struct TraceAdapter {
+        inner: FixtureAdapter,
+        seen: Arc<Mutex<Vec<SourceLocator>>>,
+    }
+
+    impl SiteAdapter for TraceAdapter {
+        fn site_id(&self) -> &'static str {
+            self.inner.site_id()
+        }
+
+        fn plugin_id(&self) -> &'static str {
+            self.inner.plugin_id()
+        }
+
+        fn recognize(&self, input: &str) -> Result<RecognizeResult, AdapterError> {
+            self.inner.recognize(input)
+        }
+
+        fn resolve(&self, locator: &SourceLocator) -> Result<ResolvedMedia, AdapterError> {
+            self.inner.resolve(locator)
+        }
+
+        fn resolve_with_context(
+            &self,
+            locator: &SourceLocator,
+            context: ResolveContext<'_>,
+        ) -> Result<ResolvedMedia, AdapterError> {
+            self.seen.lock().unwrap().push(locator.clone());
+            self.inner.resolve_with_context(locator, context)
+        }
+
+        fn browser_acquisition_target(
+            &self,
+            locator: &SourceLocator,
+        ) -> Result<Option<site_adapter_api::BrowserAcquisitionTarget>, AdapterError> {
+            self.seen.lock().unwrap().push(locator.clone());
+            self.inner.browser_acquisition_target(locator)
         }
     }
 
@@ -1298,6 +1368,84 @@ mod tests {
         };
         assert_eq!(response.source_site, "fixture");
         assert_eq!(response.media.streams.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn public_browser_reuses_same_locator_for_target_and_observation_resolution() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(TraceAdapter {
+                inner: FixtureAdapter {
+                    plugin: "fixture-trace",
+                    priority: 100,
+                    mode: FixtureMode::Observation,
+                },
+                seen: seen.clone(),
+            }))
+            .unwrap();
+        let service = service_with_registry(registry);
+        register_display(&service).await;
+        let worker = FakeBrowserWorker::new();
+        let (observation, server_observation) = observation_context();
+        let session = worker
+            .open_session(BrowserAuthMode::Passive)
+            .await
+            .unwrap();
+        worker
+            .set_next_observation(
+                session.id(),
+                BrowserObservationPayload {
+                    operation_id: crate::browser::BrowserOperationId::from_value(1),
+                    observation,
+                    server_observation,
+                },
+            )
+            .unwrap();
+
+        let outcome = service
+            .create_public_session_with_worker(
+                super::CreateSessionRequest {
+                    request_id: "public-same-locator".into(),
+                    source: "https://www.example.com/fixture".into(),
+                    display_id: "display-a".into(),
+                },
+                &worker,
+            )
+            .await;
+        assert!(matches!(outcome, super::CreationOutcome::Success(_)));
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0], seen[1]);
+        assert_eq!(seen[0].plugin_id, "fixture-trace");
+    }
+
+    #[tokio::test]
+    async fn observation_required_without_plugin_target_fails_closed() {
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(FixtureAdapter {
+                plugin: "fixture-auth-only",
+                priority: 10,
+                mode: FixtureMode::AuthenticatedObservation,
+            }))
+            .unwrap();
+        let service = service_with_registry(registry);
+        register_display(&service).await;
+        let outcome = service
+            .create_public_session_with_worker(
+                super::CreateSessionRequest {
+                    request_id: "public-no-target".into(),
+                    source: "fixture://auth-only".into(),
+                    display_id: "display-a".into(),
+                },
+                &FakeBrowserWorker::new(),
+            )
+            .await;
+        let super::CreationOutcome::Failure { error, .. } = outcome else {
+            panic!("observation without an acquisition target must fail closed");
+        };
+        assert_eq!(error.code, "SOURCE_BROWSER_ACQUISITION_UNAVAILABLE");
     }
 
     #[tokio::test]

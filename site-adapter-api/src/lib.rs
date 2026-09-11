@@ -14,6 +14,70 @@ pub struct SourceLocator {
     pub opaque_payload: String,
 }
 
+/// A short-lived, server-owned browser acquisition instruction returned by
+/// the Site Plugin that owns a `SourceLocator`.  This is deliberately not a
+/// public DTO or a content identity: Core binds operation/session/freshness
+/// and applies R008 before handing the URL to the generic Browser Worker.
+#[derive(Clone, Eq, PartialEq)]
+pub struct BrowserAcquisitionTarget {
+    schema_version: u32,
+    url: Url,
+}
+
+pub const BROWSER_ACQUISITION_TARGET_VERSION: u32 = 1;
+const MAX_ACQUISITION_TARGET_BYTES: usize = 2048;
+
+impl BrowserAcquisitionTarget {
+    /// Construct a bounded target from plugin-owned page interpretation.
+    /// Callers cannot serialize or provide this through an HTTP request.
+    pub fn new(url: Url) -> Result<Self, AdapterError> {
+        let target = Self {
+            schema_version: BROWSER_ACQUISITION_TARGET_VERSION,
+            url,
+        };
+        target.validate()?;
+        Ok(target)
+    }
+
+    pub fn schema_version(&self) -> u32 {
+        self.schema_version
+    }
+
+    /// Runtime-only access for Core's R008-bound operation; never persist or
+    /// include this value in durable evidence.
+    pub fn url(&self) -> &Url {
+        &self.url
+    }
+
+    fn validate(&self) -> Result<(), AdapterError> {
+        let rendered = self.url.as_str();
+        if self.schema_version != BROWSER_ACQUISITION_TARGET_VERSION
+            || !matches!(self.url.scheme(), "http" | "https")
+            || self.url.username() != ""
+            || self.url.password().is_some()
+            || self.url.fragment().is_some()
+            || self.url.host().is_none()
+            || rendered.is_empty()
+            || rendered.len() > MAX_ACQUISITION_TARGET_BYTES
+            || rendered.chars().any(char::is_control)
+            || contains_secret_marker(rendered)
+        {
+            return Err(AdapterError::InvalidAcquisitionTarget);
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for BrowserAcquisitionTarget {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BrowserAcquisitionTarget")
+            .field("schema_version", &self.schema_version)
+            .field("url", &"<redacted>")
+            .finish()
+    }
+}
+
 /// Version of the generic, redacted handoff emitted by a Site Browser Worker.
 /// Concrete sites interpret these facts in their own plugin; the worker never
 /// needs to know what a candidate means for a particular site.
@@ -648,6 +712,8 @@ pub enum AdapterError {
     DuplicatePlugin,
     PluginNotFound,
     UnsupportedNavigation,
+    UnsupportedAcquisition,
+    InvalidAcquisitionTarget,
     InvalidNavigation,
     InvalidObservation,
     AccessRequired,
@@ -683,6 +749,16 @@ pub trait SiteAdapter: Send + Sync {
         _context: ResolveContext<'_>,
     ) -> Result<ResolvedMedia, AdapterError> {
         self.resolve(locator)
+    }
+
+    /// Return a plugin-owned browser acquisition target for an opaque
+    /// locator. This is intentionally separate from collection navigation;
+    /// legacy/direct adapters retain the default no-target behavior.
+    fn browser_acquisition_target(
+        &self,
+        _locator: &SourceLocator,
+    ) -> Result<Option<BrowserAcquisitionTarget>, AdapterError> {
+        Ok(None)
     }
 
     /// Return opaque neighbouring locators.  Adapters that do not expose a
@@ -775,6 +851,26 @@ impl SiteAdapterRegistry {
         Ok(media)
     }
 
+    /// Ask only the adapter that owns `locator` for its browser acquisition
+    /// target. Ownership and target bounds are validated before Core receives
+    /// the runtime-only URL.
+    pub fn browser_acquisition_target(
+        &self,
+        locator: &SourceLocator,
+    ) -> Result<Option<BrowserAcquisitionTarget>, AdapterError> {
+        let adapter = self
+            .adapters
+            .iter()
+            .find(|adapter| adapter.plugin_id() == locator.plugin_id)
+            .ok_or(AdapterError::PluginNotFound)?;
+        validate_acquisition_locator_ownership(adapter.as_ref(), locator)?;
+        let target = adapter.browser_acquisition_target(locator)?;
+        if let Some(target) = target.as_ref() {
+            target.validate()?;
+        }
+        Ok(target)
+    }
+
     /// Route navigation by the owning plugin identity, never by registration
     /// order or caller-selected destination plugin.
     pub fn navigation(&self, locator: &SourceLocator) -> Result<NavigationContext, AdapterError> {
@@ -827,6 +923,27 @@ fn validate_navigation(
         .flatten()
     {
         validate_locator_ownership(adapter, locator)?;
+    }
+    Ok(())
+}
+
+fn validate_acquisition_locator_ownership(
+    adapter: &dyn SiteAdapter,
+    locator: &SourceLocator,
+) -> Result<(), AdapterError> {
+    if locator.site_id != adapter.site_id() || locator.plugin_id != adapter.plugin_id() {
+        return Err(AdapterError::InvalidLocatorOwnership);
+    }
+    if locator.locator_version == 0
+        || locator.site_id.is_empty()
+        || locator.plugin_id.is_empty()
+        || locator.site_id.len() > MAX_LOCATOR_FIELD_BYTES
+        || locator.plugin_id.len() > MAX_LOCATOR_FIELD_BYTES
+        || locator.opaque_payload.is_empty()
+        || locator.opaque_payload.len() > MAX_OPAQUE_PAYLOAD_BYTES
+        || locator.opaque_payload.chars().any(char::is_control)
+    {
+        return Err(AdapterError::UnsupportedLocator);
     }
     Ok(())
 }
@@ -979,6 +1096,115 @@ mod tests {
         assert_eq!(
             registry.navigation(&locator("legacy", "fake", "current")),
             Err(AdapterError::UnsupportedNavigation)
+        );
+    }
+
+    #[test]
+    fn acquisition_target_is_bounded_and_debug_redacts_transport() {
+        let target = BrowserAcquisitionTarget::new(
+            Url::parse("https://example.test/watch?p=2").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(target.schema_version(), BROWSER_ACQUISITION_TARGET_VERSION);
+        assert_eq!(target.url().as_str(), "https://example.test/watch?p=2");
+        assert!(!format!("{target:?}").contains("watch?p=2"));
+        assert_eq!(
+            BrowserAcquisitionTarget::new(
+                Url::parse("https://user:password@example.test/watch").unwrap()
+            ),
+            Err(AdapterError::InvalidAcquisitionTarget)
+        );
+        assert_eq!(
+            BrowserAcquisitionTarget::new(
+                Url::parse("https://example.test/watch?token=secret").unwrap()
+            ),
+            Err(AdapterError::InvalidAcquisitionTarget)
+        );
+        assert_eq!(
+            BrowserAcquisitionTarget::new(Url::parse("ftp://example.test/watch").unwrap()),
+            Err(AdapterError::InvalidAcquisitionTarget)
+        );
+        let oversized = format!("https://example.test/{}", "x".repeat(2048));
+        assert_eq!(
+            BrowserAcquisitionTarget::new(Url::parse(&oversized).unwrap()),
+            Err(AdapterError::InvalidAcquisitionTarget)
+        );
+    }
+
+    struct AcquisitionFake {
+        plugin: &'static str,
+        target: Option<BrowserAcquisitionTarget>,
+    }
+
+    impl SiteAdapter for AcquisitionFake {
+        fn site_id(&self) -> &'static str {
+            "acquisition-site"
+        }
+
+        fn plugin_id(&self) -> &'static str {
+            self.plugin
+        }
+
+        fn recognize(&self, _input: &str) -> Result<RecognizeResult, AdapterError> {
+            Ok(RecognizeResult {
+                matched: false,
+                site_id: self.site_id().into(),
+                plugin_id: self.plugin_id().into(),
+                priority: 1,
+                locator: None,
+            })
+        }
+
+        fn resolve(&self, _locator: &SourceLocator) -> Result<ResolvedMedia, AdapterError> {
+            Err(AdapterError::UnsupportedLocator)
+        }
+
+        fn browser_acquisition_target(
+            &self,
+            _locator: &SourceLocator,
+        ) -> Result<Option<BrowserAcquisitionTarget>, AdapterError> {
+            Ok(self.target.clone())
+        }
+    }
+
+    #[test]
+    fn acquisition_target_routes_by_locator_owner_and_legacy_defaults_none() {
+        let target = BrowserAcquisitionTarget::new(
+            Url::parse("https://example.test/plugin-owned").unwrap(),
+        )
+        .unwrap();
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(AcquisitionFake {
+                plugin: "owner",
+                target: Some(target.clone()),
+            }))
+            .unwrap();
+        assert_eq!(
+            registry
+                .browser_acquisition_target(&locator("owner", "acquisition-site", "opaque"))
+                .unwrap(),
+            Some(target)
+        );
+        assert_eq!(
+            registry.browser_acquisition_target(&locator("foreign", "acquisition-site", "opaque")),
+            Err(AdapterError::PluginNotFound)
+        );
+        assert_eq!(
+            registry.browser_acquisition_target(&SourceLocator {
+                locator_version: 0,
+                ..locator("owner", "acquisition-site", "opaque")
+            }),
+            Err(AdapterError::UnsupportedLocator)
+        );
+
+        let mut legacy = SiteAdapterRegistry::default();
+        legacy.register(Arc::new(Fake("legacy", 1))).unwrap();
+        assert_eq!(
+            legacy
+                .browser_acquisition_target(&locator("legacy", "fake", "opaque"))
+                .unwrap(),
+            None
         );
     }
 
