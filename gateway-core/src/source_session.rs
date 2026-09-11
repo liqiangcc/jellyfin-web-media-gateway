@@ -5,23 +5,28 @@
 //! registration/liveness stays behind `DisplaySessionService`; Playback
 //! authority stays behind `ControlService`.
 
-use crate::browser::BrowserObservationHandoff;
+use crate::browser::{
+    BrowserNavigationRequest, BrowserObservationHandoff, BrowserWorker, R008NavigationPolicy,
+};
 use crate::control::{
     ControlCommandError, ControlCommandRequest, ControlCommandResponse, ControlService,
     NavigationStart,
 };
 use crate::display_session::{DisplaySessionError, DisplaySessionService};
 use crate::playback::{Command, CommandError, NavigationTicket};
-use crate::{Binding, EgressScope, GatewayError, GatewayService};
+use crate::{Binding, EgressPolicy, EgressScope, GatewayError, GatewayService};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use site_adapter_api::{
     AdapterError, MediaProtection, NavigationDirection, ResolveContext, ResolvedMedia,
-    SiteAdapterRegistry, StreamProtocol,
+    SiteAdapterRegistry, SourceLocator, StreamProtocol,
 };
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
 use std::time::Duration;
+use tokio::sync::Notify;
 use uuid::Uuid;
 
 const MAX_REQUEST_ID_BYTES: usize = 128;
@@ -108,10 +113,121 @@ struct CreationRecord {
     outcome: CreationOutcome,
 }
 
+#[derive(Default)]
+struct CreationSlotState {
+    in_flight: bool,
+}
+
+/// A request-id reservation shared by synchronous and asynchronous creation
+/// entry points.  Async callers wait through `Notify` without holding a
+/// synchronous mutex guard across an await; the synchronous path uses the
+/// matching Condvar.
+struct CreationSlot {
+    state: Mutex<CreationSlotState>,
+    condvar: Condvar,
+    notify: Notify,
+    #[cfg(test)]
+    waiter_count: AtomicUsize,
+    #[cfg(test)]
+    waiter_notify: Notify,
+}
+
+impl CreationSlot {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(CreationSlotState::default()),
+            condvar: Condvar::new(),
+            notify: Notify::new(),
+            #[cfg(test)]
+            waiter_count: AtomicUsize::new(0),
+            #[cfg(test)]
+            waiter_notify: Notify::new(),
+        }
+    }
+
+    async fn acquire_async(self: &Arc<Self>) -> CreationPermit {
+        loop {
+            let mut notified = self.notify.notified();
+            notified.enable();
+            let (notified, _waiter) = {
+                let mut state = self.state.lock().expect("source creation slot poisoned");
+                if !state.in_flight {
+                    state.in_flight = true;
+                    return CreationPermit {
+                        slot: Arc::clone(self),
+                    };
+                }
+                #[cfg(test)]
+                let waiter = {
+                    self.waiter_count.fetch_add(1, Ordering::SeqCst);
+                    self.waiter_notify.notify_waiters();
+                    CreationWaiter {
+                        slot: Arc::clone(self),
+                    }
+                };
+                #[cfg(not(test))]
+                let waiter = ();
+                (notified, waiter)
+            };
+            notified.await;
+        }
+    }
+
+    fn acquire_sync(self: &Arc<Self>) -> CreationPermit {
+        let mut state = self.state.lock().expect("source creation slot poisoned");
+        while state.in_flight {
+            state = self
+                .condvar
+                .wait(state)
+                .expect("source creation slot poisoned");
+        }
+        state.in_flight = true;
+        CreationPermit {
+            slot: Arc::clone(self),
+        }
+    }
+}
+
+#[cfg(test)]
+struct CreationWaiter {
+    slot: Arc<CreationSlot>,
+}
+
+#[cfg(test)]
+impl Drop for CreationWaiter {
+    fn drop(&mut self) {
+        self.slot.waiter_count.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+struct CreationPermit {
+    slot: Arc<CreationSlot>,
+}
+
+impl Drop for CreationPermit {
+    fn drop(&mut self) {
+        let mut state = self
+            .slot
+            .state
+            .lock()
+            .expect("source creation slot poisoned");
+        state.in_flight = false;
+        drop(state);
+        self.slot.condvar.notify_one();
+        self.slot.notify.notify_waiters();
+    }
+}
+
+struct PreparedResolution {
+    locator: SourceLocator,
+    media: Option<ResolvedMedia>,
+}
+
 #[derive(Clone)]
 pub(crate) struct SourceSessionService {
     registry: Arc<SiteAdapterRegistry>,
     creations: Arc<Mutex<HashMap<String, CreationRecord>>>,
+    creation_slots: Arc<Mutex<HashMap<String, Weak<CreationSlot>>>>,
     media_views: Arc<RwLock<HashMap<String, SessionMediaView>>>,
 }
 
@@ -120,6 +236,7 @@ impl SourceSessionService {
         Self {
             registry,
             creations: Arc::new(Mutex::new(HashMap::new())),
+            creation_slots: Arc::new(Mutex::new(HashMap::new())),
             media_views: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -168,6 +285,122 @@ impl SourceSessionService {
         media_views.insert(view.session_id.clone(), view);
     }
 
+    fn creation_slot(&self, request_id: &str) -> Result<Arc<CreationSlot>, CreationOutcome> {
+        let mut slots = self
+            .creation_slots
+            .lock()
+            .expect("source creation slots poisoned");
+        slots.retain(|_, slot| slot.strong_count() != 0);
+        if let Some(slot) = slots.get(request_id).and_then(Weak::upgrade) {
+            return Ok(slot);
+        }
+        if slots.len() >= MAX_CREATION_RECORDS {
+            return Err(creation_store_full());
+        }
+        let slot = Arc::new(CreationSlot::new());
+        slots.insert(request_id.to_owned(), Arc::downgrade(&slot));
+        Ok(slot)
+    }
+
+    #[cfg(test)]
+    async fn wait_creation_waiters(&self, request_id: &str, expected: usize) {
+        let slot = {
+            let slots = self
+                .creation_slots
+                .lock()
+                .expect("source creation slots poisoned");
+            slots
+                .get(request_id)
+                .and_then(Weak::upgrade)
+                .expect("creation reservation should be active")
+        };
+        loop {
+            let mut notified = slot.waiter_notify.notified();
+            notified.enable();
+            if slot.waiter_count.load(Ordering::SeqCst) >= expected {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    #[cfg(test)]
+    fn creation_slot_count(&self) -> usize {
+        let mut slots = self
+            .creation_slots
+            .lock()
+            .expect("source creation slots poisoned");
+        slots.retain(|_, slot| slot.strong_count() != 0);
+        slots.len()
+    }
+
+    fn check_creation_record(
+        &self,
+        request: &CreateSessionRequest,
+        fingerprint: &CreationFingerprint,
+    ) -> Result<(), CreationOutcome> {
+        let creations = self.creations.lock().expect("source creations poisoned");
+        if let Some(record) = creations.get(&request.request_id) {
+            if record.fingerprint == *fingerprint {
+                return Err(record.outcome.clone());
+            }
+            return Err(creation_request_id_mismatch());
+        }
+        if creations.len() >= MAX_CREATION_RECORDS {
+            return Err(creation_store_full());
+        }
+        Ok(())
+    }
+
+    fn record_creation(
+        &self,
+        request_id: String,
+        fingerprint: CreationFingerprint,
+        outcome: CreationOutcome,
+    ) -> CreationOutcome {
+        let mut creations = self.creations.lock().expect("source creations poisoned");
+        creations.insert(
+            request_id,
+            CreationRecord {
+                fingerprint,
+                outcome: outcome.clone(),
+            },
+        );
+        outcome
+    }
+
+    fn reserve_sync(
+        &self,
+        request: &CreateSessionRequest,
+    ) -> Result<(CreationPermit, CreationFingerprint), CreationOutcome> {
+        let fingerprint = CreationFingerprint {
+            source: request.source.clone(),
+            display_id: request.display_id.clone(),
+        };
+        let slot = self.creation_slot(&request.request_id)?;
+        let permit = slot.acquire_sync();
+        if let Err(outcome) = self.check_creation_record(request, &fingerprint) {
+            return Err(outcome);
+        }
+        Ok((permit, fingerprint))
+    }
+
+    async fn reserve_async(
+        &self,
+        request: &CreateSessionRequest,
+    ) -> Result<(CreationPermit, CreationFingerprint), CreationOutcome> {
+        let fingerprint = CreationFingerprint {
+            source: request.source.clone(),
+            display_id: request.display_id.clone(),
+        };
+        let slot = self.creation_slot(&request.request_id)?;
+        let permit = slot.acquire_async().await;
+        if let Err(outcome) = self.check_creation_record(request, &fingerprint) {
+            return Err(outcome);
+        }
+        Ok((permit, fingerprint))
+    }
+
     pub(crate) fn create(
         &self,
         gateway: &GatewayService,
@@ -182,6 +415,141 @@ impl SourceSessionService {
             request,
             ResolveContext::default(),
         )
+    }
+
+    /// Resolve a public source through the generic Browser Worker before
+    /// entering the normal SourceSession publication path.  The worker owns
+    /// the observation and server-side media ledger; HTTP callers provide only
+    /// the opaque source selector and display identity.  Adapters without a
+    /// browser navigation contract retain the ordinary direct-resolution path.
+    pub(crate) async fn create_public_browser<W: BrowserWorker + 'static>(
+        &self,
+        gateway: &GatewayService,
+        control: &ControlService,
+        displays: &DisplaySessionService,
+        request: CreateSessionRequest,
+        worker: &W,
+        egress: EgressPolicy,
+    ) -> CreationOutcome {
+        if let Err(error) = validate_request(&request) {
+            return CreationOutcome::Failure {
+                status: axum::http::StatusCode::BAD_REQUEST,
+                error,
+            };
+        }
+
+        let (permit, fingerprint) = match self.reserve_async(&request).await {
+            Ok(reservation) => reservation,
+            Err(outcome) => return outcome,
+        };
+        let outcome = self
+            .create_public_browser_fresh(
+                gateway,
+                control,
+                displays,
+                request.clone(),
+                worker,
+                egress,
+            )
+            .await;
+        let outcome = self.record_creation(request.request_id, fingerprint, outcome);
+        drop(permit);
+        outcome
+    }
+
+    async fn create_public_browser_fresh<W: BrowserWorker + 'static>(
+        &self,
+        gateway: &GatewayService,
+        control: &ControlService,
+        displays: &DisplaySessionService,
+        request: CreateSessionRequest,
+        worker: &W,
+        egress: EgressPolicy,
+    ) -> CreationOutcome {
+        let locator = match self.registry.recognize(&request.source) {
+            Ok(locator) => locator,
+            Err(error) => return failure_for_adapter(error),
+        };
+        // Keep direct adapters on their existing path.  A browser is needed
+        // only when the owning adapter explicitly reports that observation is
+        // required; Core does not interpret any site-specific URL semantics.
+        match self.registry.resolve(&locator) {
+            Ok(media) => {
+                return self.create_fresh(
+                    gateway,
+                    control,
+                    displays,
+                    &request,
+                    ResolveContext::default(),
+                    PreparedResolution {
+                        locator,
+                        media: Some(media),
+                    },
+                );
+            }
+            Err(AdapterError::ObservationRequired) => {}
+            Err(error) => return failure_for_adapter(error),
+        }
+        let acquisition_target = match self.registry.browser_acquisition_target(&locator) {
+            Ok(Some(target)) => target,
+            Ok(None) | Err(AdapterError::UnsupportedAcquisition) => {
+                return public_browser_failure("SOURCE_BROWSER_ACQUISITION_UNAVAILABLE");
+            }
+            Err(_) => return public_browser_failure("SOURCE_BROWSER_ACQUISITION_INVALID"),
+        };
+
+        let session = match worker
+            .open_session(crate::browser::BrowserAuthMode::Passive)
+            .await
+        {
+            Ok(session) => session,
+            Err(_) => return public_browser_failure("SOURCE_BROWSER_UNAVAILABLE"),
+        };
+        // The owning plugin supplied this target. Core does not parse or
+        // reproduce site URL/BVID/part semantics; R008 authorizes the target
+        // before the generic worker consumes it.
+        let operation = BrowserNavigationRequest::new(acquisition_target.url().clone());
+        drop(acquisition_target);
+        let operation_id = operation.operation_id();
+        let result = worker
+            .navigate(
+                session.id(),
+                operation,
+                &R008NavigationPolicy::public_web(egress),
+            )
+            .await;
+        if result.is_err() {
+            let _ = worker.close(session.id());
+            return public_browser_failure("SOURCE_BROWSER_NAVIGATION_FAILED");
+        }
+
+        let handoff = BrowserObservationHandoff::take_from_worker(
+            worker,
+            session.id(),
+            operation_id,
+            locator,
+            crate::browser::BROWSER_HANDOFF_TTL,
+        );
+        let outcome = match handoff {
+            Ok(Some(handoff)) => self.create_fresh(
+                gateway,
+                control,
+                displays,
+                &request,
+                ResolveContext {
+                    browser_observation: Some(handoff.observation()),
+                    server_observation: Some(handoff.server_observation()),
+                    authenticated_session: None,
+                },
+                PreparedResolution {
+                    locator,
+                    media: None,
+                },
+            ),
+            Ok(None) | Err(_) => public_browser_failure("SOURCE_BROWSER_OBSERVATION_UNAVAILABLE"),
+        };
+        let _ = worker.close(session.id());
+        outcome
     }
 
     /// Server-side acquisition handoff used by the browser/plugin integration.
@@ -203,41 +571,26 @@ impl SourceSessionService {
             };
         }
 
-        let fingerprint = CreationFingerprint {
-            source: request.source.clone(),
-            display_id: request.display_id.clone(),
+        let (permit, fingerprint) = match self.reserve_sync(&request) {
+            Ok(reservation) => reservation,
+            Err(outcome) => return outcome,
         };
-        let mut creations = self.creations.lock().expect("source creations poisoned");
-        if let Some(record) = creations.get(&request.request_id) {
-            if record.fingerprint == fingerprint {
-                return record.outcome.clone();
-            }
-            return CreationOutcome::Failure {
-                status: axum::http::StatusCode::CONFLICT,
-                error: CreateSessionErrorResponse {
-                    code: "CREATE_REQUEST_ID_MISMATCH",
-                    message: "request_id was reused with a different creation input",
+        let outcome = match self.registry.recognize(&request.source) {
+            Ok(locator) => self.create_fresh(
+                gateway,
+                control,
+                displays,
+                &request,
+                context,
+                PreparedResolution {
+                    locator,
+                    media: None,
                 },
-            };
-        }
-        if creations.len() >= MAX_CREATION_RECORDS {
-            return CreationOutcome::Failure {
-                status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                error: CreateSessionErrorResponse {
-                    code: "CREATE_REQUEST_STORE_FULL",
-                    message: "session creation idempotency capacity is temporarily full",
-                },
-            };
-        }
-
-        let outcome = self.create_fresh(gateway, control, displays, &request, context);
-        creations.insert(
-            request.request_id,
-            CreationRecord {
-                fingerprint,
-                outcome: outcome.clone(),
-            },
-        );
+            ),
+            Err(error) => failure_for_adapter(error),
+        };
+        let outcome = self.record_creation(request.request_id, fingerprint, outcome);
+        drop(permit);
         outcome
     }
 
@@ -300,18 +653,19 @@ impl SourceSessionService {
         displays: &DisplaySessionService,
         request: &CreateSessionRequest,
         context: ResolveContext<'_>,
+        prepared: PreparedResolution,
     ) -> CreationOutcome {
         if let Err(error) = displays.validate_live_selector(&request.display_id) {
             return failure_for_display(error);
         }
 
-        let locator = match self.registry.recognize(&request.source) {
-            Ok(locator) => locator,
-            Err(error) => return failure_for_adapter(error),
-        };
-        let media = match self.registry.resolve_with_context(&locator, context) {
-            Ok(media) => media,
-            Err(error) => return failure_for_adapter(error),
+        let PreparedResolution { locator, media } = prepared;
+        let media = match media {
+            Some(media) => media,
+            None => match self.registry.resolve_with_context(&locator, context) {
+                Ok(media) => media,
+                Err(error) => return failure_for_adapter(error),
+            },
         };
         if let Err(error) = validate_media(&media) {
             return CreationOutcome::Failure {
@@ -773,6 +1127,36 @@ fn failure_for_adapter(error: AdapterError) -> CreationOutcome {
     }
 }
 
+fn public_browser_failure(code: &'static str) -> CreationOutcome {
+    CreationOutcome::Failure {
+        status: axum::http::StatusCode::BAD_GATEWAY,
+        error: CreateSessionErrorResponse {
+            code,
+            message: "public source browser acquisition did not produce a usable observation",
+        },
+    }
+}
+
+fn creation_request_id_mismatch() -> CreationOutcome {
+    CreationOutcome::Failure {
+        status: axum::http::StatusCode::CONFLICT,
+        error: CreateSessionErrorResponse {
+            code: "CREATE_REQUEST_ID_MISMATCH",
+            message: "request_id was reused with a different creation input",
+        },
+    }
+}
+
+fn creation_store_full() -> CreationOutcome {
+    CreationOutcome::Failure {
+        status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        error: CreateSessionErrorResponse {
+            code: "CREATE_REQUEST_STORE_FULL",
+            message: "session creation idempotency capacity is temporarily full",
+        },
+    }
+}
+
 fn authenticated_failure(
     status: axum::http::StatusCode,
     code: &'static str,
@@ -814,6 +1198,7 @@ fn internal_failure() -> CreationOutcome {
 mod tests {
     use super::{SessionMediaView, SourceSessionService};
     use crate::GatewayService;
+    use crate::browser::{BrowserObservationPayload, FakeBrowserWorker};
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode, header};
     use generic_direct::GenericDirectAdapter;
@@ -825,7 +1210,8 @@ mod tests {
         StreamProtocol,
     };
     use std::collections::BTreeMap;
-    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
     use tower::ServiceExt;
     use url::Url;
 
@@ -860,7 +1246,9 @@ mod tests {
         }
 
         fn recognize(&self, input: &str) -> Result<RecognizeResult, AdapterError> {
-            let matched = input.starts_with("fixture://");
+            let matched = input.starts_with("fixture://")
+                || (matches!(self.mode, FixtureMode::Observation)
+                    && input.starts_with("https://www.example.com/fixture"));
             if !matched {
                 return Ok(RecognizeResult {
                     matched: false,
@@ -894,39 +1282,18 @@ mod tests {
         }
 
         fn resolve(&self, _locator: &SourceLocator) -> Result<ResolvedMedia, AdapterError> {
-            let stream = |id: &str, headers: BTreeMap<String, String>| ResolvedStream {
-                id: id.into(),
-                protocol: StreamProtocol::HttpFile,
-                url: Url::parse("https://example.test/fixture.mp4").unwrap(),
-                public_headers: headers,
-                upstream_access_ref: None,
-            };
-            let streams = match self.mode {
-                FixtureMode::Rollback => vec![
-                    stream("primary", BTreeMap::new()),
-                    stream(
-                        "broken",
-                        BTreeMap::from([("invalid header".into(), "value".into())]),
-                    ),
-                ],
-                FixtureMode::SecretReference => vec![ResolvedStream {
-                    upstream_access_ref: Some("fixture-secret-ref".into()),
-                    ..stream("primary", BTreeMap::new())
-                }],
-                _ => vec![stream("primary", BTreeMap::new())],
-            };
-            Ok(ResolvedMedia::legacy(
-                "fixture media",
-                self.site_id(),
-                streams,
-                vec![],
-                MediaProtection::Clear,
-            ))
+            if matches!(
+                self.mode,
+                FixtureMode::Observation | FixtureMode::AuthenticatedObservation
+            ) {
+                return Err(AdapterError::ObservationRequired);
+            }
+            fixture_resolved_media(self)
         }
 
         fn resolve_with_context(
             &self,
-            locator: &SourceLocator,
+            _locator: &SourceLocator,
             context: ResolveContext<'_>,
         ) -> Result<ResolvedMedia, AdapterError> {
             if matches!(
@@ -941,7 +1308,22 @@ mod tests {
             {
                 return Err(AdapterError::AccessRequired);
             }
-            self.resolve(locator)
+            fixture_resolved_media(self)
+        }
+
+        fn browser_acquisition_target(
+            &self,
+            _locator: &SourceLocator,
+        ) -> Result<Option<site_adapter_api::BrowserAcquisitionTarget>, AdapterError> {
+            if matches!(self.mode, FixtureMode::Observation) {
+                return Ok(Some(
+                    site_adapter_api::BrowserAcquisitionTarget::new(
+                        Url::parse("https://www.example.com/fixture").unwrap(),
+                    )
+                    .unwrap(),
+                ));
+            }
+            Ok(None)
         }
 
         fn navigation(
@@ -966,6 +1348,127 @@ mod tests {
                 collection_id: Some("fixture-collection".into()),
                 current_index: Some(1),
             })
+        }
+    }
+
+    struct CountingAdapter {
+        inner: FixtureAdapter,
+        resolve_count: Arc<AtomicUsize>,
+        context_count: Arc<AtomicUsize>,
+        target_count: Arc<AtomicUsize>,
+    }
+
+    impl SiteAdapter for CountingAdapter {
+        fn site_id(&self) -> &'static str {
+            self.inner.site_id()
+        }
+
+        fn plugin_id(&self) -> &'static str {
+            self.inner.plugin_id()
+        }
+
+        fn recognize(&self, input: &str) -> Result<RecognizeResult, AdapterError> {
+            self.inner.recognize(input)
+        }
+
+        fn resolve(&self, locator: &SourceLocator) -> Result<ResolvedMedia, AdapterError> {
+            self.resolve_count.fetch_add(1, Ordering::SeqCst);
+            self.inner.resolve(locator)
+        }
+
+        fn resolve_with_context(
+            &self,
+            locator: &SourceLocator,
+            context: ResolveContext<'_>,
+        ) -> Result<ResolvedMedia, AdapterError> {
+            self.context_count.fetch_add(1, Ordering::SeqCst);
+            self.inner.resolve_with_context(locator, context)
+        }
+
+        fn browser_acquisition_target(
+            &self,
+            locator: &SourceLocator,
+        ) -> Result<Option<site_adapter_api::BrowserAcquisitionTarget>, AdapterError> {
+            self.target_count.fetch_add(1, Ordering::SeqCst);
+            self.inner.browser_acquisition_target(locator)
+        }
+
+        fn navigation(
+            &self,
+            locator: &SourceLocator,
+        ) -> Result<site_adapter_api::NavigationContext, AdapterError> {
+            self.inner.navigation(locator)
+        }
+    }
+
+    fn fixture_resolved_media(adapter: &FixtureAdapter) -> Result<ResolvedMedia, AdapterError> {
+        let stream = |id: &str, headers: BTreeMap<String, String>| ResolvedStream {
+            id: id.into(),
+            protocol: StreamProtocol::HttpFile,
+            url: Url::parse("https://example.test/fixture.mp4").unwrap(),
+            public_headers: headers,
+            upstream_access_ref: None,
+        };
+        let streams = match adapter.mode {
+            FixtureMode::Rollback => vec![
+                stream("primary", BTreeMap::new()),
+                stream(
+                    "broken",
+                    BTreeMap::from([("invalid header".into(), "value".into())]),
+                ),
+            ],
+            FixtureMode::SecretReference => vec![ResolvedStream {
+                upstream_access_ref: Some("fixture-secret-ref".into()),
+                ..stream("primary", BTreeMap::new())
+            }],
+            _ => vec![stream("primary", BTreeMap::new())],
+        };
+        Ok(ResolvedMedia::legacy(
+            "fixture media",
+            adapter.site_id(),
+            streams,
+            vec![],
+            MediaProtection::Clear,
+        ))
+    }
+
+    struct TraceAdapter {
+        inner: FixtureAdapter,
+        seen: Arc<Mutex<Vec<SourceLocator>>>,
+    }
+
+    impl SiteAdapter for TraceAdapter {
+        fn site_id(&self) -> &'static str {
+            self.inner.site_id()
+        }
+
+        fn plugin_id(&self) -> &'static str {
+            self.inner.plugin_id()
+        }
+
+        fn recognize(&self, input: &str) -> Result<RecognizeResult, AdapterError> {
+            self.inner.recognize(input)
+        }
+
+        fn resolve(&self, locator: &SourceLocator) -> Result<ResolvedMedia, AdapterError> {
+            self.inner.resolve(locator)
+        }
+
+        fn resolve_with_context(
+            &self,
+            locator: &SourceLocator,
+            context: ResolveContext<'_>,
+        ) -> Result<ResolvedMedia, AdapterError> {
+            self.seen.lock().unwrap().push(locator.clone());
+            self.inner.resolve_with_context(locator, context)
+        }
+
+        fn browser_acquisition_target(
+            &self,
+            locator: &SourceLocator,
+        ) -> Result<Option<site_adapter_api::BrowserAcquisitionTarget>, AdapterError> {
+            self.seen.lock().unwrap().push(locator.clone());
+            self.inner.browser_acquisition_target(locator)
         }
     }
 
@@ -1151,6 +1654,392 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(command.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn public_browser_seam_consumes_server_owned_observation_before_publication() {
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(FixtureAdapter {
+                plugin: "fixture-public-observation",
+                priority: 100,
+                mode: FixtureMode::Observation,
+            }))
+            .unwrap();
+        let service = service_with_registry(registry);
+        register_display(&service).await;
+
+        let worker = FakeBrowserWorker::new();
+        let (observation, server_observation) = observation_context();
+        worker
+            .set_next_observation_for_next_session(BrowserObservationPayload {
+                operation_id: crate::browser::BrowserOperationId::from_value(1),
+                observation,
+                server_observation,
+            })
+            .unwrap();
+
+        let outcome = service
+            .create_public_session_with_worker(
+                super::CreateSessionRequest {
+                    request_id: "public-observation-1".into(),
+                    source: "https://www.example.com/fixture".into(),
+                    display_id: "display-a".into(),
+                },
+                &worker,
+            )
+            .await;
+        let super::CreationOutcome::Success(response) = outcome else {
+            panic!("public browser observation did not publish a session");
+        };
+        assert_eq!(response.source_site, "fixture");
+        assert_eq!(response.media.streams.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn public_browser_reuses_same_locator_for_target_and_observation_resolution() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(TraceAdapter {
+                inner: FixtureAdapter {
+                    plugin: "fixture-trace",
+                    priority: 100,
+                    mode: FixtureMode::Observation,
+                },
+                seen: seen.clone(),
+            }))
+            .unwrap();
+        let service = service_with_registry(registry);
+        register_display(&service).await;
+        let worker = FakeBrowserWorker::new();
+        let (observation, server_observation) = observation_context();
+        worker
+            .set_next_observation_for_next_session(BrowserObservationPayload {
+                operation_id: crate::browser::BrowserOperationId::from_value(1),
+                observation,
+                server_observation,
+            })
+            .unwrap();
+
+        let outcome = service
+            .create_public_session_with_worker(
+                super::CreateSessionRequest {
+                    request_id: "public-same-locator".into(),
+                    source: "https://www.example.com/fixture".into(),
+                    display_id: "display-a".into(),
+                },
+                &worker,
+            )
+            .await;
+        assert!(matches!(outcome, super::CreationOutcome::Success(_)));
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0], seen[1]);
+        assert_eq!(seen[0].plugin_id, "fixture-trace");
+    }
+
+    #[tokio::test]
+    async fn public_direct_creation_resolves_once_and_replay_is_side_effect_free() {
+        let resolve_count = Arc::new(AtomicUsize::new(0));
+        let context_count = Arc::new(AtomicUsize::new(0));
+        let target_count = Arc::new(AtomicUsize::new(0));
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(CountingAdapter {
+                inner: FixtureAdapter {
+                    plugin: "fixture-count-direct",
+                    priority: 100,
+                    mode: FixtureMode::Navigation,
+                },
+                resolve_count: resolve_count.clone(),
+                context_count,
+                target_count,
+            }))
+            .unwrap();
+        let service = service_with_registry(registry);
+        register_display(&service).await;
+        let worker = FakeBrowserWorker::new();
+        let request = super::CreateSessionRequest {
+            request_id: "direct-idempotent".into(),
+            source: "fixture://direct".into(),
+            display_id: "display-a".into(),
+        };
+        let first = service
+            .create_public_session_with_worker(request.clone(), &worker)
+            .await;
+        let replay = service
+            .create_public_session_with_worker(request, &worker)
+            .await;
+        assert!(matches!(first, super::CreationOutcome::Success(_)));
+        assert!(matches!(replay, super::CreationOutcome::Success(_)));
+        assert_eq!(resolve_count.load(Ordering::SeqCst), 1);
+        assert_eq!(worker.counts(), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn public_observation_replay_does_not_reacquire_or_navigate() {
+        let resolve_count = Arc::new(AtomicUsize::new(0));
+        let context_count = Arc::new(AtomicUsize::new(0));
+        let target_count = Arc::new(AtomicUsize::new(0));
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(CountingAdapter {
+                inner: FixtureAdapter {
+                    plugin: "fixture-count-observation",
+                    priority: 100,
+                    mode: FixtureMode::Observation,
+                },
+                resolve_count,
+                context_count: context_count.clone(),
+                target_count: target_count.clone(),
+            }))
+            .unwrap();
+        let service = service_with_registry(registry);
+        register_display(&service).await;
+        let worker = FakeBrowserWorker::new();
+        let (observation, server_observation) = observation_context();
+        worker
+            .set_next_observation_for_next_session(BrowserObservationPayload {
+                operation_id: crate::browser::BrowserOperationId::from_value(1),
+                observation,
+                server_observation,
+            })
+            .unwrap();
+        let request = super::CreateSessionRequest {
+            request_id: "observation-idempotent".into(),
+            source: "https://www.example.com/fixture".into(),
+            display_id: "display-a".into(),
+        };
+        let first = service
+            .create_public_session_with_worker(request.clone(), &worker)
+            .await;
+        let replay = service
+            .create_public_session_with_worker(request, &worker)
+            .await;
+        assert!(matches!(first, super::CreationOutcome::Success(_)));
+        assert!(matches!(replay, super::CreationOutcome::Success(_)));
+        assert_eq!(target_count.load(Ordering::SeqCst), 1);
+        assert_eq!(context_count.load(Ordering::SeqCst), 1);
+        assert_eq!(worker.counts(), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn concurrent_public_identical_creates_share_one_acquisition() {
+        let resolve_count = Arc::new(AtomicUsize::new(0));
+        let context_count = Arc::new(AtomicUsize::new(0));
+        let target_count = Arc::new(AtomicUsize::new(0));
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(CountingAdapter {
+                inner: FixtureAdapter {
+                    plugin: "fixture-concurrent-observation",
+                    priority: 100,
+                    mode: FixtureMode::Observation,
+                },
+                resolve_count,
+                context_count,
+                target_count: target_count.clone(),
+            }))
+            .unwrap();
+        let service = service_with_registry(registry);
+        register_display(&service).await;
+        let worker = Arc::new(FakeBrowserWorker::new());
+        worker.arm_navigation_gate();
+        let (observation, server_observation) = observation_context();
+        worker
+            .set_next_observation_for_next_session(BrowserObservationPayload {
+                operation_id: crate::browser::BrowserOperationId::from_value(1),
+                observation,
+                server_observation,
+            })
+            .unwrap();
+        let request = super::CreateSessionRequest {
+            request_id: "observation-concurrent".into(),
+            source: "https://www.example.com/fixture".into(),
+            display_id: "display-a".into(),
+        };
+        let first_future =
+            service.create_public_session_with_worker(request.clone(), worker.as_ref());
+        tokio::pin!(first_future);
+        tokio::select! {
+            _ = &mut first_future => panic!("first acquisition should be gated"),
+            _ = worker.wait_navigation_started() => {}
+        }
+        let second_future =
+            service.create_public_session_with_worker(request.clone(), worker.as_ref());
+        tokio::pin!(second_future);
+        tokio::select! {
+            _ = &mut second_future => panic!("second acquisition should wait for reservation"),
+            _ = service.wait_creation_waiters("observation-concurrent", 1) => {}
+        }
+        let third_future = service.create_public_session_with_worker(request, worker.as_ref());
+        tokio::pin!(third_future);
+        tokio::select! {
+            _ = &mut third_future => panic!("third acquisition should wait for reservation"),
+            _ = service.wait_creation_waiters("observation-concurrent", 2) => {}
+        }
+        worker.release_navigation();
+        let (first, second, third) = tokio::join!(first_future, second_future, third_future);
+        let (
+            super::CreationOutcome::Success(first),
+            super::CreationOutcome::Success(second),
+            super::CreationOutcome::Success(third),
+        ) = (first, second, third)
+        else {
+            panic!("concurrent identical creates must all succeed");
+        };
+        assert_eq!(first.session_id, second.session_id);
+        assert_eq!(first.session_id, third.session_id);
+        assert_eq!(target_count.load(Ordering::SeqCst), 1);
+        assert_eq!(worker.counts(), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn cancelled_public_creation_does_not_leave_orphan_reservation() {
+        let resolve_count = Arc::new(AtomicUsize::new(0));
+        let context_count = Arc::new(AtomicUsize::new(0));
+        let target_count = Arc::new(AtomicUsize::new(0));
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(CountingAdapter {
+                inner: FixtureAdapter {
+                    plugin: "fixture-cancelled-observation",
+                    priority: 100,
+                    mode: FixtureMode::Observation,
+                },
+                resolve_count,
+                context_count,
+                target_count: target_count.clone(),
+            }))
+            .unwrap();
+        let service = service_with_registry(registry);
+        register_display(&service).await;
+        let worker = FakeBrowserWorker::new();
+        worker.arm_navigation_gate();
+        let (observation, server_observation) = observation_context();
+        worker
+            .set_next_observation_for_next_session(BrowserObservationPayload {
+                operation_id: crate::browser::BrowserOperationId::from_value(1),
+                observation,
+                server_observation,
+            })
+            .unwrap();
+        let request = super::CreateSessionRequest {
+            request_id: "cancelled-reservation".into(),
+            source: "https://www.example.com/fixture".into(),
+            display_id: "display-a".into(),
+        };
+        {
+            let first_future = service.create_public_session_with_worker(request.clone(), &worker);
+            tokio::pin!(first_future);
+            tokio::select! {
+                _ = &mut first_future => panic!("cancelled acquisition should be gated"),
+                _ = worker.wait_navigation_started() => {}
+            }
+        }
+        worker.release_navigation();
+        assert_eq!(service.creation_slot_count(), 0);
+
+        let (observation, server_observation) = observation_context();
+        worker
+            .set_next_observation_for_next_session(BrowserObservationPayload {
+                operation_id: crate::browser::BrowserOperationId::from_value(2),
+                observation,
+                server_observation,
+            })
+            .unwrap();
+        let retry = service
+            .create_public_session_with_worker(request, &worker)
+            .await;
+        assert!(matches!(retry, super::CreationOutcome::Success(_)));
+        assert_eq!(target_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn mismatched_request_id_fails_without_new_acquisition() {
+        let resolve_count = Arc::new(AtomicUsize::new(0));
+        let context_count = Arc::new(AtomicUsize::new(0));
+        let target_count = Arc::new(AtomicUsize::new(0));
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(CountingAdapter {
+                inner: FixtureAdapter {
+                    plugin: "fixture-mismatch-observation",
+                    priority: 100,
+                    mode: FixtureMode::Observation,
+                },
+                resolve_count,
+                context_count,
+                target_count: target_count.clone(),
+            }))
+            .unwrap();
+        let service = service_with_registry(registry);
+        register_display(&service).await;
+        let worker = FakeBrowserWorker::new();
+        let (observation, server_observation) = observation_context();
+        worker
+            .set_next_observation_for_next_session(BrowserObservationPayload {
+                operation_id: crate::browser::BrowserOperationId::from_value(1),
+                observation,
+                server_observation,
+            })
+            .unwrap();
+        let first = service
+            .create_public_session_with_worker(
+                super::CreateSessionRequest {
+                    request_id: "mismatch-id".into(),
+                    source: "https://www.example.com/fixture".into(),
+                    display_id: "display-a".into(),
+                },
+                &worker,
+            )
+            .await;
+        assert!(matches!(first, super::CreationOutcome::Success(_)));
+        let mismatch = service
+            .create_public_session_with_worker(
+                super::CreateSessionRequest {
+                    request_id: "mismatch-id".into(),
+                    source: "https://www.example.com/fixture?different=1".into(),
+                    display_id: "display-a".into(),
+                },
+                &worker,
+            )
+            .await;
+        let super::CreationOutcome::Failure { error, .. } = mismatch else {
+            panic!("mismatched request_id must fail");
+        };
+        assert_eq!(error.code, "CREATE_REQUEST_ID_MISMATCH");
+        assert_eq!(target_count.load(Ordering::SeqCst), 1);
+        assert_eq!(worker.counts(), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn observation_required_without_plugin_target_fails_closed() {
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(FixtureAdapter {
+                plugin: "fixture-auth-only",
+                priority: 10,
+                mode: FixtureMode::AuthenticatedObservation,
+            }))
+            .unwrap();
+        let service = service_with_registry(registry);
+        register_display(&service).await;
+        let outcome = service
+            .create_public_session_with_worker(
+                super::CreateSessionRequest {
+                    request_id: "public-no-target".into(),
+                    source: "fixture://auth-only".into(),
+                    display_id: "display-a".into(),
+                },
+                &FakeBrowserWorker::new(),
+            )
+            .await;
+        let super::CreationOutcome::Failure { error, .. } = outcome else {
+            panic!("observation without an acquisition target must fail closed");
+        };
+        assert_eq!(error.code, "SOURCE_BROWSER_ACQUISITION_UNAVAILABLE");
     }
 
     #[tokio::test]

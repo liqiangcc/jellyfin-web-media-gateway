@@ -8,9 +8,9 @@
 use serde::{Deserialize, Serialize};
 use site_adapter_api::{
     AdapterError, AuthenticatedSessionHandoff, BROWSER_AUTH_OBSERVATION_VERSION,
-    BrowserAuthObservation, BrowserAuthState, BrowserExpiryHint, BrowserMediaKind,
-    BrowserObservation, BrowserStatusClass, MediaProtection, MediaShapeV1, MediaTrack,
-    MediaTrackKind, NavigationContext, RecognizeResult, ResolveContext, ResolvedMedia,
+    BrowserAcquisitionTarget, BrowserAuthObservation, BrowserAuthState, BrowserExpiryHint,
+    BrowserMediaKind, BrowserObservation, BrowserStatusClass, MediaProtection, MediaShapeV1,
+    MediaTrack, MediaTrackKind, NavigationContext, RecognizeResult, ResolveContext, ResolvedMedia,
     ResolvedStream, ServerOwnedObservation, SiteAdapter, SiteAdapterRegistry, SourceLocator,
     StreamProtocol, validate_browser_auth_observation, validate_browser_observation,
     validate_server_owned_observation,
@@ -409,6 +409,17 @@ impl SiteAdapter for BilibiliAdapter {
             protection: MediaProtection::Clear,
             shape,
         })
+    }
+
+    fn browser_acquisition_target(
+        &self,
+        locator: &SourceLocator,
+    ) -> Result<Option<BrowserAcquisitionTarget>, AdapterError> {
+        // Page/BVID/part interpretation stays in this plugin. Core receives
+        // only the bounded transport instruction after ownership validation.
+        Ok(Some(BrowserAcquisitionTarget::new(
+            self.page_url(locator)?,
+        )?))
     }
 
     fn navigation(&self, locator: &SourceLocator) -> Result<NavigationContext, AdapterError> {
@@ -822,6 +833,28 @@ mod tests {
             adapter.resolve_observation(&wrong_version, &observation(1, "primary"), &server()),
             Err(AdapterError::UnsupportedLocator)
         );
+    }
+
+    #[test]
+    fn acquisition_target_uses_plugin_owned_locator_part_semantics() {
+        let adapter = BilibiliAdapter;
+        let first = adapter
+            .browser_acquisition_target(&locator(1))
+            .unwrap()
+            .unwrap();
+        let third = adapter
+            .browser_acquisition_target(&locator(3))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            first.url().as_str(),
+            "https://www.bilibili.com/video/BV1xx411c7mD/"
+        );
+        assert_eq!(
+            third.url().as_str(),
+            "https://www.bilibili.com/video/BV1xx411c7mD/?p=3"
+        );
+        assert!(!format!("{third:?}").contains("BV1xx411c7mD"));
     }
 
     #[test]

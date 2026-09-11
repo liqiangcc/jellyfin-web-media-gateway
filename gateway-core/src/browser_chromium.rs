@@ -37,6 +37,43 @@ const DEFAULT_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const BROWSER_START_TIMEOUT: Duration = Duration::from_secs(15);
 const CLOSE_WAIT: Duration = Duration::from_secs(2);
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const MAX_PUBLIC_REQUESTS: u32 = 200;
+const MAX_OBSERVATION_BYTES: u64 = 32 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PublicBrowserLimits {
+    max_requests: u32,
+    max_bytes: u64,
+}
+
+impl PublicBrowserLimits {
+    const fn production() -> Self {
+        Self {
+            max_requests: MAX_PUBLIC_REQUESTS,
+            max_bytes: MAX_OBSERVATION_BYTES,
+        }
+    }
+
+    const fn request_allowed(self, count: u32) -> bool {
+        count <= self.max_requests
+    }
+
+    const fn bytes_allowed(self, bytes: u64) -> bool {
+        bytes <= self.max_bytes
+    }
+}
+
+fn account_received_bytes(
+    limits: Option<PublicBrowserLimits>,
+    current: u64,
+    received: u64,
+) -> Result<u64, BrowserError> {
+    let total = current.saturating_add(received);
+    if limits.is_some_and(|value| !value.bytes_allowed(total)) {
+        return Err(BrowserError::ResourceLimitExceeded);
+    }
+    Ok(total)
+}
 const CHILD_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const CHROMIUM_FIXED_ARGS: &[&str] = &[
     "--headless=new",
@@ -232,6 +269,8 @@ struct ChromiumSession {
     current_page_title: String,
     resources: Vec<BrowserResourceRecord>,
     pending_requests: HashMap<String, PendingRequest>,
+    public_request_count: u32,
+    observation_bytes: u64,
 }
 
 struct PendingRequest {
@@ -252,6 +291,7 @@ type SessionMap = HashMap<BrowserSessionId, SessionHandle>;
 pub struct ChromiumBrowserWorker {
     sessions: Arc<Mutex<SessionMap>>,
     operation_timeout: Duration,
+    limits: Option<PublicBrowserLimits>,
 }
 
 impl Default for ChromiumBrowserWorker {
@@ -265,6 +305,14 @@ impl ChromiumBrowserWorker {
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             operation_timeout: DEFAULT_OPERATION_TIMEOUT,
+            limits: None,
+        }
+    }
+
+    pub fn for_public_observation() -> Self {
+        Self {
+            limits: Some(PublicBrowserLimits::production()),
+            ..Self::new()
         }
     }
 
@@ -552,6 +600,10 @@ impl ChromiumBrowserWorker {
                 .await
                 .is_err()
             || cdp
+                .command("Network.enable", Value::Null, DEFAULT_OPERATION_TIMEOUT)
+                .await
+                .is_err()
+            || cdp
                 .command(
                     "Fetch.enable",
                     json!({"patterns": [
@@ -583,6 +635,8 @@ impl ChromiumBrowserWorker {
             current_page_title: String::new(),
             resources: Vec::new(),
             pending_requests: HashMap::new(),
+            public_request_count: 0,
+            observation_bytes: 0,
         };
         Self::push_event(
             &mut state,
@@ -637,6 +691,12 @@ impl ChromiumBrowserWorker {
                     };
                     if policy.authorize_url(&url).await.is_err() {
                         return Self::deny_request(state, request_id, self.operation_timeout).await;
+                    }
+                    if let Some(limits) = self.limits {
+                        state.public_request_count = state.public_request_count.saturating_add(1);
+                        if !limits.request_allowed(state.public_request_count) {
+                            return Err(BrowserError::ResourceLimitExceeded);
+                        }
                     }
                     state
                         .pending_requests
@@ -698,6 +758,18 @@ impl ChromiumBrowserWorker {
                     .is_err()
                 {
                     return Err(BrowserError::WorkerUnavailable);
+                }
+            }
+            "Network.loadingFinished" => {
+                if let Some(limits) = self.limits
+                    && let Some(received) = params
+                        .get("encodedDataLength")
+                        .and_then(Value::as_f64)
+                        .filter(|value| value.is_finite() && *value >= 0.0)
+                        .map(|value| value as u64)
+                {
+                    state.observation_bytes =
+                        account_received_bytes(Some(limits), state.observation_bytes, received)?;
                 }
             }
             "Page.frameNavigated" => {
@@ -785,6 +857,8 @@ impl ChromiumBrowserWorker {
                 let mut state = handle.lock().await;
                 state.resources.clear();
                 state.pending_requests.clear();
+                state.public_request_count = 0;
+                state.observation_bytes = 0;
                 Self::push_event(
                     &mut state,
                     BrowserEventKind::OperationCancelled {
@@ -1250,6 +1324,10 @@ impl BrowserWorker for ChromiumBrowserWorker {
                     },
                 );
                 Self::push_event(&mut state, BrowserEventKind::Loading);
+                state.resources.clear();
+                state.pending_requests.clear();
+                state.public_request_count = 0;
+                state.observation_bytes = 0;
                 Arc::clone(&state.cdp)
             };
             self.navigate_and_wait(session, handle, cdp, &request, policy)
@@ -1491,6 +1569,32 @@ mod tests {
     use crate::browser::{BrowserCommand, PanelFeature, PanelPermissions};
     use crate::{EgressPolicy, EgressScope};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn public_observation_limits_are_opt_in_and_fail_closed() {
+        let limits = PublicBrowserLimits::production();
+        assert!(limits.request_allowed(MAX_PUBLIC_REQUESTS));
+        assert!(!limits.request_allowed(MAX_PUBLIC_REQUESTS + 1));
+        assert!(limits.bytes_allowed(MAX_OBSERVATION_BYTES));
+        assert!(!limits.bytes_allowed(MAX_OBSERVATION_BYTES + 1));
+        assert!(ChromiumBrowserWorker::new().limits.is_none());
+        assert_eq!(
+            ChromiumBrowserWorker::for_public_observation().limits,
+            Some(limits)
+        );
+        assert_eq!(
+            account_received_bytes(Some(limits), 0, MAX_OBSERVATION_BYTES),
+            Ok(MAX_OBSERVATION_BYTES)
+        );
+        assert_eq!(
+            account_received_bytes(Some(limits), MAX_OBSERVATION_BYTES - 1, 2),
+            Err(BrowserError::ResourceLimitExceeded)
+        );
+        assert_eq!(
+            account_received_bytes(None, MAX_OBSERVATION_BYTES, u64::MAX),
+            Ok(u64::MAX)
+        );
+    }
 
     async fn fixture() -> (tokio::task::JoinHandle<()>, Url) {
         let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))

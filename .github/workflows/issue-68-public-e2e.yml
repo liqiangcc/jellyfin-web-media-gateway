@@ -1,0 +1,311 @@
+name: issue-68-public-bilibili-e2e
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'gateway-core/**'
+      - 'gateway-runtime/**'
+      - 'plugins/bilibili/**'
+      - 'experiments/issue-68-public-e2e/**'
+      - '.github/workflows/issue-68-public-e2e.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: issue-68-public-e2e-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
+
+env:
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  j1:
+    name: J1 hosted workspace/plugin/security regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: Run J1 hosted checks
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace --all-targets
+
+  j2:
+    name: J2 hosted product composition and authority seam
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Run deterministic public composition tests
+        run: |
+          cargo test -p gateway-core --lib source_session::tests::public_browser_seam_consumes_server_owned_observation_before_publication -- --exact --nocapture
+          cargo test -p gateway-core --lib source_session::tests::browser_observation_handoff_enters_source_session_without_secret_projection -- --exact --nocapture
+          cargo test -p gateway-runtime --lib public_config_does_not_require_account_material -- --exact --nocapture
+
+  package:
+    name: J4a hosted exact Candidate package and consumer runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build exact runtime package on hosted runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release -p gateway-runtime --bin gateway-server
+          package="$RUNNER_TEMP/issue-68-package"
+          mkdir -p "$package/consumer"
+          cp target/release/gateway-server "$package/gateway-server"
+          cp experiments/bilibili-browser-probe/package.json experiments/bilibili-browser-probe/package-lock.json "$package/consumer/"
+          cp experiments/issue-68-public-e2e/consumer.mjs "$package/consumer/"
+          npm ci --ignore-scripts --no-audit --no-fund --prefix "$package/consumer"
+          browser_kind=""
+          browser_path=""
+          for candidate in google-chrome-stable google-chrome chromium chromium-browser; do
+            if command -v "$candidate" >/dev/null 2>&1; then browser_kind="$candidate"; browser_path="$(command -v "$candidate")"; break; fi
+          done
+          test -n "$browser_path"
+          browser_version="$($browser_path --version | head -1)"
+          chmod 0555 "$package/gateway-server"
+          (cd "$package" && find . -type f ! -name files.sha256 -print0 | sort -z | xargs -0 sha256sum) > "$package/files.sha256"
+          {
+            echo "candidate_sha=$CANDIDATE_SHA"
+            echo "platform=x86_64-unknown-linux-gnu"
+            echo "runtime=github-hosted-ubuntu-latest"
+            echo "gateway_binary=gateway-server"
+            echo "bilibili_plugin=compiled-in:gateway-server"
+            echo "browser_worker=compiled-in:gateway-server"
+            echo "consumer_harness=consumer/consumer.mjs"
+            echo "playwright_runtime=consumer/node_modules/playwright-core"
+            echo "browser_kind=$browser_kind"
+            echo "browser_version=$browser_version"
+          } > "$package/manifest.txt"
+          tar -C "$package" -czf "$RUNNER_TEMP/issue-68-package.tar.gz" .
+          sha256sum "$RUNNER_TEMP/issue-68-package.tar.gz" > "$RUNNER_TEMP/issue-68-package.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-68-public-package-${{ env.CANDIDATE_SHA }}
+          path: |
+            ${{ runner.temp }}/issue-68-package.tar.gz
+            ${{ runner.temp }}/issue-68-package.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  j4:
+    name: J4 hosted evidence/security/cleanup and admission guards
+    needs: [j1, j2, package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - name: Assert architecture and redaction boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          assert_no_match() {
+            local grep_flags='-REn'
+            if [ "${1:-}" = '--ignore-case' ]; then
+              grep_flags='-REni'
+              shift
+            fi
+            local pattern="$1"
+            shift
+            local output rc
+            output="$(mktemp)"
+            if grep "$grep_flags" -- "$pattern" "$@" >"$output" 2>&1; then
+              cat "$output"
+              rm -f "$output"
+              echo "forbidden match found" >&2
+              return 1
+            else
+              rc=$?
+              cat "$output" >&2
+              rm -f "$output"
+              if [ "$rc" -eq 1 ]; then
+                return 0
+              fi
+              echo "scanner failed with exit code $rc" >&2
+              return "$rc"
+            fi
+          }
+          assert_match() {
+            local pattern="$1"
+            shift
+            local rc
+            if grep -REn -- "$pattern" "$@"; then
+              return 0
+            else
+              rc=$?
+              echo "required match scanner failed with exit code $rc" >&2
+              return "$rc"
+            fi
+          }
+          production_browser_source="$RUNNER_TEMP/browser-production-source.txt"
+          awk '/#\[cfg\(test\)\]/{exit} {print}' gateway-core/src/browser_chromium.rs >"$production_browser_source"
+          assert_no_match '--no-sandbox|--disable-setuid-sandbox|--disable-namespace-sandbox|remote-debugging-address=0\.0\.0\.0' "$production_browser_source"
+          assert_no_match --ignore-case 'Cookie:|Authorization:|sessdata|GITHUB_TOKEN|GH_TOKEN' gateway-core/src/source_session.rs gateway-runtime/src experiments/issue-68-public-e2e
+          assert_match 'create_public_browser|BrowserObservationHandoff|R008NavigationPolicy::public_web' gateway-core/src/source_session.rs
+          assert_match 'bilibili_account_ref: Option|bilibili_account_label: Option' gateway-runtime/src/lib.rs
+          assert_no_match 'gateway\.log|session\.json|https://www\.bilibili\.com/video/BV14V411W7r5' experiments/issue-68-public-e2e
+      - uses: actions/download-artifact@v4
+        with:
+          name: issue-68-public-package-${{ env.CANDIDATE_SHA }}
+          path: ${{ runner.temp }}/package
+      - name: Verify exact Candidate package without compilation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(sha256sum "$RUNNER_TEMP/package/issue-68-package.tar.gz" | awk '{print $1}')" = "$(awk '{print $1}' "$RUNNER_TEMP/package/issue-68-package.tar.gz.sha256")"
+          mkdir "$RUNNER_TEMP/extracted"
+          tar -xzf "$RUNNER_TEMP/package/issue-68-package.tar.gz" -C "$RUNNER_TEMP/extracted"
+          grep -Fx "candidate_sha=$CANDIDATE_SHA" "$RUNNER_TEMP/extracted/manifest.txt"
+          grep -Fx 'platform=x86_64-unknown-linux-gnu' "$RUNNER_TEMP/extracted/manifest.txt"
+          grep -Fx 'runtime=github-hosted-ubuntu-latest' "$RUNNER_TEMP/extracted/manifest.txt"
+          grep -Fx 'bilibili_plugin=compiled-in:gateway-server' "$RUNNER_TEMP/extracted/manifest.txt"
+          grep -Fx 'browser_worker=compiled-in:gateway-server' "$RUNNER_TEMP/extracted/manifest.txt"
+          test -x "$RUNNER_TEMP/extracted/gateway-server"
+          test -f "$RUNNER_TEMP/extracted/consumer/consumer.mjs"
+          test -d "$RUNNER_TEMP/extracted/consumer/node_modules/playwright-core"
+          (cd "$RUNNER_TEMP/extracted" && sha256sum -c files.sha256)
+
+  j3:
+    name: J3 one-shot fresh consumer public journey
+    if: ${{ github.event_name == 'pull_request' && github.event.action == 'ready_for_review' && github.event.pull_request.head.repo.full_name == github.repository }}
+    needs: [j1, j2, j4]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Initialize symbolic J3 evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/public-e2e-evidence"
+          printf '%s\n' '{"selector":"BV14V411W7r5","site":"bilibili","public_source":"frozen-public-no-login-non-drm","stage":"queued","outcome":"running","failure_class":null,"sandbox":{"low_privilege":false,"pid_namespaces":false,"network_namespaces":false,"seccomp_bpf":false,"tsync":false,"no_disable_switches":false},"cleanup":{"browser_closed":false,"bounded_residue_check":false}}' > "$RUNNER_TEMP/public-e2e-evidence/evidence.json"
+      - uses: actions/download-artifact@v4
+        with:
+          name: issue-68-public-package-${{ env.CANDIDATE_SHA }}
+          path: ${{ runner.temp }}/package
+      - name: Admit exact package and system browser
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(sha256sum "$RUNNER_TEMP/package/issue-68-package.tar.gz" | awk '{print $1}')" = "$(awk '{print $1}' "$RUNNER_TEMP/package/issue-68-package.tar.gz.sha256")"
+          mkdir "$RUNNER_TEMP/fresh-consumer"
+          tar -xzf "$RUNNER_TEMP/package/issue-68-package.tar.gz" -C "$RUNNER_TEMP/fresh-consumer"
+          grep -Fx "candidate_sha=$CANDIDATE_SHA" "$RUNNER_TEMP/fresh-consumer/manifest.txt"
+          browser_kind="$(sed -n 's/^browser_kind=//p' "$RUNNER_TEMP/fresh-consumer/manifest.txt")"
+          browser_version="$(sed -n 's/^browser_version=//p' "$RUNNER_TEMP/fresh-consumer/manifest.txt")"
+          browser_path="$(command -v "$browser_kind" || true)"
+          test -x "$browser_path"
+          test "$($browser_path --version | head -1)" = "$browser_version"
+          echo "CHROME_PATH=$browser_path" >> "$GITHUB_ENV"
+          (cd "$RUNNER_TEMP/fresh-consumer" && sha256sum -c files.sha256)
+          jq '.stage="admitted"' "$RUNNER_TEMP/public-e2e-evidence/evidence.json" > "$RUNNER_TEMP/public-e2e-evidence/evidence.tmp"
+          mv "$RUNNER_TEMP/public-e2e-evidence/evidence.tmp" "$RUNNER_TEMP/public-e2e-evidence/evidence.json"
+      - name: Run Gateway and browser under fresh low-privilege identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence_dir="$RUNNER_TEMP/public-e2e-evidence"
+          attempt_tmp="$RUNNER_TEMP/fresh-consumer/tmp"
+          mkdir -p "$evidence_dir" "$attempt_tmp"
+          sudo useradd --create-home --shell /usr/sbin/nologin gateway-verify
+          sudo chown -R gateway-verify:gateway-verify "$RUNNER_TEMP/fresh-consumer" "$evidence_dir"
+          update_stage() {
+            jq --arg stage "$1" '.stage=$stage' "$evidence_dir/evidence.json" > "$evidence_dir/evidence.tmp"
+            mv "$evidence_dir/evidence.tmp" "$evidence_dir/evidence.json"
+          }
+          update_stage server_start
+          cleanup() {
+            rc=$?
+            sudo -u gateway-verify pkill -TERM -f "$RUNNER_TEMP/fresh-consumer/gateway-server" 2>/dev/null || true
+            sudo -u gateway-verify pkill -TERM -f 'chrome|chromium' 2>/dev/null || true
+            residue=0
+            for _ in $(seq 1 30); do
+              if ! pgrep -u gateway-verify -f "$RUNNER_TEMP/fresh-consumer|web-media-gateway-chromium" >/dev/null 2>&1; then break; fi
+              sleep 1
+            done
+            if pgrep -u gateway-verify -f "$RUNNER_TEMP/fresh-consumer|web-media-gateway-chromium" >/dev/null 2>&1; then residue=1; fi
+            sudo userdel --remove gateway-verify >/dev/null 2>&1 || residue=1
+            rm -rf "$RUNNER_TEMP/fresh-consumer"
+            if test -e "$RUNNER_TEMP/fresh-consumer" || test -d /home/gateway-verify; then residue=1; fi
+            jq --argjson clean "$([ "$residue" -eq 0 ] && echo true || echo false)" '.cleanup.bounded_residue_check=$clean' "$evidence_dir/evidence.json" > "$evidence_dir/evidence.tmp"
+            mv "$evidence_dir/evidence.tmp" "$evidence_dir/evidence.json"
+            if test "$residue" -ne 0; then rc=1; fi
+            exit "$rc"
+          }
+          trap cleanup EXIT INT TERM
+          sudo -u gateway-verify env -i PATH="$PATH" HOME=/home/gateway-verify LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            GATEWAY_HTTP_AUTHORITY=http://127.0.0.1:8787 GATEWAY_BIND_ADDR=127.0.0.1 GATEWAY_PORT=8787 \
+            TMPDIR="$attempt_tmp" \
+            setsid "$RUNNER_TEMP/fresh-consumer/gateway-server" >/dev/null 2>&1 &
+          gateway_pid=$!
+          for _ in $(seq 1 30); do curl --fail --silent http://127.0.0.1:8787/healthz >/dev/null && break; sleep 1; done
+          test -n "$gateway_pid"
+          update_stage consumer
+          sudo -u gateway-verify env -i PATH="$PATH" HOME=/home/gateway-verify LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            CHROME_PATH="$CHROME_PATH" BASE_URL=http://127.0.0.1:8787 EVIDENCE_PATH="$evidence_dir/evidence.json" \
+            TMPDIR="$attempt_tmp" \
+            node "$RUNNER_TEMP/fresh-consumer/consumer/consumer.mjs"
+          update_stage complete
+      - name: Finalize symbolic bounded evidence
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/public-e2e-evidence/evidence.json"
+          test -f "$evidence"
+          outcome=failed
+          if test "$JOB_STATUS" = success; then outcome=passed; fi
+          jq --arg outcome "$outcome" '.outcome=$outcome | if .outcome != "passed" and (.failure_class == null) then .failure_class="hosted_bounded_failure" else . end' "$evidence" > "$evidence.tmp"
+          mv "$evidence.tmp" "$evidence"
+      - name: Validate and upload sanitized bounded evidence only
+        if: always()
+        shell: bash
+        run: |
+          if test -f "$RUNNER_TEMP/public-e2e-evidence/evidence.json"; then
+            ! rg -n -i 'https?://|/tmp/|/home/|cookie|authorization|bearer|token|signature|sessdata|lease_token|gateway_path' "$RUNNER_TEMP/public-e2e-evidence/evidence.json"
+            jq -e 'has("selector") and has("sandbox") and has("cleanup")' "$RUNNER_TEMP/public-e2e-evidence/evidence.json"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: issue-68-public-e2e-evidence-${{ env.CANDIDATE_SHA }}
+          path: ${{ runner.temp }}/public-e2e-evidence/evidence.json
+          if-no-files-found: error
+          retention-days: 14
