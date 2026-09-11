@@ -212,6 +212,41 @@ if site == "bilibili" { ... }
 
 它从不直接调用 yt-dlp。
 
+### 4.2.1 Browser Acquisition Target
+
+需要浏览器观察的来源在进入通用 Browser Worker 前，必须先经过拥有该
+`SourceLocator` 的 Site Plugin：
+
+```text
+Control/API source input
+→ SiteAdapterRegistry.recognize
+→ opaque SourceLocator
+→ owning Site Plugin.browser_acquisition_target(locator)
+→ bounded BrowserAcquisitionTarget
+→ Core R008/Egress admission
+→ generic Site Browser Worker
+```
+
+`BrowserAcquisitionTarget` 是由插件从 opaque locator 生成的 server-owned、
+有版本且有界的 acquisition contract。当前公开无登录路径只需要一个由插件
+解释的 HTTP/HTTPS 浏览目标（或等价的版本化 bounded target）。Core 只能校验
+通用结构、绑定 operation/session/locator 并交给 EgressPolicy；它不能读取或
+重建 BVID、part、站点 path/query、私有 API 或 DOM 语义。HTTP caller、Control
+和 Display 不能提交、替换或覆盖 target。
+
+target 不代表网络已经获批。初始目标、每一次 redirect 和每一个后续请求仍由
+中央 R008/EgressPolicy 授权，并继续执行 SSRF、TLS、DNS、timeout 和
+cancellation 约束。target 不携带 Cookie、Authorization、profile、Vault
+material、signed media URL 或 caller-selected headers；未来需要 headers 或
+认证资料时必须走独立的 SiteAccess/Secret 设计。
+
+这项能力与 `SiteAdapter.navigation()` 完全分离。`navigation()` 只提供上一项、
+下一项和 collection context；它不负责取得当前页面，也不改变现有
+previous/next 语义。能直接 `resolve` 的 generic/direct adapter 不启动
+Browser Worker；不支持 acquisition 的 adapter 返回明确的 unsupported/none，
+而不是让 Core 猜测站点 URL。Bilibili adapter 使用自己的 locator/page
+interpretation 生成 target，Core 和 generic Worker 都不复制该规则。
+
 ### 4.3 Site Browser Worker
 
 Site Browser Worker 只负责通用 runtime：
@@ -221,6 +256,10 @@ Site Browser Worker 只负责通用 runtime：
 - 远程画面和输入；
 - navigation/URL/title/browser event；
 - timeout、并发、资源限制。
+
+Worker 只消费已经由 owning Site Plugin 生成的 `BrowserAcquisitionTarget` 和
+Core 授予的 R008 policy。它不理解 Bilibili、BVID、part、站点 URL 规则或
+认证语义。
 
 它不理解 Bilibili/YouTube DOM。
 

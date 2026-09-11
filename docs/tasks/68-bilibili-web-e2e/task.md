@@ -1,6 +1,6 @@
 # Task Contract — BILIBILI-WEB-E2E (Public / No-Login Contract Revision)
 
-> **Contract Revision (2026-09-11):** This package replaces the stale generic-ytdlp-only route. The first product attempt is a public, non-DRM Bilibili video with no account or login. It composes the accepted production Bilibili Site Plugin, generic Browser Worker observation, server-owned media contracts, PlaybackSession, and the generic Web Display path. This revision is a contract/package change only; it does not authorize a live attempt or claim playback.
+> **Contract Revision (2026-09-11, after Attempt 1 blocker):** This package replaces the stale generic-ytdlp-only route and adds the missing generic Site Plugin-owned Browser acquisition target seam. The next implementation attempt remains public, non-DRM Bilibili with no account or login. This revision is a contract/package change only; it does not authorize a live attempt or claim playback.
 
 ## Metadata
 
@@ -8,7 +8,7 @@
 GitHub Issue: #68
 Task ID: BILIBILI-WEB-E2E
 Task kind: combined (implementation seam + real-source functional verification)
-Execution Base: 105b11f702481c55714527cc15d1dc4c9a93c9df
+Execution Base: 3e292663284ea07382e69496627aa5e99eb01d9a
 Final Candidate: n/a until the bounded combined Attempt
 Preferred worker: Codex Cloud, env:cloud
 Required capabilities after publication: github-read-write, repository-static-analysis,
@@ -16,6 +16,22 @@ Required capabilities after publication: github-read-write, repository-static-an
   an explicitly approved ordinary-Linux browser/control route
 Current package state: status:draft, owner-free
 ```
+
+### Attempt 1 blocker and recovery
+
+Attempt 1 was blocked after its focused hosted run and did not consume the live
+public-source budget. The cancelled superseded J3 never started its bounded fresh
+consumer, so no Gateway public session creation or Bilibili source POST occurred.
+The reusable implementation branch remains PR #278 at Candidate
+`e8e214dddb4252bd4869085c7a01c0c1c8e03397` (DRAFT); it must be resumed after this
+contract revision rather than replaced or merged here.
+
+The architectural blocker was a missing generic Site Plugin-owned Browser acquisition
+target contract. `SiteAdapter::navigation()` is the existing previous/next/collection
+capability and is not an acquisition API. Core must not parse the caller's Bilibili
+URL after recognition. Attempt 1's ordinary hosted defects (formatting and the test
+trait import) remain historical implementation evidence and are not reclassified as
+success. This revision defines the API seam; it does not repair or verify PR #278.
 
 The revision extends the accepted ordinary-Linux browser authority from #154 rather than redefining it. Issue #154 was Final Accepted and merged to `main` as `836e220e6ba4e38377a4e40cff677c9549aa7798`; its accepted Control → Gateway `PlaybackSession` → Web Display route, same-origin media, play/pause/seek/stop, refresh/reconnect, stale/error/concurrency/security behavior and Candidate-bound artifact consumption are the baseline for this Task. #68 adds the real public Bilibili source path to that route.
 
@@ -41,8 +57,9 @@ Close one public, no-login product journey for the frozen sample `BV14V411W7r5`,
 ```text
 Control submits the frozen public Bilibili URL
 → SiteAdapterRegistry recognizes a Bilibili SourceLocator
-→ production Bilibili Site Plugin requests generic Browser Worker observation
-→ Browser Worker performs bounded EgressPolicy-governed public-web work
+→ owning Site Plugin produces a BrowserAcquisitionTarget from that locator
+→ Core binds the target to operation/session and admits it through R008/Egress
+→ generic Browser Worker performs the bounded acquisition
 → plugin interprets bounded observation into server-owned ResolvedMedia / MediaShapeV1
 → SourceSession prepares and publishes one PlaybackSession / PlaybackItem
 → direct muxed/HLS delivery, or generic #271 remux delivery for separated A/V
@@ -50,7 +67,10 @@ Control submits the frozen public Bilibili URL
 → bounded play / pause / seek / stop / refresh / reconnect
 ```
 
-The Browser Worker is generic infrastructure. Bilibili URL, page, media-selection and observation interpretation remain in `plugins/bilibili`; no Bilibili knowledge is added to Core or the generic worker. The Gateway remains the only `PlaybackSession` authority.
+The Browser Worker is generic infrastructure. Bilibili URL, page, part, media-selection
+and observation interpretation remain in `plugins/bilibili`; no Bilibili knowledge is
+added to Core or the generic worker. The Gateway remains the only `PlaybackSession`
+authority.
 
 ## Frozen public source scope
 
@@ -72,9 +92,10 @@ The sample may be replaced only by a live contract/evidence finding that makes i
 
 1. Control submits only the public source input through the existing session API. It cannot submit `ResolvedMedia`, `SourceLocator`, an upstream URL, a header, a media generation, or an Egress decision.
 2. `SiteAdapterRegistry` recognizes the input and routes it to the production Bilibili Site Plugin. Generic yt-dlp is not a Core fallback and is not the sole route of this revision.
-3. The plugin owns Bilibili source semantics and requests a generic, bounded Browser Worker operation. The worker emits only versioned, size-limited, redacted observations and server-owned handoff references.
-4. Every browser request and redirect is admitted by the central `EgressPolicy`. The public route cannot use an open proxy, private-network exception, arbitrary caller authority, fingerprint bypass, CAPTCHA bypass, DRM bypass, paywall bypass or region/access-control bypass.
-5. The plugin interprets the generic observation and produces a server-owned `ResolvedMedia`/`MediaShapeV1`. Public headers remain free of Cookie, Authorization, bearer, profile and other Secret material.
+3. The owning plugin derives a server-owned, bounded `BrowserAcquisitionTarget` from the opaque locator. HTTP callers, Control and Display cannot provide or override it. The existing collection `navigation()` method remains separate and unchanged.
+4. Core validates only the generic target shape, binds it to the original locator/operation/session and admits it through R008/Egress. Every initial target, redirect and request is re-authorized; the target never widens SSRF, TLS, host or access-control authority.
+5. The generic Browser Worker consumes only the plugin-produced target and generic policy. It emits only versioned, size-limited, redacted observations and server-owned handoff references; it does not interpret Bilibili identifiers or page rules.
+6. The plugin interprets the generic observation and produces a server-owned `ResolvedMedia`/`MediaShapeV1`. Public headers remain free of Cookie, Authorization, bearer, profile and other Secret material.
 
 ### Playback and delivery
 
@@ -101,6 +122,7 @@ The sample may be replaced only by a live contract/evidence finding that makes i
 - Live Bilibili requests, tx-node access, target browser activity, or target traffic from this docs revision. This package remains `status:draft` and does not itself authorize a live attempt.
 - Changes to #246. #246 stays `status:blocked`, owner-free, and retains its separate written-authorization/disposable-account/approved-channel gate.
 - Generic Browser Worker site knowledge, Bilibili branches in Core, a second Secret owner, open proxy behavior, or weakening R008/Egress/SSRF/Vault/PlaybackSession/#271 authority.
+- Core-side parsing or reconstruction of a Bilibili acquisition URL, BVID, part, site path/query or private API rule.
 - Relabelling old diagnostics as success or repeating an old navigation probe without new product-path evidence.
 - Local/tx-node build, test, package or install. Required build/test/package evidence is GitHub-hosted Actions; an approved ordinary-Linux host may only run a later verified artifact and bounded live route after Publication Gate.
 
@@ -116,7 +138,8 @@ A later Coordinator may revise the source contract only when new evidence establ
 P1 — Public source authority: the frozen input enters through the production
      Bilibili Site Plugin and existing session API; no raw media/URL injection.
 P2 — Generic observation boundary: Browser Worker facts are generic, bounded,
-     redacted and EgressPolicy-governed; Bilibili interpretation stays in the plugin.
+     redacted and EgressPolicy-governed; the owning plugin supplies the bounded
+     BrowserAcquisitionTarget and retains Bilibili interpretation.
 P3 — Media contract: the plugin result is server-owned ResolvedMedia/MediaShapeV1;
      direct muxed/HLS and separated A/V through generic #271 are handled without
      leaking upstream URL/header/Secret material.
@@ -141,9 +164,19 @@ The Publication Gate freezes the starting identity, not a Worker-produced implem
 3. After `status:ready`, one bounded combined Attempt starts from the frozen Execution Base. If the public route needs implementation, the Worker creates one focused Candidate/PR from that base. If no implementation is needed, the final Candidate is the Execution Base itself.
 4. Before the Worker reports, all required hosted J1/J2/J4 verification, Candidate-bound package/manifest/digest/fresh-consumer admission, and the real public J3 must target the same final Candidate SHA. No mixed-base or moving-main evidence is accepted.
 
+For the next implementation attempt, the final Candidate must consume this
+`BrowserAcquisitionTarget` contract and reuse PR #278/its branch. The docs revision
+must be merged and read back before #68 can be republished through the Publication
+Gate; this package does not start Attempt 2 or authorize live traffic.
+
 ## Publication Gate (must remain unsatisfied in this revision PR)
 
 `#68` stays `status:draft`, `env:cloud`, owner-free until the Coordinator independently reads back and records all of the following. A Worker cannot claim an Attempt before the gate is complete.
+
+The gate must also verify that the revised generic acquisition-target API is present
+on current `main` and that PR #278 is the only reusable implementation Candidate for
+the next Attempt. Attempt 1's blocker and negative live-budget audit remain append-only
+history.
 
 1. **Package and dependency read-back:** live Issue, this `task.md`, `prompt.md`, canonical docs and accepted authorities are mutually consistent. The Coordinator checks #154's Final Acceptance/merge baseline, direct source authorities #237/#240, direct media authorities #268/#271, and the composition root where #255 is actually needed against current `main`. Auth-specific surfaces #243/#248/#251/#257/#259 are regression inputs only, not public-route dependencies; #246 remains separate and blocked.
 2. **Execution Base and freshness classification:** freeze the exact accepted `main`/integration identity from which the Attempt will start and classify its movement using `NONE`, `UNRELATED`, `INTEGRATION_OVERLAP`, `SEMANTIC_AUTHORITY` or `CONTRACT_INVALIDATING`. Record whether existing hosted evidence is fresh for this base. This Gate does not require a final Worker Candidate or PR; moving `main` is never an execution identity.

@@ -66,6 +66,7 @@ SiteAdapter
 ├── manifest()
 ├── recognize(input)
 ├── resolve(locator, access)
+├── browser_acquisition_target(locator)
 ├── navigation(locator, access)
 ├── account_probe(account_ref, access)
 ├── browser_interpret(event, access)
@@ -109,7 +110,57 @@ NavigationContext
 
 Core 只知道有“上一项/下一项”，不知道插件如何推导。
 
-### 3.4 browser_interpret
+### 3.4 browser_acquisition_target
+
+浏览器 acquisition 是独立于 collection navigation 的 SiteAdapter 能力。概念
+类型如下：
+
+```text
+BrowserAcquisitionTarget
+├── schema_version
+└── bounded navigation target       # 当前 public scope 为 HTTP/HTTPS page target
+```
+
+概念方法：
+
+```text
+browser_acquisition_target(
+    locator: &SourceLocator,
+) -> Result<Option<BrowserAcquisitionTarget>, AdapterError>
+```
+
+方法只能由拥有该 locator 的 Site Plugin 实现。Registry 先验证 locator 的
+site/plugin/version ownership，再调用该方法；HTTP caller、Control、Display
+和外部 JSON 不能提供或覆盖返回值。`Ok(None)` 表示该 adapter 不需要浏览器
+acquisition（例如可以直接 resolve）；不支持该能力的 adapter 可以返回稳定的
+`UnsupportedAcquisition` 错误。直接 resolve 成功时 Core 不启动 Browser Worker。
+
+target 是 server-owned、版本化、有界的 transport contract，不是网络授权。对
+当前公开无登录 scope，target 只携带插件解释后的 HTTP/HTTPS 浏览目标或等价
+的 bounded representation；不得携带 Cookie、Authorization、profile、Vault
+material、signed media URL、upstream media URL 或 caller-selected headers。未来
+需要 headers 或认证资料时必须通过独立的 SiteAccess/Secret contract，不得在
+该 target 中隐式扩展。
+
+Core 对 target 只做通用 validation 和 authority binding：target schema 必须受
+支持、目标必须是允许的 HTTP/HTTPS 形式、无 userinfo/控制字符/超限字段，并且
+必须绑定原始 `SourceLocator`、operation、Browser session 和 freshness window。
+Core 不解析 BVID、part、站点 path/query、私有 API 或 DOM 语义。target 通过
+R008/EgressPolicy 后才能交给 generic Browser Worker；初始 target、每一次
+redirect 和每一个请求都必须重新做 Egress/SSRF/DNS/TLS/timeout/cancellation
+检查。target 本身不能扩大 host authority 或绕过访问控制。
+
+Worker 只消费 target 和 Core 授予的 generic R008 policy，不解释 site_id、BVID、
+part 或站点规则。target、完整 URL/query 和任何 server-only reference 不得写入
+durable log/evidence；证据只能保留 `target_present`、site/plugin identity
+class、status class、bounded counters、operation/session binding result 等
+符号事实。
+
+该能力不改变 `navigation(locator)`：后者仍只表达 previous/next/collection
+关系，返回的 locator 仍由 owning plugin 解释。Bilibili adapter 后续从自己的
+opaque locator/page interpretation 生成 acquisition target；Core 不复刻规则。
+
+### 3.5 browser_interpret
 
 `Site Browser Worker` 只产生通用浏览器事件/快照；具体插件负责把它解释成站点语义。
 
