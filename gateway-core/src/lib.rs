@@ -817,18 +817,6 @@ impl GatewayService {
         self.state.control.clone()
     }
 
-    pub(crate) fn create_session(
-        &self,
-        request: CreateSessionRequest,
-    ) -> source_session::CreationOutcome {
-        self.state.source_sessions.create(
-            self,
-            &self.state.control,
-            &self.state.display_sessions,
-            request,
-        )
-    }
-
     pub(crate) async fn create_public_session(
         &self,
         request: CreateSessionRequest,

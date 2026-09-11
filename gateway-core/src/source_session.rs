@@ -917,9 +917,7 @@ fn internal_failure() -> CreationOutcome {
 mod tests {
     use super::{SessionMediaView, SourceSessionService};
     use crate::GatewayService;
-    use crate::browser::{
-        BrowserAuthMode, BrowserObservationPayload, BrowserWorker, FakeBrowserWorker,
-    };
+    use crate::browser::{BrowserObservationPayload, FakeBrowserWorker};
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode, header};
     use generic_direct::GenericDirectAdapter;

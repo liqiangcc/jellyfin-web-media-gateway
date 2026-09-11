@@ -1036,26 +1036,6 @@ impl FakeBrowserWorker {
             .len()
     }
 
-    /// Test-only server-owned observation injection. The operation id is
-    /// rebound to the next navigation by the fake worker; production workers
-    /// populate the same ledger from real browser network events.
-    #[cfg(test)]
-    pub(crate) fn set_next_observation(
-        &self,
-        session: &BrowserSessionId,
-        payload: BrowserObservationPayload,
-    ) -> Result<(), BrowserError> {
-        validate_browser_observation(&payload.observation)
-            .map_err(|_| BrowserError::InvalidInput)?;
-        validate_server_owned_observation(&payload.server_observation)
-            .map_err(|_| BrowserError::InvalidInput)?;
-        let mut state = self.lock_state()?;
-        let session_state = Self::session_mut(&mut state, session)?;
-        Self::ensure_open(session_state)?;
-        session_state.next_observation = Some(payload);
-        Ok(())
-    }
-
     /// Test-only injection for a SourceSession that owns session creation;
     /// the payload is attached to the next opened fake session.
     #[cfg(test)]
