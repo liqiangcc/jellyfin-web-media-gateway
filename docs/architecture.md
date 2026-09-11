@@ -212,6 +212,55 @@ if site == "bilibili" { ... }
 
 它从不直接调用 yt-dlp。
 
+### 4.2.1 Browser Acquisition Target
+
+需要浏览器观察的来源在进入通用 Browser Worker 前，必须先经过拥有该
+`SourceLocator` 的 Site Plugin：
+
+```text
+Control/API source input
+→ SiteAdapterRegistry.recognize
+→ opaque SourceLocator
+→ owning Site Plugin.browser_acquisition_target(locator)
+→ bounded BrowserAcquisitionTarget
+→ Core R008/Egress admission
+→ generic Site Browser Worker
+```
+
+`BrowserAcquisitionTarget` 是由插件从 opaque locator 生成的 server-owned、
+有版本且有界的 acquisition contract。当前公开无登录路径只需要一个由插件
+解释的 HTTP/HTTPS 浏览目标（或等价的版本化 bounded target）。Core 只能校验
+通用结构、绑定 operation/session/locator 并交给 EgressPolicy；它不能读取或
+重建 BVID、part、站点 path/query、私有 API 或 DOM 语义。HTTP caller、Control
+和 Display 不能提交、替换或覆盖 target。
+
+target 只是短期、operation-scoped 的 acquisition transport instruction。它不是
+`SourceLocator`、内容身份、`ResolvedMedia`、上游媒体 URL 或媒体 capability，
+不能替换 locator 的 identity/freshness 语义；观察和 server-owned handoff 完成
+后必须丢弃。短期 page/CDN URL 永远不能成为 PlaybackItem 的内容身份。
+
+target 不代表网络已经获批。初始目标、每一次 redirect 和每一个后续请求仍由
+中央 R008/EgressPolicy 授权，并继续执行 SSRF、TLS、DNS、timeout 和
+cancellation 约束。target 不携带 Cookie、Authorization、profile、Vault
+material、signed media URL 或 caller-selected headers；未来需要 headers 或
+认证资料时必须走独立的 SiteAccess/Secret 设计。
+
+这项能力与 `SiteAdapter.navigation()` 完全分离。`navigation()` 只提供上一项、
+下一项和 collection context；它不负责取得当前页面，也不改变现有
+previous/next 语义。能直接 `resolve` 的 generic/direct adapter 不启动
+Browser Worker；不支持 acquisition 的 adapter 返回明确的 unsupported/none，
+而不是让 Core 猜测站点 URL。Bilibili adapter 使用自己的 locator/page
+interpretation 生成 target，Core 和 generic Worker 都不复制该规则。
+
+通用编排顺序固定为：先 `recognize(input)` 得到 opaque locator，再按普通
+resolution contract 尝试 direct `resolve(locator, access)`；只有返回稳定的
+`ObservationRequired`（或等价的明确 acquisition-needed 结果）时，Registry
+才向 owning plugin 请求 `browser_acquisition_target(locator)`。`Ok(None)` 或
+`UnsupportedAcquisition` 不能让 Core 猜测或复制 caller input URL；如果观察是
+必需的，应返回有界、稳定的 acquisition-unavailable failure。观察完成后必须
+使用同一个 locator 调用 `resolve_with_context(locator, observation, handoff)`。
+这条路径没有 generic-ytdlp fallback，也没有 Auth Mode/account fallback。
+
 ### 4.3 Site Browser Worker
 
 Site Browser Worker 只负责通用 runtime：
@@ -221,6 +270,10 @@ Site Browser Worker 只负责通用 runtime：
 - 远程画面和输入；
 - navigation/URL/title/browser event；
 - timeout、并发、资源限制。
+
+Worker 只消费已经由 owning Site Plugin 生成的 `BrowserAcquisitionTarget` 和
+Core 授予的 R008 policy。它不理解 Bilibili、BVID、part、站点 URL 规则或
+认证语义。
 
 它不理解 Bilibili/YouTube DOM。
 
