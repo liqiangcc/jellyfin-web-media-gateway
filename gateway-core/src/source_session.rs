@@ -5,14 +5,16 @@
 //! registration/liveness stays behind `DisplaySessionService`; Playback
 //! authority stays behind `ControlService`.
 
-use crate::browser::BrowserObservationHandoff;
+use crate::browser::{
+    BrowserObservationHandoff, BrowserNavigationRequest, BrowserWorker, R008NavigationPolicy,
+};
 use crate::control::{
     ControlCommandError, ControlCommandRequest, ControlCommandResponse, ControlService,
     NavigationStart,
 };
 use crate::display_session::{DisplaySessionError, DisplaySessionService};
 use crate::playback::{Command, CommandError, NavigationTicket};
-use crate::{Binding, EgressScope, GatewayError, GatewayService};
+use crate::{Binding, EgressPolicy, EgressScope, GatewayError, GatewayService};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use site_adapter_api::{
@@ -22,6 +24,7 @@ use site_adapter_api::{
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
+use url::Url;
 use uuid::Uuid;
 
 const MAX_REQUEST_ID_BYTES: usize = 128;
@@ -182,6 +185,87 @@ impl SourceSessionService {
             request,
             ResolveContext::default(),
         )
+    }
+
+    /// Resolve a public source through the generic Browser Worker before
+    /// entering the normal SourceSession publication path.  The worker owns
+    /// the observation and server-side media ledger; HTTP callers provide only
+    /// the opaque source selector and display identity.  Adapters without a
+    /// browser navigation contract retain the ordinary direct-resolution path.
+    pub(crate) async fn create_public_browser<W: BrowserWorker + 'static>(
+        &self,
+        gateway: &GatewayService,
+        control: &ControlService,
+        displays: &DisplaySessionService,
+        request: CreateSessionRequest,
+        worker: &W,
+        egress: EgressPolicy,
+    ) -> CreationOutcome {
+        if let Err(error) = validate_request(&request) {
+            return CreationOutcome::Failure {
+                status: axum::http::StatusCode::BAD_REQUEST,
+                error,
+            };
+        }
+
+        let locator = match self.registry.recognize(&request.source) {
+            Ok(locator) => locator,
+            Err(error) => return failure_for_adapter(error),
+        };
+        // Keep direct adapters on their existing path.  A browser is needed
+        // only when the owning adapter explicitly reports that observation is
+        // required; Core does not interpret any site-specific URL semantics.
+        match self.registry.resolve(&locator) {
+            Ok(_) => return self.create(gateway, control, displays, request),
+            Err(AdapterError::ObservationRequired) => {}
+            Err(error) => return failure_for_adapter(error),
+        }
+        let navigation_url = match Url::parse(&request.source) {
+            Ok(url) if matches!(url.scheme(), "http" | "https") => url,
+            _ => return public_browser_failure("SOURCE_BROWSER_NAVIGATION_INVALID"),
+        };
+
+        let session = match worker.open_session(crate::browser::BrowserAuthMode::Passive).await {
+            Ok(session) => session,
+            Err(_) => return public_browser_failure("SOURCE_BROWSER_UNAVAILABLE"),
+        };
+        let operation = BrowserNavigationRequest::new(navigation_url);
+        let operation_id = operation.operation_id();
+        let result = worker
+            .navigate(
+                session.id(),
+                operation,
+                &R008NavigationPolicy::public_web(egress),
+            )
+            .await;
+        if result.is_err() {
+            let _ = worker.close(session.id());
+            return public_browser_failure("SOURCE_BROWSER_NAVIGATION_FAILED");
+        }
+
+        let handoff = BrowserObservationHandoff::take_from_worker(
+            worker,
+            session.id(),
+            operation_id,
+            locator,
+            crate::browser::BROWSER_HANDOFF_TTL,
+        );
+        let outcome = match handoff {
+            Ok(Some(handoff)) => self.create_with_context(
+                gateway,
+                control,
+                displays,
+                request,
+                ResolveContext {
+                    browser_observation: Some(handoff.observation()),
+                    server_observation: Some(handoff.server_observation()),
+                    authenticated_session: None,
+                },
+            ),
+            Ok(None) | Err(_) => public_browser_failure("SOURCE_BROWSER_OBSERVATION_UNAVAILABLE"),
+        };
+        let _ = worker.close(session.id());
+        outcome
     }
 
     /// Server-side acquisition handoff used by the browser/plugin integration.
@@ -770,6 +854,16 @@ fn failure_for_adapter(error: AdapterError) -> CreationOutcome {
     CreationOutcome::Failure {
         status,
         error: CreateSessionErrorResponse { code, message },
+    }
+}
+
+fn public_browser_failure(code: &'static str) -> CreationOutcome {
+    CreationOutcome::Failure {
+        status: axum::http::StatusCode::BAD_GATEWAY,
+        error: CreateSessionErrorResponse {
+            code,
+            message: "public source browser acquisition did not produce a usable observation",
+        },
     }
 }
 
