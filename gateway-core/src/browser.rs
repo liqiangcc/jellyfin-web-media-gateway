@@ -15,8 +15,12 @@ use site_adapter_api::{
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::path::Path;
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
+#[cfg(test)]
+use tokio::sync::Notify;
 use url::Url;
 use uuid::Uuid;
 
@@ -852,16 +856,62 @@ struct FakeState {
     pending_observation: Option<BrowserObservationPayload>,
 }
 
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct FakeNavigationGate {
+    armed: AtomicBool,
+    started: AtomicBool,
+    started_notify: Notify,
+    release: Notify,
+}
+
 /// In-memory deterministic worker used by contract tests and future hosted
 /// harnesses.  It does not launch a browser process.
 #[derive(Clone, Debug, Default)]
 pub struct FakeBrowserWorker {
     state: Arc<Mutex<FakeState>>,
+    #[cfg(test)]
+    navigation_gate: Arc<FakeNavigationGate>,
+    #[cfg(test)]
+    open_count: Arc<AtomicUsize>,
+    #[cfg(test)]
+    navigate_count: Arc<AtomicUsize>,
 }
 
 impl FakeBrowserWorker {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn counts(&self) -> (usize, usize) {
+        (
+            self.open_count.load(Ordering::SeqCst),
+            self.navigate_count.load(Ordering::SeqCst),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn arm_navigation_gate(&self) {
+        self.navigation_gate.started.store(false, Ordering::SeqCst);
+        self.navigation_gate.armed.store(true, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn wait_navigation_started(&self) {
+        loop {
+            let mut notified = self.navigation_gate.started_notify.notified();
+            notified.enable();
+            if self.navigation_gate.started.load(Ordering::SeqCst) {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn release_navigation(&self) {
+        self.navigation_gate.release.notify_one();
     }
 
     /// Configure the next server-internal candidate capture for a fake
@@ -1210,6 +1260,8 @@ pub trait ProfileMaterializer: Send + Sync {
 impl BrowserWorker for FakeBrowserWorker {
     fn open_session(&self, mode: BrowserAuthMode) -> BrowserFuture<'_, BrowserSession> {
         Box::pin(async move {
+            #[cfg(test)]
+            self.open_count.fetch_add(1, Ordering::SeqCst);
             let mut state = self.lock_state()?;
             #[cfg(test)]
             let pending_observation = state.pending_observation.take();
@@ -1326,11 +1378,19 @@ impl BrowserWorker for FakeBrowserWorker {
         policy: &'a R008NavigationPolicy,
     ) -> BrowserFuture<'a, ()> {
         Box::pin(async move {
+            #[cfg(test)]
+            self.navigate_count.fetch_add(1, Ordering::SeqCst);
             if policy.authorize(&request).await.is_err() {
                 let mut state = self.lock_state()?;
                 let session_state = Self::session_mut(&mut state, session)?;
                 Self::push_event(session_state, BrowserEventKind::NetworkDenied);
                 return Err(BrowserError::NavigationDenied);
+            }
+            #[cfg(test)]
+            if self.navigation_gate.armed.swap(false, Ordering::SeqCst) {
+                self.navigation_gate.started.store(true, Ordering::SeqCst);
+                self.navigation_gate.started_notify.notify_waiters();
+                self.navigation_gate.release.notified().await;
             }
             let mut state = self.lock_state()?;
             if state.cancelled.remove(&request.operation_id()) {
