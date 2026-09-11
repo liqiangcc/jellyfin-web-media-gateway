@@ -234,6 +234,11 @@ Control/API source input
 重建 BVID、part、站点 path/query、私有 API 或 DOM 语义。HTTP caller、Control
 和 Display 不能提交、替换或覆盖 target。
 
+target 只是短期、operation-scoped 的 acquisition transport instruction。它不是
+`SourceLocator`、内容身份、`ResolvedMedia`、上游媒体 URL 或媒体 capability，
+不能替换 locator 的 identity/freshness 语义；观察和 server-owned handoff 完成
+后必须丢弃。短期 page/CDN URL 永远不能成为 PlaybackItem 的内容身份。
+
 target 不代表网络已经获批。初始目标、每一次 redirect 和每一个后续请求仍由
 中央 R008/EgressPolicy 授权，并继续执行 SSRF、TLS、DNS、timeout 和
 cancellation 约束。target 不携带 Cookie、Authorization、profile、Vault
@@ -246,6 +251,15 @@ previous/next 语义。能直接 `resolve` 的 generic/direct adapter 不启动
 Browser Worker；不支持 acquisition 的 adapter 返回明确的 unsupported/none，
 而不是让 Core 猜测站点 URL。Bilibili adapter 使用自己的 locator/page
 interpretation 生成 target，Core 和 generic Worker 都不复制该规则。
+
+通用编排顺序固定为：先 `recognize(input)` 得到 opaque locator，再按普通
+resolution contract 尝试 direct `resolve(locator, access)`；只有返回稳定的
+`ObservationRequired`（或等价的明确 acquisition-needed 结果）时，Registry
+才向 owning plugin 请求 `browser_acquisition_target(locator)`。`Ok(None)` 或
+`UnsupportedAcquisition` 不能让 Core 猜测或复制 caller input URL；如果观察是
+必需的，应返回有界、稳定的 acquisition-unavailable failure。观察完成后必须
+使用同一个 locator 调用 `resolve_with_context(locator, observation, handoff)`。
+这条路径没有 generic-ytdlp fallback，也没有 Auth Mode/account fallback。
 
 ### 4.3 Site Browser Worker
 

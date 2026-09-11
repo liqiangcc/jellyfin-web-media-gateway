@@ -8,7 +8,7 @@
 GitHub Issue: #68
 Task ID: BILIBILI-WEB-E2E
 Task kind: combined (implementation seam + real-source functional verification)
-Execution Base: 3e292663284ea07382e69496627aa5e99eb01d9a
+Execution Base: n/a until post-revision Publication Gate
 Final Candidate: n/a until the bounded combined Attempt
 Preferred worker: Codex Cloud, env:cloud
 Required capabilities after publication: github-read-write, repository-static-analysis,
@@ -57,9 +57,11 @@ Close one public, no-login product journey for the frozen sample `BV14V411W7r5`,
 ```text
 Control submits the frozen public Bilibili URL
 → SiteAdapterRegistry recognizes a Bilibili SourceLocator
-→ owning Site Plugin produces a BrowserAcquisitionTarget from that locator
+→ normal direct resolve is attempted on that locator
+→ only on explicit ObservationRequired, owning Site Plugin produces a BrowserAcquisitionTarget
 → Core binds the target to operation/session and admits it through R008/Egress
 → generic Browser Worker performs the bounded acquisition
+→ the same locator is resolved with the one-shot observation/handoff
 → plugin interprets bounded observation into server-owned ResolvedMedia / MediaShapeV1
 → SourceSession prepares and publishes one PlaybackSession / PlaybackItem
 → direct muxed/HLS delivery, or generic #271 remux delivery for separated A/V
@@ -173,10 +175,12 @@ Gate; this package does not start Attempt 2 or authorize live traffic.
 
 `#68` stays `status:draft`, `env:cloud`, owner-free until the Coordinator independently reads back and records all of the following. A Worker cannot claim an Attempt before the gate is complete.
 
-The gate must also verify that the revised generic acquisition-target API is present
-on current `main` and that PR #278 is the only reusable implementation Candidate for
-the next Attempt. Attempt 1's blocker and negative live-budget audit remain append-only
-history.
+The gate must verify that the canonical `BrowserAcquisitionTarget` contract and its
+documentation are merged and read back on current `main`, and that PR #278 is the
+only reusable implementation branch for the next Attempt. It must not require the
+API implementation itself before `status:ready`: implementing that seam is a required
+Attempt 2 Candidate criterion, together with its hosted verification. Attempt 1's
+blocker and negative live-budget audit remain append-only history.
 
 1. **Package and dependency read-back:** live Issue, this `task.md`, `prompt.md`, canonical docs and accepted authorities are mutually consistent. The Coordinator checks #154's Final Acceptance/merge baseline, direct source authorities #237/#240, direct media authorities #268/#271, and the composition root where #255 is actually needed against current `main`. Auth-specific surfaces #243/#248/#251/#257/#259 are regression inputs only, not public-route dependencies; #246 remains separate and blocked.
 2. **Execution Base and freshness classification:** freeze the exact accepted `main`/integration identity from which the Attempt will start and classify its movement using `NONE`, `UNRELATED`, `INTEGRATION_OVERLAP`, `SEMANTIC_AUTHORITY` or `CONTRACT_INVALIDATING`. Record whether existing hosted evidence is fresh for this base. This Gate does not require a final Worker Candidate or PR; moving `main` is never an execution identity.

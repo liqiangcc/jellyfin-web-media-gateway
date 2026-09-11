@@ -121,6 +121,12 @@ BrowserAcquisitionTarget
 └── bounded navigation target       # 当前 public scope 为 HTTP/HTTPS page target
 ```
 
+该 target 只是短期、operation-scoped 的 acquisition transport instruction；它
+不是 `SourceLocator`、内容 identity、`ResolvedMedia`、upstream media URL 或
+media capability，也不能替换 locator 的 identity/freshness 语义。观察与
+server-owned handoff 消费完毕后必须丢弃，短期 page/CDN URL 不能写入
+`PlaybackItem` 作为内容身份。
+
 概念方法：
 
 ```text
@@ -135,12 +141,26 @@ site/plugin/version ownership，再调用该方法；HTTP caller、Control、Dis
 acquisition（例如可以直接 resolve）；不支持该能力的 adapter 可以返回稳定的
 `UnsupportedAcquisition` 错误。直接 resolve 成功时 Core 不启动 Browser Worker。
 
+该方法只接收 owning plugin 的 opaque locator，不接收 Core 的 operation、session
+或 display authority。target 返回后，Core 才创建 server-owned binding，将 target
+绑定到原始 locator、operation、Browser session 和 freshness window；这些 authority
+不会由 plugin 伪造、选择或覆盖。
+
 target 是 server-owned、版本化、有界的 transport contract，不是网络授权。对
 当前公开无登录 scope，target 只携带插件解释后的 HTTP/HTTPS 浏览目标或等价
 的 bounded representation；不得携带 Cookie、Authorization、profile、Vault
 material、signed media URL、upstream media URL 或 caller-selected headers。未来
 需要 headers 或认证资料时必须通过独立的 SiteAccess/Secret contract，不得在
 该 target 中隐式扩展。
+
+通用编排顺序是：`recognize(input)` → opaque locator → 按普通 contract 尝试
+`resolve(locator, access)`。只有稳定的 `ObservationRequired`（或等价的明确
+acquisition-needed result）才允许 Registry 调用
+`browser_acquisition_target(locator)`。`Ok(None)` 或 `UnsupportedAcquisition`
+不能触发 Core 猜测、复制 caller input URL 或换用 generic-ytdlp/Auth route；若
+观察必需但没有 target，返回有界稳定的 acquisition-unavailable error。观察完成
+后必须以同一个 locator 调用 `resolve_with_context(locator, observation,
+server_observation)`。
 
 Core 对 target 只做通用 validation 和 authority binding：target schema 必须受
 支持、目标必须是允许的 HTTP/HTTPS 形式、无 userinfo/控制字符/超限字段，并且

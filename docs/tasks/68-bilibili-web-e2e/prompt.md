@@ -22,6 +22,14 @@ direct resolution must continue without starting a Browser Worker. Observation a
 server-owned handoff remain one-shot, operation/session-bound and locator-bound, and
 public resolution keeps `authenticated_session=None`.
 
+The target is only a short-lived, operation-scoped acquisition instruction; it is not
+the `SourceLocator`, content identity, `ResolvedMedia`, upstream media URL or media
+capability, and is discarded after the observation handoff. Orchestration must first
+recognize and attempt normal/direct resolve, request the target only for explicit
+`ObservationRequired`, fail stably on unsupported/none when acquisition is required,
+then call `resolve_with_context` with the same locator. Core must never copy the
+caller URL or fall back to generic-ytdlp/Auth routes.
+
 The revised product scope extends the accepted Issue #154 ordinary-Linux Control → Gateway `PlaybackSession` → Web Display authority (Final Acceptance/merge `836e220e6ba4e38377a4e40cff677c9549aa7798`). Preserve its same-origin media, play/pause/seek/stop, refresh/reconnect, stale/error/concurrency/security and Candidate-bound artifact-consumer behavior. Add only the public source ingress: production Bilibili Site Plugin + generic Browser Worker observation → server-owned `ResolvedMedia`/`MediaShapeV1` → generic #271 delivery when separated A/V → that existing Web Display authority. Keep Bilibili semantics in `plugins/bilibili`, keep the Browser Worker generic, and preserve R008/Egress, Vault, capability, PlaybackSession and Display authority.
 
 #237/#240 and #268/#271 are the direct source/media authorities. #243/#248/#251/#257/#259 are regression surfaces on current `main`, not public-route dependencies; do not invoke Auth Mode, account registration, Vault candidate capture or authenticated routes. #255 may be used only for the smallest public/no-account composition-root adjustment if actually required.
