@@ -133,11 +133,11 @@ jobs:
       - name: Assert architecture and redaction boundaries
         shell: bash
         run: |
-          ! awk '/#\[cfg\(test\)\]/{exit} {print}' gateway-core/src/browser_chromium.rs | rg -n -- '--no-sandbox|--disable-setuid-sandbox|--disable-namespace-sandbox|remote-debugging-address=0\.0\.0\.0'
-          ! rg -n -i 'Cookie:|Authorization:|sessdata|GITHUB_TOKEN|GH_TOKEN' gateway-core/src/source_session.rs gateway-runtime/src experiments/issue-68-public-e2e
-          rg -n 'create_public_browser|BrowserObservationHandoff|R008NavigationPolicy::public_web' gateway-core/src/source_session.rs
-          rg -n 'bilibili_account_ref: Option|bilibili_account_label: Option' gateway-runtime/src/lib.rs
-          ! rg -n 'gateway\.log|session\.json|https://www\.bilibili\.com/video/BV14V411W7r5' experiments/issue-68-public-e2e
+          ! awk '/#\[cfg\(test\)\]/{exit} {print}' gateway-core/src/browser_chromium.rs | grep -En -- '--no-sandbox|--disable-setuid-sandbox|--disable-namespace-sandbox|remote-debugging-address=0\.0\.0\.0'
+          ! grep -Eni 'Cookie:|Authorization:|sessdata|GITHUB_TOKEN|GH_TOKEN' gateway-core/src/source_session.rs gateway-runtime/src experiments/issue-68-public-e2e
+          grep -En 'create_public_browser|BrowserObservationHandoff|R008NavigationPolicy::public_web' gateway-core/src/source_session.rs
+          grep -En 'bilibili_account_ref: Option|bilibili_account_label: Option' gateway-runtime/src/lib.rs
+          ! grep -En 'gateway\.log|session\.json|https://www\.bilibili\.com/video/BV14V411W7r5' experiments/issue-68-public-e2e
       - uses: actions/download-artifact@v4
         with:
           name: issue-68-public-package-${{ env.CANDIDATE_SHA }}
