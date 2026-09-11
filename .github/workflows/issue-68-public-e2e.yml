@@ -133,11 +133,47 @@ jobs:
       - name: Assert architecture and redaction boundaries
         shell: bash
         run: |
-          ! awk '/#\[cfg\(test\)\]/{exit} {print}' gateway-core/src/browser_chromium.rs | grep -En -- '--no-sandbox|--disable-setuid-sandbox|--disable-namespace-sandbox|remote-debugging-address=0\.0\.0\.0'
-          ! grep -Eni 'Cookie:|Authorization:|sessdata|GITHUB_TOKEN|GH_TOKEN' gateway-core/src/source_session.rs gateway-runtime/src experiments/issue-68-public-e2e
-          grep -En 'create_public_browser|BrowserObservationHandoff|R008NavigationPolicy::public_web' gateway-core/src/source_session.rs
-          grep -En 'bilibili_account_ref: Option|bilibili_account_label: Option' gateway-runtime/src/lib.rs
-          ! grep -En 'gateway\.log|session\.json|https://www\.bilibili\.com/video/BV14V411W7r5' experiments/issue-68-public-e2e
+          set -euo pipefail
+          assert_no_match() {
+            local pattern="$1"
+            shift
+            local output rc
+            output="$(mktemp)"
+            if grep -REn -- "$pattern" "$@" >"$output" 2>&1; then
+              cat "$output"
+              rm -f "$output"
+              echo "forbidden match found" >&2
+              return 1
+            else
+              rc=$?
+              cat "$output" >&2
+              rm -f "$output"
+              if [ "$rc" -eq 1 ]; then
+                return 0
+              fi
+              echo "scanner failed with exit code $rc" >&2
+              return "$rc"
+            fi
+          }
+          assert_match() {
+            local pattern="$1"
+            shift
+            local rc
+            if grep -REn -- "$pattern" "$@"; then
+              return 0
+            else
+              rc=$?
+              echo "required match scanner failed with exit code $rc" >&2
+              return "$rc"
+            fi
+          }
+          production_browser_source="$RUNNER_TEMP/browser-production-source.txt"
+          awk '/#\[cfg\(test\)\]/{exit} {print}' gateway-core/src/browser_chromium.rs >"$production_browser_source"
+          assert_no_match '--no-sandbox|--disable-setuid-sandbox|--disable-namespace-sandbox|remote-debugging-address=0\.0\.0\.0' "$production_browser_source"
+          assert_no_match 'Cookie:|Authorization:|sessdata|GITHUB_TOKEN|GH_TOKEN' gateway-core/src/source_session.rs gateway-runtime/src experiments/issue-68-public-e2e
+          assert_match 'create_public_browser|BrowserObservationHandoff|R008NavigationPolicy::public_web' gateway-core/src/source_session.rs
+          assert_match 'bilibili_account_ref: Option|bilibili_account_label: Option' gateway-runtime/src/lib.rs
+          assert_no_match 'gateway\.log|session\.json|https://www\.bilibili\.com/video/BV14V411W7r5' experiments/issue-68-public-e2e
       - uses: actions/download-artifact@v4
         with:
           name: issue-68-public-package-${{ env.CANDIDATE_SHA }}
