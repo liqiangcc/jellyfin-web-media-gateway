@@ -22,7 +22,9 @@ use site_adapter_api::{
     SiteAdapterRegistry, SourceLocator, StreamProtocol,
 };
 use std::collections::HashMap;
-use std::sync::{Arc, Condvar, Mutex, RwLock};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
 use std::time::Duration;
 use tokio::sync::Notify;
 use uuid::Uuid;
@@ -124,6 +126,10 @@ struct CreationSlot {
     state: Mutex<CreationSlotState>,
     condvar: Condvar,
     notify: Notify,
+    #[cfg(test)]
+    waiter_count: AtomicUsize,
+    #[cfg(test)]
+    waiter_notify: Notify,
 }
 
 impl CreationSlot {
@@ -132,6 +138,10 @@ impl CreationSlot {
             state: Mutex::new(CreationSlotState::default()),
             condvar: Condvar::new(),
             notify: Notify::new(),
+            #[cfg(test)]
+            waiter_count: AtomicUsize::new(0),
+            #[cfg(test)]
+            waiter_notify: Notify::new(),
         }
     }
 
@@ -139,7 +149,7 @@ impl CreationSlot {
         loop {
             let mut notified = self.notify.notified();
             notified.enable();
-            let notified = {
+            let (notified, _waiter) = {
                 let mut state = self.state.lock().expect("source creation slot poisoned");
                 if !state.in_flight {
                     state.in_flight = true;
@@ -147,7 +157,17 @@ impl CreationSlot {
                         slot: Arc::clone(self),
                     };
                 }
-                notified
+                #[cfg(test)]
+                let waiter = {
+                    self.waiter_count.fetch_add(1, Ordering::SeqCst);
+                    self.waiter_notify.notify_waiters();
+                    CreationWaiter {
+                        slot: Arc::clone(self),
+                    }
+                };
+                #[cfg(not(test))]
+                let waiter = ();
+                (notified, waiter)
             };
             notified.await;
         }
@@ -165,6 +185,18 @@ impl CreationSlot {
         CreationPermit {
             slot: Arc::clone(self),
         }
+    }
+}
+
+#[cfg(test)]
+struct CreationWaiter {
+    slot: Arc<CreationSlot>,
+}
+
+#[cfg(test)]
+impl Drop for CreationWaiter {
+    fn drop(&mut self) {
+        self.slot.waiter_count.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -195,7 +227,7 @@ struct PreparedResolution {
 pub(crate) struct SourceSessionService {
     registry: Arc<SiteAdapterRegistry>,
     creations: Arc<Mutex<HashMap<String, CreationRecord>>>,
-    creation_slots: Arc<Mutex<HashMap<String, Arc<CreationSlot>>>>,
+    creation_slots: Arc<Mutex<HashMap<String, Weak<CreationSlot>>>>,
     media_views: Arc<RwLock<HashMap<String, SessionMediaView>>>,
 }
 
@@ -258,15 +290,48 @@ impl SourceSessionService {
             .creation_slots
             .lock()
             .expect("source creation slots poisoned");
-        if let Some(slot) = slots.get(request_id) {
-            return Ok(Arc::clone(slot));
+        slots.retain(|_, slot| slot.strong_count() != 0);
+        if let Some(slot) = slots.get(request_id).and_then(Weak::upgrade) {
+            return Ok(slot);
         }
         if slots.len() >= MAX_CREATION_RECORDS {
             return Err(creation_store_full());
         }
         let slot = Arc::new(CreationSlot::new());
-        slots.insert(request_id.to_owned(), Arc::clone(&slot));
+        slots.insert(request_id.to_owned(), Arc::downgrade(&slot));
         Ok(slot)
+    }
+
+    #[cfg(test)]
+    async fn wait_creation_waiters(&self, request_id: &str, expected: usize) {
+        let slot = {
+            let slots = self
+                .creation_slots
+                .lock()
+                .expect("source creation slots poisoned");
+            slots
+                .get(request_id)
+                .and_then(Weak::upgrade)
+                .expect("creation reservation should be active")
+        };
+        loop {
+            let mut notified = slot.waiter_notify.notified();
+            notified.enable();
+            if slot.waiter_count.load(Ordering::SeqCst) >= expected {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    #[cfg(test)]
+    fn creation_slot_count(&self) -> usize {
+        let mut slots = self
+            .creation_slots
+            .lock()
+            .expect("source creation slots poisoned");
+        slots.retain(|_, slot| slot.strong_count() != 0);
+        slots.len()
     }
 
     fn check_creation_record(
@@ -1803,7 +1868,17 @@ mod tests {
         }
         let second_future =
             service.create_public_session_with_worker(request.clone(), worker.as_ref());
+        tokio::pin!(second_future);
+        tokio::select! {
+            _ = &mut second_future => panic!("second acquisition should wait for reservation"),
+            _ = service.wait_creation_waiters("observation-concurrent", 1) => {}
+        }
         let third_future = service.create_public_session_with_worker(request, worker.as_ref());
+        tokio::pin!(third_future);
+        tokio::select! {
+            _ = &mut third_future => panic!("third acquisition should wait for reservation"),
+            _ = service.wait_creation_waiters("observation-concurrent", 2) => {}
+        }
         worker.release_navigation();
         let (first, second, third) = tokio::join!(first_future, second_future, third_future);
         let (
@@ -1818,6 +1893,67 @@ mod tests {
         assert_eq!(first.session_id, third.session_id);
         assert_eq!(target_count.load(Ordering::SeqCst), 1);
         assert_eq!(worker.counts(), (1, 1));
+    }
+
+    #[tokio::test]
+    async fn cancelled_public_creation_does_not_leave_orphan_reservation() {
+        let resolve_count = Arc::new(AtomicUsize::new(0));
+        let context_count = Arc::new(AtomicUsize::new(0));
+        let target_count = Arc::new(AtomicUsize::new(0));
+        let mut registry = SiteAdapterRegistry::default();
+        registry
+            .register(Arc::new(CountingAdapter {
+                inner: FixtureAdapter {
+                    plugin: "fixture-cancelled-observation",
+                    priority: 100,
+                    mode: FixtureMode::Observation,
+                },
+                resolve_count,
+                context_count,
+                target_count: target_count.clone(),
+            }))
+            .unwrap();
+        let service = service_with_registry(registry);
+        register_display(&service).await;
+        let worker = FakeBrowserWorker::new();
+        worker.arm_navigation_gate();
+        let (observation, server_observation) = observation_context();
+        worker
+            .set_next_observation_for_next_session(BrowserObservationPayload {
+                operation_id: crate::browser::BrowserOperationId::from_value(1),
+                observation,
+                server_observation,
+            })
+            .unwrap();
+        let request = super::CreateSessionRequest {
+            request_id: "cancelled-reservation".into(),
+            source: "https://www.example.com/fixture".into(),
+            display_id: "display-a".into(),
+        };
+        {
+            let first_future = service.create_public_session_with_worker(request.clone(), &worker);
+            tokio::pin!(first_future);
+            tokio::select! {
+                _ = &mut first_future => panic!("cancelled acquisition should be gated"),
+                _ = worker.wait_navigation_started() => {}
+            }
+        }
+        worker.release_navigation();
+        assert_eq!(service.creation_slot_count(), 0);
+
+        let (observation, server_observation) = observation_context();
+        worker
+            .set_next_observation_for_next_session(BrowserObservationPayload {
+                operation_id: crate::browser::BrowserOperationId::from_value(2),
+                observation,
+                server_observation,
+            })
+            .unwrap();
+        let retry = service
+            .create_public_session_with_worker(request, &worker)
+            .await;
+        assert!(matches!(retry, super::CreationOutcome::Success(_)));
+        assert_eq!(target_count.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
