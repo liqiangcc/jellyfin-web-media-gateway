@@ -22,7 +22,24 @@ import {
   getAuthCookie,
   loggedIn,
 } from './sites/bilibili.js';
+import * as youku from './sites/youku.js';
 import { search } from './browser.js';
+
+// Site registry — recognize/resolve dispatch by site_id (proto mirror of
+// SiteAdapterRegistry: core routes, plugins own the semantics).
+const SITES = { bilibili: { recognize, resolve, danmaku }, youku };
+function siteRecognize(source) {
+  for (const s of Object.values(SITES)) {
+    const r = s.recognize(source);
+    if (r.matched) return r;
+  }
+  return { matched: false };
+}
+function siteResolve(locator, opts) {
+  const s = SITES[locator.site_id];
+  if (!s) throw Object.assign(new Error('SOURCE_UNSUPPORTED'), { code: 'SOURCE_UNSUPPORTED' });
+  return s.resolve(locator, opts);
+}
 import {
   createSession,
   getSession,
@@ -670,25 +687,31 @@ async function play(body) {
       return [400, { error: 'SHORT_LINK_FAILED' }];
     }
   }
-  const rec = recognize(source);
+  const rec = siteRecognize(source);
   if (!rec.matched || rec.short) return [400, { error: 'SOURCE_NOT_RECOGNIZED' }];
-  const media = await resolve(rec.locator, {
-    prefer: {
-      ...(body.force_dash ? { mode: 'dash' } : {}),
-      ...(body.qn ? { qn: Number(body.qn) } : {}),
-    },
-  });
+  let media;
+  try {
+    media = await siteResolve(rec.locator, {
+      prefer: {
+        ...(body.force_dash ? { mode: 'dash' } : {}),
+        ...(body.qn ? { qn: Number(body.qn) } : {}),
+      },
+    });
+  } catch (e) {
+    return [502, { error: e.code || 'RESOLVE_FAILED', detail: e.message }];
+  }
   const streams = media.streams;
 
-  // Live: proxy the upstream playlist, rewriting segment URIs through us.
-  if (media.live) {
+  // Live or browser-acquired HLS: proxy the upstream playlist, rewriting
+  // segment URIs through us (segments are egress-IP-bound for youku).
+  if (media.live || media.proxied_hls) {
     const session = createSession(rec.locator, media);
     return [
       200,
       {
         session_id: session.session_id,
         title: media.title,
-        media_mode: 'hls-live',
+        media_mode: media.live ? 'hls-live' : 'hls-proxy',
         media_url: `${BASE}/livepl/${session.session_id}/index.m3u8`,
         streams: media.streams.map((s) => ({
           id: s.id,
@@ -915,13 +938,15 @@ setInterval(async()=>{
           JSON.stringify(
             listHistory().map((h) => {
               const p = h.locator?.opaque_payload || {};
-              const source = p.bvid
-                ? `https://www.bilibili.com/video/${p.bvid}${p.page ? '?p=' + p.page : ''}`
-                : p.ep_id
-                  ? `https://www.bilibili.com/bangumi/play/ep${p.ep_id}`
-                  : p.room_id
-                    ? `https://live.bilibili.com/${p.room_id}`
-                    : '';
+              const source = p.vid
+                ? `https://v.youku.com/v_show/id_${p.vid}.html`
+                : p.bvid
+                  ? `https://www.bilibili.com/video/${p.bvid}${p.page ? '?p=' + p.page : ''}`
+                  : p.ep_id
+                    ? `https://www.bilibili.com/bangumi/play/ep${p.ep_id}`
+                    : p.room_id
+                      ? `https://live.bilibili.com/${p.room_id}`
+                      : '';
               return {
                 title: h.title,
                 source,
@@ -995,15 +1020,16 @@ setInterval(async()=>{
       const livepl = /^\/livepl\/([\w-]+)\/index\.m3u8$/.exec(url.pathname);
       if (livepl && req.method === 'GET') {
         const s = getSession(livepl[1]);
-        if (!s || !s.current_item.resolved_media.live) {
+        const rm = s?.current_item.resolved_media;
+        if (!s || !(rm.live || rm.proxied_hls)) {
           res.writeHead(404);
           return res.end('no live session');
         }
-        let st = s.current_item.resolved_media.streams[0];
+        let st = rm.streams[s.stream_idx || 0];
         let up = await fetch(st.url, { headers: st.upstream_headers });
-        // Live playlist URLs expire fast — refresh via the locator on failure.
+        // Playlist URLs expire — refresh via the locator on failure.
         if (!up.ok) {
-          const fresh = await resolve(s.current_item.source_locator, {});
+          const fresh = await siteResolve(s.current_item.source_locator, {});
           s.current_item.resolved_media = fresh;
           st = fresh.streams[0];
           up = await fetch(st.url, { headers: st.upstream_headers });
@@ -1045,17 +1071,25 @@ setInterval(async()=>{
         } catch {
           up = null;
         }
-        if (!up || !/^[a-z0-9-]+\.bilivideo\.com$/.test(up.hostname)) {
-          res.writeHead(403);
-          return res.end('host not allowed');
-        }
-        return proxyStream(req, res, {
-          url: u,
-          upstream_headers: {
-            'User-Agent': 'Mozilla/5.0',
-            Referer: 'https://live.bilibili.com',
-          },
-        });
+        if (
+        !up ||
+        !(
+          /^[a-z0-9-]+\.bilivideo\.com$/.test(up.hostname) ||
+          /\.cibntv\.net$/.test(up.hostname) ||
+          /\.youku\.com$/.test(up.hostname)
+        )
+      ) {
+        res.writeHead(403);
+        return res.end('host not allowed');
+      }
+      const isYk = !/\.bilivideo\.com$/.test(up.hostname);
+      return proxyStream(req, res, {
+        url: u,
+        upstream_headers: {
+          'User-Agent': 'Mozilla/5.0',
+          ...(isYk ? {} : { Referer: 'https://live.bilibili.com' }),
+        },
+      });
       }
       const dmMatch = /^\/dm\/([\w-]+)$/.exec(url.pathname);
       if (dmMatch && req.method === 'GET') {
@@ -1064,7 +1098,10 @@ setInterval(async()=>{
           res.writeHead(404);
           return res.end('no session');
         }
-        const list = await danmaku(s.current_item.source_locator);
+        const site = SITES[s.current_item.source_locator?.site_id];
+        const list = site?.danmaku
+          ? await site.danmaku(s.current_item.source_locator)
+          : await danmaku(s.current_item.source_locator);
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify(list));
       }
@@ -1311,15 +1348,18 @@ setInterval(async()=>{
                 paused: !!s.paused,
                 media_mode: m.live
                   ? 'hls-live'
-                  : s.hls_dir
-                    ? 'hls-remux'
-                    : 'file',
+                  : m.proxied_hls
+                    ? 'hls-proxy'
+                    : s.hls_dir
+                      ? 'hls-remux'
+                      : 'file',
                 is_preview: !!m.is_preview,
-                media_url: m.live
-                  ? `/livepl/${s.session_id}/index.m3u8`
-                  : s.hls_dir
-                    ? `/hls/${s.session_id}/index.m3u8`
-                    : `/stream/${s.session_id}/0`,
+                media_url:
+                  m.live || m.proxied_hls
+                    ? `/livepl/${s.session_id}/index.m3u8`
+                    : s.hls_dir
+                      ? `/hls/${s.session_id}/index.m3u8`
+                      : `/stream/${s.session_id}/0`,
               },
             }
           : { session: null };

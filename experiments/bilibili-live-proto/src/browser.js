@@ -91,6 +91,56 @@ export async function observe(url, waitFor, extract, cookies) {
   }
 }
 
+/**
+ * Navigate a fresh tab to `url` and capture the response body of the first
+ * request matching `urlRe` (checked on loadingFinished). Returns the body
+ * string, or null on timeout/punish. Used by browser-first sites (youku)
+ * where the API request must be signed by the page's own JS.
+ */
+export async function captureResponse(url, urlRe, waitMs = 25000) {
+  const tab = await fetch(`${CDP_HTTP}/json/new`, { method: 'PUT' }).then(
+    (r) => r.json(),
+  );
+  const wsUrl = tab.webSocketDebuggerUrl;
+  try {
+    const ws = await new Promise((res, rej) => {
+      const w = new WebSocket(wsUrl);
+      w.onopen = () => res(w);
+      w.onerror = () => rej(new Error('cdp ws failed'));
+    });
+    try {
+      await rpc(ws, 'Page.enable');
+      await rpc(ws, 'Runtime.enable');
+      await rpc(ws, 'Network.enable');
+      const rid = {};
+      let hit = null;
+      ws.addEventListener('message', (ev) => {
+        const m = JSON.parse(ev.data);
+        if (m.method === 'Network.requestWillBeSent')
+          rid[m.params.requestId] = m.params.request.url;
+        else if (
+          m.method === 'Network.loadingFinished' &&
+          urlRe.test(rid[m.params.requestId] || '')
+        )
+          hit = m.params.requestId;
+      });
+      await rpc(ws, 'Page.navigate', { url });
+      const deadline = Date.now() + waitMs;
+      while (!hit && Date.now() < deadline)
+        await new Promise((r) => setTimeout(r, 300));
+      if (!hit) return null;
+      const body = await rpc(ws, 'Network.getResponseBody', {
+        requestId: hit,
+      });
+      return body.body || null;
+    } finally {
+      ws.close();
+    }
+  } finally {
+    await fetch(`${CDP_HTTP}/json/close/${tab.id}`).catch(() => {});
+  }
+}
+
 /** Search bilibili via the real search page; extract result cards. */
 export async function search(keyword, { limit = 12, cookies } = {}) {
   const url = `https://search.bilibili.com/all?keyword=${encodeURIComponent(keyword)}`;
