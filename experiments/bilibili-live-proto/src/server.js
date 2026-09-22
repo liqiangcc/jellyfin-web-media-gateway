@@ -75,6 +75,7 @@ const BASE = `http://${BIND}:${PORT}`;
 
 const CONTROL_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,viewport-fit=cover"><meta name="apple-mobile-web-app-capable" content="yes">
 <title>B站遥控器</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230b0e14'/><text x='50' y='68' font-size='52' text-anchor='middle' fill='%234a7dff'>▶</text></svg>">
 <meta name="theme-color" content="#0b0e14">
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -259,11 +260,14 @@ async function renderSession(j){
   // 音量
   document.querySelectorAll('[data-vd]').forEach(b=>b.onclick=()=>fetch('/api/session/'+j.session_id+'/vol',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({delta:Number(b.dataset.vd)})}).then(r=>r.json()).then(y=>{if(typeof y.volume==='number')document.getElementById('vvol').textContent=Math.round(y.volume*100)+'%'}));
   document.getElementById('vvol').textContent=Math.round((j.volume??1)*100)+'%';
-  document.getElementById('vmute').onclick=async()=>{const x=await st();fetch('/api/session/'+j.session_id+'/vol',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({vol:x&&x.volume>0?0:1})}).then(r=>r.json()).then(y=>{if(typeof y.volume==='number')document.getElementById('vvol').textContent=Math.round(y.volume*100)+'%'})};
+  document.getElementById('vmute').onclick=async()=>{const x=await st();fetch('/api/session/'+j.session_id+'/vol',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({vol:x&&x.volume>0?0:1})}).then(r=>r.json()).then(y=>{if(typeof y.volume==='number'){document.getElementById('vvol').textContent=Math.round(y.volume*100)+'%';document.getElementById('vmute').textContent=y.volume>0?'🔊':'🔇'}})};
+  document.getElementById('vmute').textContent=(j.volume??1)>0?'🔊':'🔇';
   // 停止播放：关 session，display 回 idle
   document.getElementById('tstop').onclick=async()=>{
     await fetch('/api/session/'+j.session_id+'/stop',{method:'POST'});
     document.getElementById('sess').style.display='none';
+    document.querySelectorAll('.hit.playing').forEach(h=>h.classList.remove('playing'));
+    curSrc=null;
     toast('已停止');
   };
   // 弹幕开关状态同步（恢复会话时也要对）
@@ -301,12 +305,19 @@ async function renderSession(j){
 const fmt=t=>{if(!isFinite(t))return'0:00';const m=Math.floor(t/60),s=Math.floor(t%60);return m+':'+String(s).padStart(2,'0')};
 async function pollPos(){
   const x=await fetch('/api/now').then(r=>r.json()).then(y=>y.session).catch(()=>null);
-  if(!x)return;
+  if(!x){
+    // Session closed elsewhere — hide the panel and clear highlights.
+    document.getElementById('sess').style.display='none';
+    document.querySelectorAll('.hit.playing').forEach(h=>h.classList.remove('playing'));
+    lastPos=null;curSrc=null;
+    return;
+  }
   document.getElementById('pcur').textContent=fmt(x.pos);
   document.getElementById('pdur').textContent=fmt(x.dur);
   document.getElementById('pfill').style.width=(x.dur?Math.min(100,x.pos/x.dur*100):0)+'%';
   document.getElementById('tpp').textContent=x.paused?'▶':'⏸';
   document.getElementById('vvol').textContent=Math.round((x.volume??1)*100)+'%';
+  document.getElementById('vmute').textContent=(x.volume??1)>0?'🔊':'🔇';
   lastPos={pos:x.pos,dur:x.dur,paused:x.paused,at:performance.now()};
 }
 let lastPos=null;
@@ -394,6 +405,7 @@ document.addEventListener('click',e=>{
 </script>`;
 
 const DISPLAY_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,viewport-fit=cover">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23000'/><text x='50' y='68' font-size='52' text-anchor='middle' fill='%234a7dff'>▶</text></svg>">
 <title>display</title>
 <style>
 html,body{margin:0;height:100%;background:#000;overflow:hidden}
