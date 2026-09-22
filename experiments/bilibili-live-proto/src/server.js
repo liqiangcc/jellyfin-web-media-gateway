@@ -132,7 +132,8 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
 .transport button{min-width:52px;font-size:.95rem}
 .muted{color:#566;font-size:.8rem;padding:8px 2px}
 </style>
-<header><h1><span id="dot" class="dot"></span> B站遥控器 <span class="acct"><span id="who"></span><a href="/qr">登录/换号</a><a href="#" id="logout" style="display:none">退出</a></span></h1></header>
+<header><h1><span id="dot" class="dot"></span> B站遥控器 <span class="acct"><span id="who" style="cursor:pointer">▼</span><a href="/qr">登录/换号</a><a href="#" id="logout" style="display:none">退出</a></span></h1></header>
+<div id="accts" style="display:none;position:fixed;top:52px;right:14px;z-index:20;background:#141926;border:1px solid #253050;border-radius:12px;padding:6px;min-width:160px;box-shadow:0 8px 24px #000a"></div>
 <div id="sess" style="display:none">
   <h3 id="stitle"></h3>
   <div class="prog"><div id="pfill"></div></div>
@@ -408,7 +409,7 @@ document.getElementById('hist').onclick=async()=>{
 };
 const auth=await fetch('/api/auth').then(r=>r.json()).catch(()=>({}));
 if(auth.logged_in){
-  document.getElementById('who').textContent=auth.uname||auth.mid;
+  document.getElementById('who').textContent=(auth.uname||auth.mid)+' ▾';
   document.getElementById('dot').classList.add('on');
   document.getElementById('logout').style.display='';
 }
@@ -416,6 +417,21 @@ document.getElementById('logout').onclick=async e=>{
   e.preventDefault();
   await fetch('/api/logout',{method:'POST'});
   location.reload();
+};
+// 账号切换下拉
+document.getElementById('who').onclick=async()=>{
+  const ac=document.getElementById('accts');
+  if(ac.style.display!=='none'){ac.style.display='none';return}
+  const d=await fetch('/api/accounts').then(r=>r.json()).catch(()=>null);
+  if(!d||!d.accounts.length)return;
+  ac.innerHTML=d.accounts.map(a=>'<div class="acitem" data-mid="'+a.mid+'" style="padding:9px 12px;border-radius:8px;font-size:.85rem;cursor:pointer;'+(a.mid===d.active?'color:#4ade80':'color:#e8eaf0')+'">'+(a.uname||a.mid)+(a.mid===d.active?' ✓':'')+'</div>').join('');
+  ac.querySelectorAll('.acitem').forEach(el=>{
+    el.onmouseenter=()=>el.style.background='#1c2333';
+    el.onmouseleave=()=>el.style.background='';
+    el.onclick=async()=>{await fetch('/api/accounts/switch',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mid:el.dataset.mid})});location.reload()};
+  });
+  ac.style.display='';
+  document.addEventListener('click',function h(e){if(!ac.contains(e.target)&&e.target.id!=='who'){ac.style.display='none';document.removeEventListener('click',h)}},true);
 };
 // mark active chip selection for quality/page/sub buttons
 document.addEventListener('click',e=>{
