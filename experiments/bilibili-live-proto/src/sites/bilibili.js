@@ -12,8 +12,22 @@ const LOCATOR_VERSION = 1;
 
 export const manifest = { plugin_id: PLUGIN_ID, site_id: SITE_ID };
 
-/** URL → SourceLocator. Recognizes bv/BV ids and an optional ?p= part. */
+/** URL → SourceLocator. Recognizes BV ids (+?p=) and bangumi ep ids. */
 export function recognize(input) {
+  const ep = /bangumi\/play\/ep(\d+)/i.exec(input);
+  if (ep) {
+    return {
+      matched: true,
+      site_id: SITE_ID,
+      plugin_id: PLUGIN_ID,
+      locator: {
+        site_id: SITE_ID,
+        plugin_id: PLUGIN_ID,
+        locator_version: LOCATOR_VERSION,
+        opaque_payload: { ep_id: Number(ep[1]) },
+      },
+    };
+  }
   const match = /(?:^|\/)(BV[0-9A-Za-z]{10})(?:[/?#]|$)/i.exec(input);
   if (!match) return { matched: false };
   let page = 1;
@@ -108,16 +122,66 @@ export async function resolve(locator, { prefer } = {}) {
   if (locator.locator_version !== LOCATOR_VERSION) {
     throw new Error('SOURCE_LOCATOR_UNSUPPORTED');
   }
-  const { bvid, page } = locator.opaque_payload;
+  const { bvid, page, ep_id } = locator.opaque_payload;
+
+  // Bangumi path: pgc endpoint, ep_id instead of bvid+cid.
+  if (ep_id) {
+    const headers = {
+      'User-Agent': UA,
+      Referer: REFERER,
+      ...(authCookie ? { Cookie: authCookie } : {}),
+    };
+    const p = await fetch(
+      `https://api.bilibili.com/pgc/player/web/playurl?ep_id=${ep_id}&fnval=0`,
+      { headers },
+    ).then((r) => r.json());
+    const r0 = p.result || {};
+    if (!r0.durl?.length) throw new Error('NO_STREAMS');
+    return {
+      title: `ep${ep_id}${r0.is_preview ? ' (preview)' : ''}`,
+      duration: (r0.timelength || r0.durl[0].length) / 1000,
+      source_site: SITE_ID,
+      protection: 'clear',
+      is_preview: !!r0.is_preview,
+      streams: r0.durl.map((d, i) => ({
+        id: `durl-${i}`,
+        kind: 'muxed',
+        protocol: 'http_file',
+        url: d.url,
+        upstream_headers: { 'User-Agent': UA, Referer: REFERER },
+        size: d.size,
+      })),
+    };
+  }
   const pages = await api(`/x/player/pagelist?bvid=${bvid}`);
   const entry = pages[Math.min(page, pages.length) - 1];
   if (!entry) throw new Error('PAGE_NOT_FOUND');
   const cid = entry.cid;
 
   // fnval=0: legacy durl — returns a muxed MP4 for anonymous/public content.
-  const durlRes = await api(
-    `/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=0&platform=html5`,
-  );
+  // If the BV is actually a bangumi (playurl -404), hop through view's
+  // redirect_url (needs login) and resolve via the pgc path.
+  let durlRes;
+  try {
+    durlRes = await api(
+      `/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=0&platform=html5`,
+    );
+  } catch (e) {
+    if (authCookie && /-404/.test(e.message)) {
+      const v = await api(`/x/web-interface/view?bvid=${bvid}`);
+      const ep = /bangumi\/play\/ep(\d+)/.exec(v.redirect_url || '');
+      if (ep) {
+        return resolve(
+          {
+            ...locator,
+            opaque_payload: { ep_id: Number(ep[1]) },
+          },
+          { prefer },
+        );
+      }
+    }
+    throw e;
+  }
   if (prefer !== 'dash' && durlRes.durl?.length) {
     return {
       title: entry.part,
