@@ -149,7 +149,7 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
   <div class="row"><span class="lbl">字幕</span><div class="opts" id="subs"></div></div>
   <div class="row"><span class="lbl">倍速</span><div class="opts" id="rates"></div></div>
   <div class="row"><span class="lbl">音量</span><div class="opts"><button data-vd="-0.1">−</button><button id="vmute">🔇</button><button data-vd="0.1">＋</button><span id="vvol" class="lbl" style="padding-top:7px">100%</span></div></div>
-  <div class="row"><span class="lbl">弹幕</span><div class="opts"><button id="dmt" class="on">开</button><button data-ds="0.8">小</button><button data-ds="1">中</button><button data-ds="1.3">大</button></div>
+  <div class="row"><span class="lbl">弹幕</span><div class="opts"><button id="dmt" class="on">开</button><button data-ds="0.8">小</button><button data-ds="1">中</button><button data-ds="1.3">大</button><button data-sp="1.4">慢</button><button data-sp="1">常速</button><button data-sp="0.7">快</button></div>
     <span class="opts" style="margin-left:auto"><button id="tstop" style="color:#ff8fa3">■ 停止</button></span></div>
   <div class="row" id="dmrow"><input id="dminput" type="text" maxlength="100" placeholder="发条弹幕…" style="flex:1"><button class="primary" id="dmsend">发送</button></div>
   <div class="section" id="relsec" style="display:none">相关推荐</div>
@@ -259,6 +259,11 @@ async function renderSession(j){
   document.querySelectorAll('[data-ds]').forEach(b=>{
     b.classList.toggle('on',Number(b.dataset.ds)===(j.dm_scale||1));
     b.onclick=()=>{fetch('/api/session/'+j.session_id+'/dmscale',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({scale:Number(b.dataset.ds)})});document.querySelectorAll('[data-ds]').forEach(x=>x.classList.toggle('on',x===b))};
+  });
+  // 弹幕速度
+  document.querySelectorAll('[data-sp]').forEach(b=>{
+    b.classList.toggle('on',Number(b.dataset.sp)===(j.dm_speed||1));
+    b.onclick=()=>{fetch('/api/session/'+j.session_id+'/dmspeed',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({speed:Number(b.dataset.sp)})});document.querySelectorAll('[data-sp]').forEach(x=>x.classList.toggle('on',x===b))};
   });
   // 音量
   document.querySelectorAll('[data-vd]').forEach(b=>b.onclick=()=>fetch('/api/session/'+j.session_id+'/vol',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({delta:Number(b.dataset.vd)})}).then(r=>r.json()).then(y=>{if(typeof y.volume==='number')document.getElementById('vvol').textContent=Math.round(y.volume*100)+'%'}));
@@ -469,7 +474,8 @@ function setDmScale(k){
   BOT_N=Math.floor(innerHeight*0.25/LANE_H);
 }
 const laneFree=[],topFree=[],botFree=[];
-const FLY_MS=7500,FIX_MS=4500;
+const FIX_MS=4500;
+let FLY_MS=7500;
 function colorOf(d){return '#'+d.color.toString(16).padStart(6,'0')}
 function freeLane(arr,n){const now=performance.now();for(let i=0;i<n;i++)if(!arr[i]||arr[i]<now)return i;return -1}
 function spawn(d){
@@ -566,6 +572,7 @@ setInterval(async()=>{
     if(typeof j.session.volume==='number'&&Math.abs(v.volume-j.session.volume)>0.02)v.volume=j.session.volume;
     dm.style.display=j.session.dm_on===false?'none':'';
     if((j.session.dm_scale||1)!==dmScale)setDmScale(j.session.dm_scale||1);
+    if((j.session.dm_speed||1)*7500!==FLY_MS)FLY_MS=7500*(j.session.dm_speed||1);
     sid=j.session.session_id;
     // Apply transport commands (guarded by seq).
     if(j.session.cmd&&j.session.cmd.seq!==lastCmd){
@@ -1118,6 +1125,22 @@ setInterval(async()=>{
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ ok: true }));
       }
+      // Danmaku fly speed multiplier (duration scale: >1 slower).
+      const dspSel = /^\/api\/session\/([\w-]+)\/dmspeed$/.exec(url.pathname);
+      if (dspSel && req.method === 'POST') {
+        const s = getSession(dspSel[1]);
+        if (!s) {
+          res.writeHead(404);
+          return res.end('no session');
+        }
+        let raw = '';
+        for await (const c of req) raw += c;
+        const { speed } = JSON.parse(raw || '{}');
+        if (typeof speed === 'number' && speed >= 0.3 && speed <= 3)
+          s.dm_speed = speed;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, dm_speed: s.dm_speed }));
+      }
       // Danmaku font scale for the session.
       const dmsSel = /^\/api\/session\/([\w-]+)\/dmscale$/.exec(url.pathname);
       if (dmsSel && req.method === 'POST') {
@@ -1194,6 +1217,7 @@ setInterval(async()=>{
                 cmd: s.cmd || null,
                 dm_on: s.dm_on !== false,
                 dm_scale: s.dm_scale || 1,
+                dm_speed: s.dm_speed || 1,
                 volume: s.volume ?? 1,
                 pos: s.pos || 0,
                 dur: s.dur || 0,
