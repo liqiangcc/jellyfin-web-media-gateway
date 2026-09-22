@@ -29,7 +29,15 @@ export async function proxyStream(req, res, stream) {
     'accept-ranges': 'bytes',
   });
   if (req.method === 'HEAD' || !upstream.body) return res.end();
-  await pipeline(Readable.fromWeb(upstream.body), res);
+  try {
+    await pipeline(Readable.fromWeb(upstream.body), res);
+  } catch (err) {
+    // Client aborts are normal for video elements (range probing,
+    // pausing). Swallow them; only real upstream failures matter.
+    if (!res.destroyed) console.error('[proxy]', err.message);
+  } finally {
+    upstream.body?.cancel().catch(() => {});
+  }
 }
 
 /**

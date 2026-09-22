@@ -36,17 +36,23 @@ const DISPLAY_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport"
 <title>proto display</title>
 <style>body{margin:0;background:#000}video{width:100vw;height:100vh;object-fit:contain}#s{position:fixed;top:0;color:#fff;font:14px system-ui;background:#0008;padding:.4rem}</style>
 <video id="v" controls playsinline></video><div id="s">waiting for control…</div>
+<script src="/hls.min.js"></script>
 <script>
 const v=document.getElementById('v'),s=document.getElementById('s');
-let cur=null;
+let cur=null,hls=null;
 setInterval(async()=>{
   try{
     const j=await (await fetch('/api/now')).json();
     if(!j.session){s.textContent='waiting for control…';return}
-    if(cur!==j.session.session_id){
-      cur=j.session.session_id;
-      v.src=j.session.media_url;
-      v.load();
+    if(cur!==j.session.session_id+'|'+j.session.media_url){
+      cur=j.session.session_id+'|'+j.session.media_url;
+      if(hls){hls.destroy();hls=null}
+      const url=j.session.media_url;
+      if(url.endsWith('.m3u8')&&window.Hls&&Hls.isSupported()){
+        hls=new Hls();hls.loadSource(url);hls.attachMedia(v);
+      }else{
+        v.src=url;v.load();
+      }
       s.textContent=j.session.title+' ('+j.session.media_mode+')';
       v.play().catch(()=>{s.textContent+=' — tap to play'});
     }
@@ -60,22 +66,26 @@ async function play(body) {
   const media = await resolve(rec.locator, {
     prefer: body.force_dash ? 'dash' : undefined,
   });
-  const session = createSession(rec.locator, media);
   const streams = media.streams;
 
   // Muxed file → direct gateway proxy path. Separate A/V → remux to HLS.
-  let media_mode = 'file';
-  let media_url = `${BASE}/stream/${session.session_id}/0`;
+  // The session is only created after the media path is ready, so the
+  // display never sees a half-prepared session (media_url is stable).
   const muxed = streams.find((s) => s.kind === 'muxed');
+  let hlsDir = null;
   if (!muxed) {
     const video = streams.find((s) => s.kind === 'video');
     const audio = streams.find((s) => s.kind === 'audio');
     if (!video || !audio) return [422, { error: 'SOURCE_UNSUPPORTED' }];
-    media_mode = 'hls-remux';
-    const { dir } = await remuxToHls(video, audio, session.session_id);
-    session.hls_dir = dir;
-    media_url = `${BASE}/hls/${session.session_id}/index.m3u8`;
+    const tag = rec.locator.opaque_payload;
+    hlsDir = (await remuxToHls(video, audio, `${tag.bvid}-p${tag.page}`)).dir;
   }
+  const session = createSession(rec.locator, media);
+  session.hls_dir = hlsDir;
+  const media_mode = hlsDir ? 'hls-remux' : 'file';
+  const media_url = hlsDir
+    ? `${BASE}/hls/${session.session_id}/index.m3u8`
+    : `${BASE}/stream/${session.session_id}/0`;
   return [
     200,
     {
@@ -92,6 +102,10 @@ http
   .createServer(async (req, res) => {
     const url = new URL(req.url, BASE);
     try {
+      if (req.method === 'GET' && url.pathname === '/hls.min.js') {
+        res.writeHead(200, { 'content-type': 'application/javascript' });
+        return res.end(readFileSync(join(import.meta.dirname, 'hls.min.js')));
+      }
       if (req.method === 'GET' && url.pathname === '/control') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         return res.end(CONTROL_HTML);
@@ -152,8 +166,12 @@ http
       res.end('not found');
     } catch (err) {
       console.error(`[${req.method} ${url.pathname}]`, err.message);
-      res.writeHead(500, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: String(err.message || err) }));
+      if (!res.headersSent) {
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: String(err.message || err) }));
+      } else {
+        res.destroy();
+      }
     }
   })
   .listen(PORT, BIND, () => console.log(`proto gateway listening on ${BASE}`));

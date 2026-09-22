@@ -55,6 +55,24 @@
 - **倍速/音量/seek/全屏/PiP**：纯 HTMLMediaElement 客户端能力，与站点无关，控制面板直接实现，不进契约。
 - **弹幕**：端点需另验；不进 MVP。
 
+## 第三轮：真实浏览器播放验证（2026-09-22）
+
+headless Chrome 151（CDP 驱动）实测 `/display` 页，两条投递路径均播放成功：
+
+| 路径 | 结果 | 实测值 |
+| --- | --- | --- |
+| muxed durl → 同源代理 | PASS | `readyState=4`，正常播放，`duration=7137`（与 cid 一致），640x360 |
+| Range seek（中段跳转） | PASS | `currentTime=3600` 跳转后 seeked 恢复播放（`t=3609`），无错误 |
+| DASH 分离 A/V → remux → HLS | PASS | hls.js MSE 播放 480p，`readyState=4`；live playlist 模式下 `duration` 随已产出分段增长（首播时 ~470s，持续增长） |
+
+截图证据：file 路径（BML 画面 + bilibili 水印）与 hls-remux 路径（480p 池年画面）均在会话内留存。
+
+**原型期间发现并修复的真实 bug（对 Rust 实现的启示）**：
+
+1. **客户端中断导致进程崩溃**：`<video>` 元素做 Range 探测/暂停时会主动断开连接，未处理的 stream pipeline 错误使 Node 进程整体退出。Rust 侧对应要求：媒体代理流的 client-abort 必须是正常路径而非 panic/error 传播。
+2. **半就绪 session 被 Display 抢读**：`createSession` 先于 remux 完成登记会话，Display 轮询拿到 session 时 `media_url` 还是 file 占位路径，播了"只有画面的视频流"。修正为**媒体路径就绪后才发布会话**。这与正式架构的 `publish_prepared_session`（先备好再发布，一次性原子）语义一致——原型重现了这个不变量存在的理由。
+3. Display 切换判定不能只比 `session_id`，媒体 URL 变化（如同 session 换投递路径）也要触发 reload。
+
 ## 未测/不能推导
 
 - 登录态内容、4K/HEVC、drm（`protection` 未触发非 clear 值）；
