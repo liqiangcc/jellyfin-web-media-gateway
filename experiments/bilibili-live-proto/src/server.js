@@ -113,7 +113,11 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
 #sess .lbl{font-size:.78rem;color:#8b93a7;min-width:38px;padding-top:7px}
 #sess .opts{display:flex;gap:6px;flex-wrap:wrap}
 #sess .opts button{padding:7px 11px;font-size:.78rem;border-radius:9px}
-#out{font-size:.72rem;color:#8b93a7;white-space:pre-wrap;word-break:break-all;background:#0d1119;border-radius:9px;padding:9px;max-height:110px;overflow:auto}
+#out{font-size:.78rem;color:#8b93a7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:#0d1119;border-radius:9px;padding:8px 12px;margin:4px 0;transition:color .3s}
+#out.err{color:#ff8fa3}
+#out.ok{color:#4ade80}
+.hit.playing{border-color:#4a7dff;background:#182136}
+.hit.playing .t::before{content:'▶ ';color:#4a7dff}
 .prog{height:16px;border-radius:8px;background:#253050;overflow:hidden;margin:10px 0 4px;cursor:pointer;position:relative}
 #pfill{height:100%;width:0;background:#4a7dff;border-radius:8px;transition:width .8s linear;pointer-events:none}
 .ptimes{display:flex;justify-content:space-between;font-size:.72rem;color:#8b93a7;margin-bottom:8px}
@@ -159,15 +163,22 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
 <script type="module">
 const out=document.getElementById('out'),results=document.getElementById('results');
 let curSrc=null;
+const toast=(t,cls)=>{out.textContent=t;out.className=cls||''};
 async function playSource(src,qn){
   curSrc=src;
-  out.textContent='resolving…';
+  toast('解析中…');
   try{
     const r=await fetch('/api/play',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({source:src,...(qn?{qn}:{})})});
     const j=await r.json();
-    out.textContent=r.ok?JSON.stringify({session:j.session_id,title:j.title,mode:j.media_mode},null,2):'ERR '+r.status+' '+JSON.stringify(j);
-    if(r.ok)renderSession(j);
-  }catch(err){out.textContent='ERR '+err}
+    if(!r.ok){toast((j.error||'ERR '+r.status),'err');return}
+    toast('已投放到播放页','ok');
+    markPlaying();
+    renderSession(j);
+  }catch(err){toast(String(err),'err')}
+}
+function markPlaying(){
+  const bv=/video\\/(BV\\w+)/.exec(curSrc||'')?.[1];
+  document.querySelectorAll('.hit').forEach(h=>h.classList.toggle('playing',h.dataset.bv===bv));
 }
 const skeleton=n=>'<div class="sk"></div>'.repeat(n);
 const fmtDur=d=>typeof d==='number'?fmt(d):(d||'');
@@ -218,7 +229,7 @@ async function renderSession(j){
     const t=document.getElementById('dminput').value.trim();if(!t)return;
     const r=await fetch('/api/session/'+j.session_id+'/senddm',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:t})});
     const x=await r.json().catch(()=>({}));
-    out.textContent=r.ok?'弹幕已发送':'发送失败: '+(x.error||r.status);
+    toast(r.ok?'弹幕已发送':'发送失败: '+(x.error||r.status),r.ok?'ok':'err');
     if(r.ok)document.getElementById('dminput').value='';
   };
   document.getElementById('dmsend').onclick=sendDm;
@@ -237,7 +248,7 @@ async function renderSession(j){
   document.getElementById('tstop').onclick=async()=>{
     await fetch('/api/session/'+j.session_id+'/stop',{method:'POST'});
     document.getElementById('sess').style.display='none';
-    out.textContent='已停止';
+    toast('已停止');
   };
   // 直播：隐藏进度条和 seek 按钮 + 弹幕输入
   const live=j.media_mode==='hls-live';
@@ -262,7 +273,10 @@ async function renderSession(j){
 // 页面加载时恢复正在播放的会话面板
 (async()=>{
   const x=await fetch('/api/now').then(r=>r.json()).then(y=>y.session).catch(()=>null);
-  if(x)renderSession(x),pollPos();
+  if(x){renderSession(x);pollPos();
+    const bv=x.locator?.opaque_payload?.bvid;
+    if(bv)setTimeout(()=>document.querySelectorAll('.hit').forEach(h=>h.classList.toggle('playing',h.dataset.bv===bv)),0);
+  }
 })();
 const fmt=t=>{if(!isFinite(t))return'0:00';const m=Math.floor(t/60),s=Math.floor(t%60);return m+':'+String(s).padStart(2,'0')};
 async function pollPos(){
@@ -361,6 +375,8 @@ video{width:100vw;height:100vh;object-fit:contain;display:block}
 #buf.on{display:grid}
 #buf .ring{width:52px;height:52px;border-radius:50%;border:3px solid #fff3;border-top-color:#fff;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
+body.idle{cursor:none}
+body.idle video::-webkit-media-controls-panel{opacity:0}
 </style>
 <video id="v" controls playsinline></video>
 <div id="s">等待控制端点播…</div>
@@ -373,6 +389,10 @@ const v=document.getElementById('v'),s=document.getElementById('s'),dm=document.
 let cur=null,hls=null,pool=[],pidx=0,cues=[],cuesUrl=null,lastCmd=0,sid=null;
 let statusTimer=null;
 function flash(t){s.textContent=t;s.classList.remove('hide');clearTimeout(statusTimer);statusTimer=setTimeout(()=>s.classList.add('hide'),3500)}
+// Hide cursor/native controls after 3s idle (display mode)
+let idleT=null;
+document.addEventListener('mousemove',()=>{document.body.classList.remove('idle');clearTimeout(idleT);idleT=setTimeout(()=>document.body.classList.add('idle'),3000)});
+idleT=setTimeout(()=>document.body.classList.add('idle'),3000);
 // --- danmaku engine: scroll lanes + fixed top/bottom ---
 const FONT=Math.max(18,Math.floor(innerHeight*0.052));
 const LANE_H=Math.floor(FONT*1.45),TOP_N=Math.floor(innerHeight*0.45/LANE_H),BOT_N=Math.floor(innerHeight*0.25/LANE_H);
