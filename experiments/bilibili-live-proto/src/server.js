@@ -141,7 +141,7 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
   <div class="row"><span class="lbl">选集</span><div class="opts" id="pages"></div></div>
   <div class="row"><span class="lbl">字幕</span><div class="opts" id="subs"></div></div>
   <div class="row"><span class="lbl">倍速</span><div class="opts" id="rates"></div></div>
-  <div class="row"><span class="lbl">音量</span><div class="opts"><button data-vd="-0.1">−</button><button id="vmute">🔇</button><button data-vd="0.1">＋</button></div></div>
+  <div class="row"><span class="lbl">音量</span><div class="opts"><button data-vd="-0.1">−</button><button id="vmute">🔇</button><button data-vd="0.1">＋</button><span id="vvol" class="lbl" style="padding-top:7px">100%</span></div></div>
   <div class="row"><span class="lbl">弹幕</span><div class="opts"><button id="dmt" class="on">开</button></div>
     <span class="opts" style="margin-left:auto"><button id="tstop" style="color:#ff8fa3">■ 停止</button></span></div>
   <div class="row" id="dmrow"><input id="dminput" type="text" maxlength="100" placeholder="发条弹幕…" style="flex:1"><button class="primary" id="dmsend">发送</button></div>
@@ -247,8 +247,9 @@ async function renderSession(j){
     document.getElementById('dmt').textContent=on?'开':'关';
   };
   // 音量
-  document.querySelectorAll('[data-vd]').forEach(b=>b.onclick=()=>fetch('/api/session/'+j.session_id+'/vol',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({delta:Number(b.dataset.vd)})}));
-  document.getElementById('vmute').onclick=async()=>{const x=await st();fetch('/api/session/'+j.session_id+'/vol',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({vol:x&&x.volume>0?0:1})})};
+  document.querySelectorAll('[data-vd]').forEach(b=>b.onclick=()=>fetch('/api/session/'+j.session_id+'/vol',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({delta:Number(b.dataset.vd)})}).then(r=>r.json()).then(y=>{if(typeof y.volume==='number')document.getElementById('vvol').textContent=Math.round(y.volume*100)+'%'}));
+  document.getElementById('vvol').textContent=Math.round((j.volume??1)*100)+'%';
+  document.getElementById('vmute').onclick=async()=>{const x=await st();fetch('/api/session/'+j.session_id+'/vol',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({vol:x&&x.volume>0?0:1})}).then(r=>r.json()).then(y=>{if(typeof y.volume==='number')document.getElementById('vvol').textContent=Math.round(y.volume*100)+'%'})};
   // 停止播放：关 session，display 回 idle
   document.getElementById('tstop').onclick=async()=>{
     await fetch('/api/session/'+j.session_id+'/stop',{method:'POST'});
@@ -295,7 +296,18 @@ async function pollPos(){
   document.getElementById('pdur').textContent=fmt(x.dur);
   document.getElementById('pfill').style.width=(x.dur?Math.min(100,x.pos/x.dur*100):0)+'%';
   document.getElementById('tpp').textContent=x.paused?'▶':'⏸';
+  document.getElementById('vvol').textContent=Math.round((x.volume??1)*100)+'%';
+  lastPos={pos:x.pos,dur:x.dur,paused:x.paused,at:performance.now()};
 }
+let lastPos=null;
+// Smooth the progress bar between 2s polls when playing.
+setInterval(()=>{
+  if(!lastPos||lastPos.paused||!lastPos.dur)return;
+  const est=lastPos.pos+(performance.now()-lastPos.at)/1000;
+  if(est>lastPos.dur)return;
+  document.getElementById('pfill').style.width=Math.min(100,est/lastPos.dur*100)+'%';
+  document.getElementById('pcur').textContent=fmt(est);
+},500);
 setInterval(()=>{if(document.getElementById('sess').style.display!=='none')pollPos()},2000);
 document.getElementById('f').onsubmit=e=>{e.preventDefault();playSource(document.getElementById('src').value)};
 document.getElementById('sf').onsubmit=async e=>{
@@ -388,15 +400,22 @@ video{width:100vw;height:100vh;object-fit:contain;display:block}
 @keyframes spin{to{transform:rotate(360deg)}}
 body.idle{cursor:none}
 body.idle video::-webkit-media-controls-panel{opacity:0}
+#idle{position:fixed;inset:0;display:grid;place-items:center;background:#000;z-index:5;transition:opacity .4s}
+#idle.hide{opacity:0;pointer-events:none}
+.idle-card{text-align:center;color:#8b93a7}
+.idle-title{font-size:5vmin;font-weight:600;color:#e8eaf0;margin-bottom:12px}
+.idle-url{font-size:3vmin;color:#4a7dff}
 </style>
 <video id="v" controls playsinline></video>
+<div id="idle"><div class="idle-card"><div class="idle-title">等待控制端点播</div><div class="idle-url" id="iurl"></div></div></div>
 <div id="s">等待控制端点播…</div>
 <div id="dm"></div>
 <div id="sub"></div>
 <div id="buf"><div class="ring"></div></div>
 <script src="/hls.min.js"></script>
 <script>
-const v=document.getElementById('v'),s=document.getElementById('s'),dm=document.getElementById('dm'),subEl=document.getElementById('sub');
+const v=document.getElementById('v'),s=document.getElementById('s'),dm=document.getElementById('dm'),subEl=document.getElementById('sub'),idleEl=document.getElementById('idle');
+document.getElementById('iurl').textContent=location.origin+'/control';
 let cur=null,hls=null,pool=[],pidx=0,cues=[],cuesUrl=null,lastCmd=0,sid=null;
 let statusTimer=null;
 function flash(t){s.textContent=t;s.classList.remove('hide');clearTimeout(statusTimer);statusTimer=setTimeout(()=>s.classList.add('hide'),3500)}
@@ -476,9 +495,11 @@ setInterval(async()=>{
   try{
     const j=await (await fetch('/api/now')).json();
     if(!j.session){
+      idleEl.classList.remove('hide');
       if(cur){cur=null;sid=null;if(hls){hls.destroy();hls=null}v.pause();v.removeAttribute('src');v.load();dm.innerHTML='';pool=[];cues=[];subEl.textContent=''}
-      flash('等待控制端点播…');return;
+      return;
     }
+    idleEl.classList.add('hide');
     if(cur!==j.session.session_id+'|'+j.session.media_url){
       cur=j.session.session_id+'|'+j.session.media_url;
       if(hls){hls.destroy();hls=null}
