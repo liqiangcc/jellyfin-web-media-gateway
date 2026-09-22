@@ -1,8 +1,8 @@
 # 需求说明
 
-## 当前交付阶段（2026-09-08）
+## 当前交付阶段（2026-09-22）
 
-用户决定暂缓手机部署。先在隔离的普通 Linux 测试环境交付真实来源 Web 播放与 Control 闭环；Ubuntu ARM64、物理 TV 和可信 LAN 的长期产品方向仍保留。功能阶段不依赖手机管理面/Runner 恢复，不提供公网服务，不把该阶段验收等同于完整 Core/TV/手机部署验收。当前执行路线见 `product-roadmap.md`。
+用户决定暂缓手机部署。当前功能部署主机为本机 x86_64 Linux VM（`grok-bot-vm-411252337`，即交互式 Agent 会话所在主机，具备 Chrome/MCP 与良好网络）；Gateway 仅绑定 Tailscale tailnet 地址（当前 `100.64.98.39:8787`），iPhone 等 tailnet 客户端经加密 overlay 访问 `/control` 与 `/display`，不监听 LAN 其他接口、不提供公网服务。Tailscale tailnet 按可信私有网络处理，HTTP 基线与 Origin/CSRF/SSRF/token 边界不变。注意区分角色：此阶段 iPhone 只是 Control/Display 客户端；Ubuntu ARM64 手机作为 Gateway 服务器的方向仍暂缓，两者不混淆。tx-node 保留为可选隔离验证主机。功能阶段不依赖手机管理面/Runner 恢复，不把该阶段验收等同于完整 Core/TV/手机部署验收。当前执行路线见 `product-roadmap.md`。
 
 ## 1. 产品目标
 
@@ -274,7 +274,7 @@ Site Plugin 不得直接读取 Vault 文件或其他站点 Cookie。
 
 ### FR-21 MVP Trust Boundary
 
-- MVP 面向可信 LAN / 单用户。
+- MVP 面向可信私有网络 / 单用户（可信 LAN 或等价私有 overlay，例如 Tailscale tailnet）。
 - 默认不直接暴露公网。
 - 仍要求 Origin/CSRF、Host/Content-Type/大小校验、短期 token、防开放代理、命令注入防护。
 - 一旦部署条件变为不可信网络，必须重新设计 Gateway Identity/Authorization。

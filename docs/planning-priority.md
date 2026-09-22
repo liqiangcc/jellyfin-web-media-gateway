@@ -1,19 +1,19 @@
 # Delivery Priority
 
-当前用户目标（2026-09-08）：**暂不部署手机，先完成普通 Linux 上真实 B 站 Web 播放闭环。** Live status/owner 属于 GitHub Issue。
+当前用户目标（2026-09-22）：**本机 x86_64 VM 部署 Gateway，iPhone 经 Tailscale tailnet 访问 Control/Display；随后恢复 #68 完成真实 B 站 Web 播放闭环。** Live status/owner 属于 GitHub Issue。
 
 ## 当前顺序
 
-1. #146 NON-PHONE-EXECUTION-PREP：交付低权限 tx-node 执行、锁定 runtime、浏览器受控访问与可复现 runbook；无真实 B 站实验。
-2. #67 GENERIC-YTDLP-BILIBILI-REAL：在 #146 Final Acceptance 后发布修订契约，证明受控真实解析。
-3. #68 BILIBILI-WEB-E2E：#67 Final Acceptance PASS 后冻结 source shape/Candidate 并发布，完成产品播放与 Control 闭环。
+1. 本机部署：GitHub-hosted Actions 构建精确 Candidate `gateway-server` artifact → 摘要/provenance 校验 → 本机绑定 tailnet 地址运行 → iPhone 访问 `/control`/`/display` 与直链播放链路验证。
+2. #68 BILIBILI-WEB-E2E 恢复：续用 PR #278 修复已知编译/取消清理问题 → hosted required Jobs PASS → 一次性实站 J3 → 同一 Candidate 本机部署验收。本机由 Coordinator 正式命名为其 approved ordinary-Linux execution host 时须记录隔离边界。
+3. #246 authorized Bilibili target：六项外部前置满足后可考虑在本机低权限边界执行（本机具备 Chrome/MCP）；仍 `status:blocked`。
 
-#147 CI-NAVIGATION-WORKFLOW-REPAIR 无硬业务依赖，可独立执行；它修复已观察到的无 job workflow failure，不扩展为通用 CI 平台。
+#67 generic-ytdlp 保留 BLOCK 历史，不改写；浏览器取源路线（#237/#240/#243–#271）已接受。#147 等历史 CI 修复已关闭。
 
 ## 暂缓
 
 - #142/#131/#113：手机管理面、Runner、手机站点复测；不做恢复或采样循环。
-- #9：手机资源/容量；#7/#16：真实 TV/Jellyfin；均不阻塞当前功能阶段。
+- #9：手机资源/容量；#7/#16：真实 TV/Jellyfin；均不阻塞当前功能阶段。iPhone tailnet 客户端访问不替代 TV/手机设备 Evidence。
 - #72/#26/#27：等首播稳定，再根据用户能力需求选导航、登录或 Native Panel。
 - #22：保留原完整 P0 Evidence 门槛，不能由桌面 Web 测试替代。
 

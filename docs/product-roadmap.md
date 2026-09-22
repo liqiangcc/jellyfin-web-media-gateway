@@ -1,18 +1,20 @@
 # Product Delivery Roadmap
 
-当前具体 Task sequencing authority，更新于 2026-09-08。用户决定暂缓手机部署，优先交付普通 Linux 上真实 Web 播放。本文不覆盖 requirements/architecture/contracts/security，不保存实时 owner；Issue 是状态 authority。
+当前具体 Task sequencing authority，更新于 2026-09-22。用户决定暂缓手机部署；当前功能部署主机为本机 x86_64 Linux VM（`grok-bot-vm-411252337`），iPhone 等客户端经 Tailscale tailnet 访问 Control/Display，优先交付真实 Web 播放。本文不覆盖 requirements/architecture/contracts/security，不保存实时 owner；Issue 是状态 authority。
 
 ## 当前可交付里程碑
 
 ```text
-当前优先预研：#165 离线 Browser 取源探针（已接受）
-  → #169 显式 live-selector Browser 取源能力（hosted artifact，待 Worker）
-    → #166 clean anonymous 实站媒体可移植性（#169 接受后冻结并发布）
-      → 按真实 shape 评审/实现最小通用媒体能力与 Bilibili 插件
-        → 正式修订并发布 #68 Control → Gateway → Web Display
+本机部署：Actions 精确 Candidate gateway-server → tailnet 绑定 → iPhone /control + /display 链路验证
+  → #68 Attempt 恢复（续用 PR #278）：hosted required Jobs + 本机一次性实站 J3
+    → 同一 Candidate 本机部署验收 = 首个真实 Web 产品闭环
+      → 再评估 #246 授权账号播放 / #72 导航 / 其他后续能力
+
+Browser 取源研究分支（#165/#166/#169）与生产化（#237 插件、#240 观察桥、#243–#259 认证链、
+#265/#268/#271 MediaShapeV1 + 分离 A/V 投递）均已接受。
 
 保留旧路径：#146 → #67 generic-ytdlp（BLOCK，待具体外部/契约变化）
-已接受的通用 Web/Display 基础可复用；不是 B 站产品 PASS。
+已接受的通用 Web/Display 基础可复用；不是 B 站产品 PASS。tx-node 保留为可选隔离主机，不再是默认功能部署目标。
 ```
 
 当前证据、替代路线、任务边界和下一阶段条件见 [Bilibili Browser 预研](research/bilibili-browser-acquisition.md)。此前 generic-ytdlp 路线的工作拆分见 [推进计划](non-phone-web-playback-plan.md)，其顺序已由本次研究分支更新。恢复整个路线的 Coordinator 入口见 [non-phone-delivery handoff](tasks/handoffs/non-phone-delivery.md)。

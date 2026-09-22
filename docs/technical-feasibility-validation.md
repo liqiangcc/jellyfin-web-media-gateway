@@ -1,8 +1,8 @@
 # 技术预研与可行性验证
 
-## 当前 Evidence 路由（2026-09-08）
+## 当前 Evidence 路由（2026-09-22）
 
-普通 Linux 功能路径按 #146 → #67 → #68 推进，当前无需手机。#146 仅证明受限执行环境；#67 仅证明真实来源解析；#68 证明 Web 播放/控制组合。外部 SSH 验证必须由 Task 显式允许并记录真实 host/plane/Candidate，通用 required 回归继续走 GitHub Actions。R002 物理 TV、R003 手机资源和 #22 原 P0 汇总门槛保留且暂缓；本次路线变更不追认任何未运行设备 Claim。
+普通 Linux 功能路径在本机 x86_64 VM（`grok-bot-vm-411252337`）执行：Gateway 仅绑定 Tailscale tailnet 地址，iPhone 等客户端经 tailnet 访问；构建仍全部走 GitHub-hosted Actions，本机只运行摘要校验通过的精确 Candidate artifact。当前按「本机部署 + 访问链路/直链播放验证 → #68 真实 B 站闭环」推进；#68 J3 一次性实站预算未消耗，恢复时 hosted 与实站验证必须绑定同一 final Candidate。#146/#67 历史结论保留不改写；tx-node 保留为可选隔离主机。R002 物理 TV、R003 手机资源和 #22 原 P0 汇总门槛保留且暂缓；本机/iPhone 浏览器功能证据不追认为 TV/手机设备 Claim。
 
 ## 1. 目的
 

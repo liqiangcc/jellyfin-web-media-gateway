@@ -1,8 +1,8 @@
 # 系统设计
 
-## 当前功能验证部署（2026-09-08）
+## 当前功能验证部署（2026-09-22）
 
-当前先在普通 Linux 的隔离测试实例组合既有 Gateway、SiteAdapterRegistry、Media Gateway 与 Web Display；暂不部署手机。tx-node 是候选 x86_64 执行主机，不改变业务分层或状态所有权。浏览器与 Gateway 可在不同主机，需明确受控访问路径、Host/Origin 和媒体同源关系；具体准入与验证由 Task Contract 定义。手机/TV 验证留在独立后续验收线。
+当前在本机 x86_64 Linux VM（`grok-bot-vm-411252337`）组合既有 Gateway、SiteAdapterRegistry、Media Gateway 与 Web Display；暂不部署手机。Gateway 仅绑定 Tailscale tailnet 地址（`GATEWAY_BIND_ADDR=100.64.98.39`、`GATEWAY_HTTP_AUTHORITY=http://100.64.98.39:8787`），iPhone 等 tailnet 客户端经加密 overlay 访问 `/control` 与 `/display`。本机具备 Chrome 与浏览器 MCP 诊断能力，可承担 Browser Worker 相关验证；所有构建仍只在 GitHub-hosted Actions 执行，本机只运行摘要校验通过的精确 Candidate artifact。这不改变业务分层或状态所有权；Host/Origin 与媒体同源关系由 runtime authority 配置固定。tx-node 保留为历史/可选执行主机；手机/TV 验证留在独立后续验收线。
 
 ## 1. 架构摘要
 

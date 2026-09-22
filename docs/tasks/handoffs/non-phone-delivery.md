@@ -1,6 +1,20 @@
 # Coordinator Handoff — Non-phone Web delivery
 
-用户方向：Coordinator 负责技术研究、Task 拆分/发布、Review 与闭环；具体实现交后续 Worker。本轮不启动实现 Worker。模型要求 Luna high，Fast 可用时开启并记录实际配置。所有编译（含 test binaries）必须远程 GitHub-hosted Actions；不在本机/tx-node 编译，不部署手机。
+用户方向（2026-09-22）：本机 x86_64 VM（`grok-bot-vm-411252337`）为当前功能部署与交互开发主机；Gateway 仅绑定 Tailscale tailnet 地址（`100.64.98.39:8787`），iPhone 经 tailnet 访问 `/control`/`/display`。Coordinator 负责技术研究、Task 拆分/发布、Review 与闭环；具体实现交后续 Worker。所有编译（含 test binaries）必须远程 GitHub-hosted Actions；不在本机/tx-node 编译，本机只运行摘要校验通过的精确 Candidate artifact，不部署手机。
+
+当前推进图：
+
+```text
+本机部署 main 精确 Candidate gateway-server（tailnet 绑定，iPhone 链路验证）
+→ #68 Attempt 恢复：续用 PR #278，修复 Notified pin 编译问题与
+  BrowserSession 取消泄漏（RAII），hosted required Jobs PASS 后
+  在本机完成一次性实站 J3 → 同一 Candidate 部署验收
+
+#67 generic-ytdlp 保留 BLOCK 历史。#246 authorized target 外部前置满足前
+保持 blocked；本机具备 Chrome/MCP，可作为其 approved host 候选。
+```
+
+历史推进图（已完成）：#165 → #166 → #169 研究分支，#237/#240/#243–#259/#265/#268/#271 生产化已接受。
 
 ## Resume from durable authority
 
@@ -39,5 +53,5 @@ Task packages：
 新的 Coordinator 可使用：
 
 ```text
-作为 Coordinator 接手。读取 AGENTS.md、docs/tasks/handoffs/non-phone-delivery.md，从 GitHub 当前状态恢复 #165/#166 Browser 取源研究分支及 #67/#68 历史/契约。只做预研、任务发布与 Review 闭环；实现交后续 Luna high Worker。暂不部署手机，全部编译走 GitHub-hosted Actions。按每项 task.md 审查 Evidence、更新 GitHub 并发布下一项，不把浏览器原站可播放当 Gateway E2E。
+作为 Coordinator 接手。读取 AGENTS.md、docs/tasks/handoffs/non-phone-delivery.md，从 GitHub 当前状态恢复本机部署路线与 #68/PR #278 恢复点及 #67/#246 历史/契约。只做预研、任务发布与 Review 闭环；实现交后续 Worker。暂不部署手机；部署主机为本机 VM（tailnet 绑定），全部编译走 GitHub-hosted Actions，本机只运行已校验 artifact。按每项 task.md 审查 Evidence、更新 GitHub 并发布下一项，不把浏览器原站可播放当 Gateway E2E。
 ```
