@@ -107,8 +107,8 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
 #sess .opts{display:flex;gap:6px;flex-wrap:wrap}
 #sess .opts button{padding:7px 11px;font-size:.78rem;border-radius:9px}
 #out{font-size:.72rem;color:#8b93a7;white-space:pre-wrap;word-break:break-all;background:#0d1119;border-radius:9px;padding:9px;max-height:110px;overflow:auto}
-.prog{height:5px;border-radius:3px;background:#253050;overflow:hidden;margin:10px 0 4px}
-#pfill{height:100%;width:0;background:#4a7dff;border-radius:3px;transition:width .8s linear}
+.prog{height:16px;border-radius:8px;background:#253050;overflow:hidden;margin:10px 0 4px;cursor:pointer;position:relative}
+#pfill{height:100%;width:0;background:#4a7dff;border-radius:8px;transition:width .8s linear;pointer-events:none}
 .ptimes{display:flex;justify-content:space-between;font-size:.72rem;color:#8b93a7;margin-bottom:8px}
 .transport{display:flex;gap:8px;justify-content:center;margin:6px 0 10px}
 .transport button{min-width:52px;font-size:.95rem}
@@ -130,6 +130,7 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
   <div class="row"><span class="lbl">选集</span><div class="opts" id="pages"></div></div>
   <div class="row"><span class="lbl">字幕</span><div class="opts" id="subs"></div></div>
   <div class="row"><span class="lbl">倍速</span><div class="opts" id="rates"></div></div>
+  <div class="row"><span class="lbl">弹幕</span><div class="opts"><button id="dmt" class="on">开</button></div></div>
 </div>
 <pre id="out">就绪</pre>
 <form id="f"><input id="src" type="text" placeholder="粘贴 BV 链接 / 番剧 ep / 直播房号…"><button class="primary">播放</button></form>
@@ -162,6 +163,9 @@ async function renderSession(j){
   sess.style.display='';
   const mode=j.media_mode==='hls-live'?'<span class="badge live">直播</span>':j.is_preview?'<span class="badge prev">预览</span>':'<span class="badge">'+j.media_mode+'</span>';
   document.getElementById('stitle').innerHTML=j.title+mode;
+  // Restore curSrc from locator when panel is rebuilt on page load.
+  if(!curSrc&&j.locator?.opaque_payload?.bvid)
+    curSrc='https://www.bilibili.com/video/'+j.locator.opaque_payload.bvid+(j.locator.opaque_payload.page?'?p='+j.locator.opaque_payload.page:'');
   // 清晰度：re-play same source at chosen qn
   document.getElementById('quals').innerHTML=(j.quality_options||[]).map(q=>'<button data-qn="'+q.qn+'"'+(q.qn===j.quality?' style="font-weight:bold"':'')+'>'+q.label+'</button>').join(' ')||'（仅一档）';
   document.querySelectorAll('#quals button').forEach(b=>b.onclick=()=>playSource(curSrc,b.dataset.qn));
@@ -187,7 +191,26 @@ async function renderSession(j){
   document.getElementById('tfwd').onclick=async()=>{const x=await st();if(x)cmd('seek',(x.pos||0)+15)};
   document.getElementById('tprev').onclick=async()=>{const n=await fetch('/api/session/'+j.session_id+'/nav').then(r=>r.json()).catch(()=>null);if(n&&n.previous)playSource('https://www.bilibili.com/video/'+n.previous.opaque_payload.bvid+'?p='+n.previous.opaque_payload.page)};
   document.getElementById('tnext').onclick=async()=>{const n=await fetch('/api/session/'+j.session_id+'/nav').then(r=>r.json()).catch(()=>null);if(n&&n.next)playSource('https://www.bilibili.com/video/'+n.next.opaque_payload.bvid+'?p='+n.next.opaque_payload.page)};
+  // 进度条点击 seek
+  document.querySelector('.prog').onclick=async e=>{
+    const x=await st();if(!x||!x.dur)return;
+    const r=e.currentTarget.getBoundingClientRect();
+    cmd('seek',Math.floor((e.clientX-r.left)/r.width*x.dur));
+    setTimeout(pollPos,800);
+  };
+  // 弹幕开关
+  document.getElementById('dmt').onclick=async()=>{
+    const x=await st();const on=x?x.dm_on===false:true;
+    fetch('/api/session/'+j.session_id+'/dm',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({on})});
+    document.getElementById('dmt').classList.toggle('on',on);
+    document.getElementById('dmt').textContent=on?'开':'关';
+  };
 }
+// 页面加载时恢复正在播放的会话面板
+(async()=>{
+  const x=await fetch('/api/now').then(r=>r.json()).then(y=>y.session).catch(()=>null);
+  if(x)renderSession(x),pollPos();
+})();
 const fmt=t=>{if(!isFinite(t))return'0:00';const m=Math.floor(t/60),s=Math.floor(t%60);return m+':'+String(s).padStart(2,'0')};
 async function pollPos(){
   const x=await fetch('/api/now').then(r=>r.json()).then(y=>y.session).catch(()=>null);
@@ -369,6 +392,7 @@ setInterval(async()=>{
       v.play().catch(()=>{s.classList.remove('hide');s.textContent=j.session.title+' — 点按播放'});
     }
     if(j.session.playback_rate&&v.playbackRate!==j.session.playback_rate)v.playbackRate=j.session.playback_rate;
+    dm.style.display=j.session.dm_on===false?'none':'';
     sid=j.session.session_id;
     // Apply transport commands (guarded by seq).
     if(j.session.cmd&&j.session.cmd.seq!==lastCmd){
@@ -818,6 +842,20 @@ setInterval(async()=>{
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ ok: true }));
       }
+      // Danmaku visibility toggle for the session.
+      const dmSel = /^\/api\/session\/([\w-]+)\/dm$/.exec(url.pathname);
+      if (dmSel && req.method === 'POST') {
+        const s = getSession(dmSel[1]);
+        if (!s) {
+          res.writeHead(404);
+          return res.end('no session');
+        }
+        let raw = '';
+        for await (const c of req) raw += c;
+        s.dm_on = !!JSON.parse(raw || '{}').on;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true }));
+      }
       // Control sets playback rate on the session; display applies it.
       const rateSel = /^\/api\/session\/([\w-]+)\/rate$/.exec(url.pathname);
       if (rateSel && req.method === 'POST') {
@@ -862,6 +900,7 @@ setInterval(async()=>{
                 subtitle_url: s.subtitle_url || null,
                 playback_rate: s.playback_rate || 1,
                 cmd: s.cmd || null,
+                dm_on: s.dm_on !== false,
                 pos: s.pos || 0,
                 dur: s.dur || 0,
                 paused: !!s.paused,
