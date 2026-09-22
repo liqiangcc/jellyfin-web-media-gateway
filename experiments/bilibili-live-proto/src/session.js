@@ -7,6 +7,22 @@ import { randomUUID } from 'node:crypto';
 
 const sessions = new Map();
 let currentId = null;
+const history = [];
+const HISTORY_MAX = 10;
+
+export function pushHistory(locator, title) {
+  const key = JSON.stringify(locator?.opaque_payload || {});
+  const i = history.findIndex(
+    (h) => JSON.stringify(h.locator?.opaque_payload) === key,
+  );
+  if (i >= 0) history.splice(i, 1);
+  history.unshift({ locator, title, at: Date.now() });
+  if (history.length > HISTORY_MAX) history.pop();
+}
+
+export function listHistory() {
+  return history;
+}
 
 export function createSession(locator, media) {
   const session = {

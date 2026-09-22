@@ -27,6 +27,8 @@ import {
   getSession,
   currentSession,
   closeSession,
+  pushHistory,
+  listHistory,
 } from './session.js';
 import { proxyStream, remuxToHls } from './media.js';
 
@@ -155,6 +157,7 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
   <button class="chip" id="fav">⭐ 收藏夹</button>
   <button class="chip" id="hot">🔥 热门</button>
   <button class="chip" id="feed">✨ 推荐</button>
+  <button class="chip" id="hist">🕘 最近</button>
 </div>
 <div class="section" id="sect" style="display:none"></div>
 <div id="results" class="list"></div>
@@ -358,6 +361,12 @@ document.getElementById('hot').onclick=async()=>{
 document.getElementById('feed').onclick=async()=>{
   markChip('feed');sect.style.display='';sect.textContent='为你推荐';favlist.innerHTML=skeleton(5);
   showVideos(await fetch('/api/discover?kind=rcmd').then(r=>r.json()));
+};
+document.getElementById('hist').onclick=async()=>{
+  markChip('hist');sect.style.display='';sect.textContent='最近播放';favlist.innerHTML=skeleton(3);
+  const items=await fetch('/api/history').then(r=>r.json()).catch(()=>[]);
+  favlist.innerHTML=items.map(x=>'<div class="hit" data-src="'+encodeURIComponent(x.source)+'"><div><div class="t">'+x.title+'</div><div class="m">'+new Date(x.at).toLocaleTimeString()+'</div></div></div>').join('')||'<div class="muted">暂无记录</div>';
+  favlist.querySelectorAll('.hit').forEach(i=>i.onclick=()=>playSource(decodeURIComponent(i.dataset.src)));
 };
 const auth=await fetch('/api/auth').then(r=>r.json()).catch(()=>({}));
 if(auth.logged_in){
@@ -617,6 +626,7 @@ async function play(body) {
     hlsDir = (await remuxToHls(video, audio, `${tag.bvid}-p${tag.page}`)).dir;
   }
   const session = createSession(rec.locator, media);
+  pushHistory(rec.locator, media.title);
   session.hls_dir = hlsDir;
   const media_mode = hlsDir ? 'hls-remux' : 'file';
   const media_url = hlsDir
@@ -780,6 +790,24 @@ setInterval(async()=>{
             uname: a?.uname || null,
             mid: authStore.active,
           }),
+        );
+      }
+      if (req.method === 'GET' && url.pathname === '/api/history') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(
+          JSON.stringify(
+            listHistory().map((h) => {
+              const p = h.locator?.opaque_payload || {};
+              const source = p.bvid
+                ? `https://www.bilibili.com/video/${p.bvid}${p.page ? '?p=' + p.page : ''}`
+                : p.ep_id
+                  ? `https://www.bilibili.com/bangumi/play/ep${p.ep_id}`
+                  : p.room_id
+                    ? `https://live.bilibili.com/${p.room_id}`
+                    : '';
+              return { title: h.title, source, at: h.at };
+            }),
+          ),
         );
       }
       if (req.method === 'GET' && url.pathname === '/api/discover') {
