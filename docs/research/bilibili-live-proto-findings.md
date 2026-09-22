@@ -24,7 +24,7 @@
 1. `ResolvedMedia` 需表达两种真实 shape：muxed `http_file` 与 video+audio 分离对；#265/#271 的 MediaShapeV1/remux 方向得到实站佐证。
 2. 匿名内容存在 muxed durl 路径时，首版投递可以不做 remux——实现顺序上 "http_file proxy" 应优先于 "DASH remux"。
 3. `upstream_headers`（Referer/UA）必须属于 ResolvedStream 的服务端注入面，绝不下发客户端——原型按此边界实现且实测可行。
-4. 播放 URL 带签名参数（`deadline`、`upsig` 等）→ `expires_at`/refresh-via-locator 语义是必要的，CDN URL 仍不是内容身份。
+4. 播放 URL 带签名参数（`deadline`、`upsig` 等）→ `expires_at`/refresh-via-locator 语义是必要的，CDN URL 仍不是内容身份。**实测 `deadline` = 签发后 ~2 小时**（2026-09-22 采样），过期后需经 locator 重新 resolve 取新 URL——这条语义已被实站证实而非推测。
 5. 环境差异本身是证据：tx-node 历史 4xx 更可能是网络/ASN 特征而非 B 站必然拦截；本机（中国大陆直连网络）匿名全通。#68 J3 的 host 准入应记录该差异。
 
 ## 第二轮：匿名 API 能力地图（2026-09-22 补测）
@@ -76,7 +76,7 @@ headless Chrome 151（CDP 驱动）实测 `/display` 页，两条投递路径均
 ## 未测/不能推导
 
 - 登录态内容、4K/HEVC、drm（`protection` 未触发非 clear 值）；
-- URL 实际有效期、切 P 导航（prototype `navigation()` 已写出但未实测）、多并发、长期稳定性；
+- 切 P 导航（prototype `navigation()` 已写出但未实测）、多并发、长期稳定性；
 - 有字幕样本的 `subtitle_url` 实际格式（本样本列表为空）；
 - 弹幕正确端点形态；
 - iPhone Safari 真实播放（部署好待人工确认）；
