@@ -1,6 +1,6 @@
 # 文档导航与权威层级
 
-当前推进入口（2026-09-08）：[Bilibili Browser 取源预研与任务分解](research/bilibili-browser-acquisition.md)；[暂缓手机部署的完整计划](non-phone-web-playback-plan.md)；下一 Coordinator 从 [非手机交付 handoff](tasks/handoffs/non-phone-delivery.md) 恢复。实际执行顺序与 Task 发布情况以 `product-roadmap.md` 和 live GitHub 为准。
+当前推进入口（2026-09-22）：本机 VM 部署 + iPhone Tailscale 访问路线见 `product-roadmap.md` 与 `planning-priority.md`；#68 恢复见其 Issue 与 `tasks/68-bilibili-web-e2e/`。历史研究分支见 [Bilibili Browser 取源预研](research/bilibili-browser-acquisition.md)；Coordinator 恢复入口见 [非手机交付 handoff](tasks/handoffs/non-phone-delivery.md)。实际执行顺序与 Task 发布情况以 `product-roadmap.md` 和 live GitHub 为准。
 
 本仓库当前仍处于设计与功能闭环阶段。为避免 README、需求、架构、专题设计和 ADR 逐渐漂移，按下面权威层级解释。
 

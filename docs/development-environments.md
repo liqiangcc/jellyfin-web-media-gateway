@@ -2,9 +2,9 @@
 
 资源限制：所有编译/构建必须在远程 GitHub-hosted Actions 执行，详见 AGENTS.md §4.1。本地/SSH/容器调试权限不包括编译；目标仅运行已验证的预编译产物。本文历史路由示例不授予本地编译例外。
 
-## 当前非手机执行路由（2026-09-08）
+## 当前非手机执行路由（2026-09-22）
 
-当前功能主线使用 Codex Worker `env:cloud`，并要求该 Worker 具备既有 authenticated SSH `tx-node` 能力；标签代表 Worker 编排角色，不代表远端 host。普通构建/测试使用 GitHub-hosted；Task 明确列出的 live Jobs 可用 `Execution plane=external-codex/ssh; Executor=tx-node; Target=ordinary Linux x86_64`，不得称 Actions/phone Evidence。#146 建立边界与可复现入口，不默认安装 self-hosted Runner。没有 SSH 能力的 Worker 不领取 live Task。手机部署及其恢复线暂缓。以下旧示例中的 Web-first 路由服从 AGENTS.md 的 Codex-first 规则。
+当前功能部署与交互式开发主机为本机 x86_64 Linux VM（`grok-bot-vm-411252337`）：运行交互式 Agent 会话，具备直接 shell、Chrome、浏览器 MCP 与良好网络；Gateway runtime 仅绑定 Tailscale tailnet 地址（当前 `100.64.98.39:8787`），iPhone 等 tailnet 客户端经加密 overlay 访问 `/control`/`/display`。本机**不编译**：所有构建仍走 GitHub-hosted Actions（AGENTS.md §4.1），本机只下载运行摘要与 Candidate 校验通过的 artifact。依赖本机交互能力的 Task 由本机会话执行；tx-node 保留为可选 SSH 隔离主机（历史标签 `external-codex/ssh` 路由不变）。普通构建/测试使用 GitHub-hosted；手机部署及其恢复线暂缓。以下旧示例中的 Web-first 路由服从 AGENTS.md 的 Codex-first 规则。
 
 ## 1. 目标
 
@@ -439,6 +439,7 @@ manual-observation
 | WSL | Interactive Linux Debug | 快速反复调试 | 非目标环境 | WSL runtime/diagnosis |
 | Windows | Device Management | ADB/Android host | 非 Gateway target | Windows/ADB state |
 | Cloud | Optional External Worker | 远程/Tailscale/状态保持 | 资源有限，不做 Runner | cloud-specific/remote execution |
+| 本机 dev host | 当前交互开发 + 功能部署 | 直接 shell/Chrome/MCP/tailnet，资源充足 | 不编译；非手机/TV 目标 | 本机 runtime/diagnosis |
 | Real TV / Manual | Final UX Proof | 真实 TV 行为 | 人工、高成本 | TV UX/browser behavior |
 
 ### 9.2 Web Worker
