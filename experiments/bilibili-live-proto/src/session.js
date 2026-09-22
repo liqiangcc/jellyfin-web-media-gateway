@@ -32,13 +32,19 @@ const saveHistory = () => {
   }
 };
 
-export function pushHistory(locator, title) {
+export function pushHistory(locator, title, cover) {
   const key = JSON.stringify(locator?.opaque_payload || {});
   const i = history.findIndex(
     (h) => JSON.stringify(h.locator?.opaque_payload) === key,
   );
-  if (i >= 0) history.splice(i, 1);
-  history.unshift({ locator, title, at: Date.now() });
+  const prev = i >= 0 ? history.splice(i, 1)[0] : null;
+  history.unshift({
+    locator,
+    title,
+    cover: cover || prev?.cover || null,
+    pos: prev?.pos || 0,
+    at: Date.now(),
+  });
   if (history.length > HISTORY_MAX) history.pop();
   saveHistory();
 }

@@ -176,7 +176,7 @@ async function playSource(src,qn,cover){
   curSrc=src;if(cover)curCover=cover;
   toast('解析中…');
   try{
-    const r=await fetch('/api/play',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({source:src,...(qn?{qn}:{})})});
+    const r=await fetch('/api/play',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({source:src,cover:curCover,...(qn?{qn}:{})})});
     const j=await r.json();
     if(!r.ok){toast((j.error||'ERR '+r.status),'err');return}
     toast('已投放到播放页','ok');
@@ -196,7 +196,7 @@ async function renderSession(j){
   const sess=document.getElementById('sess');
   sess.style.display='';
   const mode=j.media_mode==='hls-live'?'<span class="badge live">直播</span>':j.is_preview?'<span class="badge prev">预览</span>':'<span class="badge">'+j.media_mode+'</span>';
-  document.getElementById('stitle').innerHTML=j.title+mode;
+  document.getElementById('stitle').innerHTML=j.title+mode+(curSrc?' <a href="'+curSrc+'" target="_blank" style="color:#6ea8fe;font-size:.75rem;text-decoration:none;white-space:nowrap">🔗 原视频</a>':'');
   // 会话卡片封面（从列表点进来时带上）
   let cov=document.getElementById('sesscov');
   if(curCover){if(!cov){cov=document.createElement('img');cov.id='sesscov';cov.style.cssText='width:100%;border-radius:10px;margin-bottom:8px;display:block';sess.insertBefore(cov,document.getElementById('stitle'))}cov.src=curCover}
@@ -384,8 +384,8 @@ document.getElementById('feed').onclick=async()=>{
 document.getElementById('hist').onclick=async()=>{
   markChip('hist');sect.style.display='';sect.textContent='最近播放';favlist.innerHTML=skeleton(3);
   const items=await fetch('/api/history').then(r=>r.json()).catch(()=>[]);
-  favlist.innerHTML=items.map(x=>'<div class="hit" data-src="'+encodeURIComponent(x.source)+'"><div><div class="t">'+x.title+'</div><div class="m">'+new Date(x.at).toLocaleTimeString()+(x.pos?' · 续播 '+fmt(x.pos):'')+'</div></div></div>').join('')||'<div class="muted">暂无记录</div>';
-  favlist.querySelectorAll('.hit').forEach(i=>i.onclick=()=>playSource(decodeURIComponent(i.dataset.src)));
+  favlist.innerHTML=items.map(x=>'<div class="hit" data-src="'+encodeURIComponent(x.source)+'">'+(x.cover?'<div class="cov"><img src="'+x.cover+'" loading="lazy"></div>':'')+'<div><div class="t">'+x.title+'</div><div class="m">'+new Date(x.at).toLocaleTimeString()+(x.pos?' · 续播 '+fmt(x.pos):'')+'</div></div></div>').join('')||'<div class="muted">暂无记录</div>';
+  favlist.querySelectorAll('.hit').forEach(i=>i.onclick=()=>playSource(decodeURIComponent(i.dataset.src),0,i.querySelector('img')?.src));
 };
 const auth=await fetch('/api/auth').then(r=>r.json()).catch(()=>({}));
 if(auth.logged_in){
@@ -667,7 +667,7 @@ async function play(body) {
   }
   const session = createSession(rec.locator, media);
   const resume = historyPos(rec.locator);
-  pushHistory(rec.locator, media.title);
+  pushHistory(rec.locator, media.title, body.cover);
   session.hls_dir = hlsDir;
   // Resume from last position — display seeks once the stream is up.
   if (resume > 0) session.cmd = { seq: 1, op: 'seek', pos: resume };
@@ -848,7 +848,13 @@ setInterval(async()=>{
                   : p.room_id
                     ? `https://live.bilibili.com/${p.room_id}`
                     : '';
-              return { title: h.title, source, at: h.at, pos: h.pos || 0 };
+              return {
+                title: h.title,
+                source,
+                at: h.at,
+                pos: h.pos || 0,
+                cover: h.cover || null,
+              };
             }),
           ),
         );
