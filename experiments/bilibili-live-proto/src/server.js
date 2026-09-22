@@ -162,6 +162,7 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
   <button class="chip" id="fav">⭐ 收藏夹</button>
   <button class="chip" id="hot">🔥 热门</button>
   <button class="chip" id="feed">✨ 推荐</button>
+  <button class="chip" id="rank">🏆 排行</button>
   <button class="chip" id="hist">🕘 最近</button>
 </div>
 <div class="section" id="sect" style="display:none"></div>
@@ -386,6 +387,10 @@ document.getElementById('hot').onclick=async()=>{
 document.getElementById('feed').onclick=async()=>{
   markChip('feed');sect.style.display='';sect.textContent='为你推荐';favlist.innerHTML=skeleton(5);
   showVideos(await fetch('/api/discover?kind=rcmd').then(r=>r.json()));
+};
+document.getElementById('rank').onclick=async()=>{
+  markChip('rank');sect.style.display='';sect.textContent='全站排行';favlist.innerHTML=skeleton(5);
+  showVideos(await fetch('/api/discover?kind=ranking').then(r=>r.json()));
 };
 document.getElementById('hist').onclick=async()=>{
   markChip('hist');sect.style.display='';sect.textContent='最近播放';favlist.innerHTML=skeleton(3);
