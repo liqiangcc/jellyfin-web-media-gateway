@@ -145,7 +145,7 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
   <div class="row"><span class="lbl">字幕</span><div class="opts" id="subs"></div></div>
   <div class="row"><span class="lbl">倍速</span><div class="opts" id="rates"></div></div>
   <div class="row"><span class="lbl">音量</span><div class="opts"><button data-vd="-0.1">−</button><button id="vmute">🔇</button><button data-vd="0.1">＋</button><span id="vvol" class="lbl" style="padding-top:7px">100%</span></div></div>
-  <div class="row"><span class="lbl">弹幕</span><div class="opts"><button id="dmt" class="on">开</button></div>
+  <div class="row"><span class="lbl">弹幕</span><div class="opts"><button id="dmt" class="on">开</button><button data-ds="0.8">小</button><button data-ds="1">中</button><button data-ds="1.3">大</button></div>
     <span class="opts" style="margin-left:auto"><button id="tstop" style="color:#ff8fa3">■ 停止</button></span></div>
   <div class="row" id="dmrow"><input id="dminput" type="text" maxlength="100" placeholder="发条弹幕…" style="flex:1"><button class="primary" id="dmsend">发送</button></div>
   <div class="section" id="relsec" style="display:none">相关推荐</div>
@@ -251,6 +251,11 @@ async function renderSession(j){
     document.getElementById('dmt').classList.toggle('on',on);
     document.getElementById('dmt').textContent=on?'开':'关';
   };
+  // 弹幕字号
+  document.querySelectorAll('[data-ds]').forEach(b=>{
+    b.classList.toggle('on',Number(b.dataset.ds)===(j.dm_scale||1));
+    b.onclick=()=>{fetch('/api/session/'+j.session_id+'/dmscale',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({scale:Number(b.dataset.ds)})});document.querySelectorAll('[data-ds]').forEach(x=>x.classList.toggle('on',x===b))};
+  });
   // 音量
   document.querySelectorAll('[data-vd]').forEach(b=>b.onclick=()=>fetch('/api/session/'+j.session_id+'/vol',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({delta:Number(b.dataset.vd)})}).then(r=>r.json()).then(y=>{if(typeof y.volume==='number')document.getElementById('vvol').textContent=Math.round(y.volume*100)+'%'}));
   document.getElementById('vvol').textContent=Math.round((j.volume??1)*100)+'%';
@@ -435,8 +440,16 @@ let idleT=null;
 document.addEventListener('mousemove',()=>{document.body.classList.remove('idle');clearTimeout(idleT);idleT=setTimeout(()=>document.body.classList.add('idle'),3000)});
 idleT=setTimeout(()=>document.body.classList.add('idle'),3000);
 // --- danmaku engine: scroll lanes + fixed top/bottom ---
-const FONT=Math.max(18,Math.floor(innerHeight*0.052));
-const LANE_H=Math.floor(FONT*1.45),TOP_N=Math.floor(innerHeight*0.45/LANE_H),BOT_N=Math.floor(innerHeight*0.25/LANE_H);
+let dmScale=1;
+let FONT=Math.max(18,Math.floor(innerHeight*0.052));
+let LANE_H=Math.floor(FONT*1.45),TOP_N=Math.floor(innerHeight*0.45/LANE_H),BOT_N=Math.floor(innerHeight*0.25/LANE_H);
+function setDmScale(k){
+  dmScale=k;
+  FONT=Math.max(14,Math.floor(innerHeight*0.052*k));
+  LANE_H=Math.floor(FONT*1.45);
+  TOP_N=Math.floor(innerHeight*0.45/LANE_H);
+  BOT_N=Math.floor(innerHeight*0.25/LANE_H);
+}
 const laneFree=[],topFree=[],botFree=[];
 const FLY_MS=7500,FIX_MS=4500;
 function colorOf(d){return '#'+d.color.toString(16).padStart(6,'0')}
@@ -534,6 +547,7 @@ setInterval(async()=>{
     if(j.session.playback_rate&&v.playbackRate!==j.session.playback_rate)v.playbackRate=j.session.playback_rate;
     if(typeof j.session.volume==='number'&&Math.abs(v.volume-j.session.volume)>0.02)v.volume=j.session.volume;
     dm.style.display=j.session.dm_on===false?'none':'';
+    if((j.session.dm_scale||1)!==dmScale)setDmScale(j.session.dm_scale||1);
     sid=j.session.session_id;
     // Apply transport commands (guarded by seq).
     if(j.session.cmd&&j.session.cmd.seq!==lastCmd){
@@ -1070,6 +1084,22 @@ setInterval(async()=>{
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ ok: true }));
       }
+      // Danmaku font scale for the session.
+      const dmsSel = /^\/api\/session\/([\w-]+)\/dmscale$/.exec(url.pathname);
+      if (dmsSel && req.method === 'POST') {
+        const s = getSession(dmsSel[1]);
+        if (!s) {
+          res.writeHead(404);
+          return res.end('no session');
+        }
+        let raw = '';
+        for await (const c of req) raw += c;
+        const { scale } = JSON.parse(raw || '{}');
+        if (typeof scale === 'number' && scale > 0.3 && scale <= 3)
+          s.dm_scale = scale;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, dm_scale: s.dm_scale }));
+      }
       // Danmaku visibility toggle for the session.
       const dmSel = /^\/api\/session\/([\w-]+)\/dm$/.exec(url.pathname);
       if (dmSel && req.method === 'POST') {
@@ -1129,6 +1159,7 @@ setInterval(async()=>{
                 playback_rate: s.playback_rate || 1,
                 cmd: s.cmd || null,
                 dm_on: s.dm_on !== false,
+                dm_scale: s.dm_scale || 1,
                 volume: s.volume ?? 1,
                 pos: s.pos || 0,
                 dur: s.dur || 0,
