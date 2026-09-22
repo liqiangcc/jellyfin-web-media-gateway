@@ -72,6 +72,7 @@ const BASE = `http://${BIND}:${PORT}`;
 
 const CONTROL_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,viewport-fit=cover"><meta name="apple-mobile-web-app-capable" content="yes">
 <title>B站遥控器</title>
+<meta name="theme-color" content="#0b0e14">
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 body{font-family:-apple-system,'PingFang SC',system-ui,sans-serif;background:#0b0e14;color:#e8eaf0;max-width:640px;margin:0 auto;padding:0 14px 40px}
@@ -106,7 +107,7 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
 .hit .t{font-size:.88rem;font-weight:500;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .hit .m{font-size:.72rem;color:#8b93a7;margin-top:4px}
 .hit.folder img{display:none}
-#sess{background:#141926;border:1px solid #253050;border-radius:16px;padding:14px;margin:14px 0}
+#sess{background:#141926;border:1px solid #253050;border-radius:16px;padding:14px;margin:14px 0;position:sticky;top:58px;z-index:8;box-shadow:0 8px 24px #0008}
 #sess h3{font-size:.95rem;font-weight:600;margin-bottom:10px;line-height:1.4}
 #sess .row{display:flex;align-items:flex-start;gap:8px;margin:9px 0;flex-wrap:wrap}
 #sess .lbl{font-size:.78rem;color:#8b93a7;min-width:38px;padding-top:7px}
@@ -169,6 +170,9 @@ async function playSource(src,qn){
   }catch(err){out.textContent='ERR '+err}
 }
 const skeleton=n=>'<div class="sk"></div>'.repeat(n);
+const fmtDur=d=>typeof d==='number'?fmt(d):(d||'');
+const statFmt=n=>n>=10000?(n/10000).toFixed(1)+'万':(n||'');
+const metaOf=x=>[x.bvid,fmtDur(x.duration),x.owner,statFmt(x.stat)].filter(Boolean).join(' · ');
 async function renderSession(j){
   const sess=document.getElementById('sess');
   sess.style.display='';
@@ -250,7 +254,7 @@ async function renderSession(j){
   if(bv&&!live){
     rel.innerHTML=skeleton(3);relsec.style.display='';
     const items=await fetch('/api/discover?kind=related&bvid='+bv).then(r=>r.json()).catch(()=>[]);
-    rel.innerHTML=(items||[]).slice(0,8).map(x=>'<div class="hit" data-bv="'+x.bvid+'"><div class="cov"><img src="'+x.cover+'" loading="lazy"></div><div><div class="t">'+x.title+'</div><div class="m">'+(x.owner||'')+' · '+x.bvid+'</div></div></div>').join('')||'';
+    rel.innerHTML=(items||[]).slice(0,8).map(x=>'<div class="hit" data-bv="'+x.bvid+'"><div class="cov"><img src="'+x.cover+'" loading="lazy"></div><div><div class="t">'+x.title+'</div><div class="m">'+metaOf(x)+'</div></div></div>').join('')||'';
     if(!rel.innerHTML)relsec.style.display='none';
     rel.querySelectorAll('.hit').forEach(i=>i.onclick=()=>playSource('https://www.bilibili.com/video/'+i.dataset.bv));
   }else{rel.innerHTML='';relsec.style.display='none'}
@@ -281,7 +285,7 @@ document.getElementById('sf').onsubmit=async e=>{
     if(!r.ok)throw new Error(JSON.stringify(list));
     document.getElementById('sect').textContent='搜索结果';
     document.getElementById('sect').style.display='';
-    results.innerHTML=list.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><div class="cov"><img src="'+x.cover+'" loading="lazy"></div><div><div class="t">'+x.title+'</div><div class="m">'+x.bvid+' · '+x.duration+'</div></div></div>').join('')||'<div class="muted">无结果</div>';
+    results.innerHTML=list.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><div class="cov"><img src="'+x.cover+'" loading="lazy"></div><div><div class="t">'+x.title+'</div><div class="m">'+metaOf(x)+'</div></div></div>').join('')||'<div class="muted">无结果</div>';
     results.querySelectorAll('.hit').forEach(el=>el.onclick=()=>playSource('https://www.bilibili.com/video/'+el.dataset.bv));
   }catch(err){results.textContent='ERR '+err}
 };
@@ -299,14 +303,14 @@ document.getElementById('fav').onclick=async()=>{
       favlist.innerHTML=skeleton(3);
       const items=await fetch('/api/favorites?folder='+el.dataset.fid).then(r=>r.json());
       const back='<div class="hit folder" id="favback"><div><div class="t">← 返回收藏夹</div></div></div>';
-      favlist.innerHTML=back+(items.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><div class="cov"><img src="'+x.cover+'" loading="lazy"></div><div><div class="t">'+x.title+'</div><div class="m">'+x.bvid+' · '+x.duration+'</div></div></div>').join('')||'<div class="muted">空收藏夹</div>');
+      favlist.innerHTML=back+(items.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><div class="cov"><img src="'+x.cover+'" loading="lazy"></div><div><div class="t">'+x.title+'</div><div class="m">'+metaOf(x)+'</div></div></div>').join('')||'<div class="muted">空收藏夹</div>');
       document.getElementById('favback').onclick=()=>document.getElementById('fav').click();
       favlist.querySelectorAll('.hit[data-bv]').forEach(i=>i.onclick=()=>playSource('https://www.bilibili.com/video/'+i.dataset.bv));
     });
   }catch(err){favlist.textContent='ERR '+err.message}
 };
 const showVideos=(items)=>{
-  favlist.innerHTML=items.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><div class="cov"><img src="'+x.cover+'" loading="lazy"></div><div><div class="t">'+x.title+'</div><div class="m">'+x.bvid+'</div></div></div>').join('')||'<div class="muted">无内容</div>';
+  favlist.innerHTML=items.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><div class="cov"><img src="'+x.cover+'" loading="lazy"></div><div><div class="t">'+x.title+'</div><div class="m">'+metaOf(x)+'</div></div></div>').join('')||'<div class="muted">无内容</div>';
   favlist.querySelectorAll('.hit').forEach(i=>i.onclick=()=>playSource('https://www.bilibili.com/video/'+i.dataset.bv));
 };
 document.getElementById('hot').onclick=async()=>{
