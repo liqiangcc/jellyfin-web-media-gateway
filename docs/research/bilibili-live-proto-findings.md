@@ -40,22 +40,22 @@
 | `x/player/v2`（subtitle slot） | PASS | 匿名可达；本样本字幕列表为空，有待字幕样本复验 |
 | `x/frontend/finger/spi` | PASS | 匿名 buvid3 可用 |
 | `x/web-interface/nav` | PASS | 匿名返回 wbi img/sub key |
-| `x/web-interface/view` | **FAIL** | 412 风控；wbi 签名 + 真实 buvid3 cookie 均无效 |
-| `www.bilibili.com/video/*` HTML | **FAIL** | 412；`__INITIAL_STATE__` 抓取路径在本机网络不可行 |
-| `x2/dm/web/seg.so` 弹幕 | FAIL | 404（端点形态可能已变；未深入） |
+| `x/web-interface/view` | **FAIL** | 412 风控；wbi + 真 buvid3 + **浏览器页内 fetch（credentials）**均无效——IP/端点级硬风控 |
+| `www.bilibili.com/video/*` HTML | **FAIL**（raw）/ PASS（浏览器） | raw 412；真实 Chrome 完整加载且 `__INITIAL_STATE__` 含全量 videoData（bvid/aid/title/desc/duration/owner/stat/pages/subtitle/ugc_season + 40 条 related 推荐） |
+| `x/v2/dm/web/seg.so` 弹幕 | **PASS** | protobuf 200（早期 404 是路径笔误 `x2`）；`x/v1/dm/list.so` XML 也 200——弹幕裸 API 匿名可用 |
 | `x/player/online/total` | PASS | 参考性元数据可用 |
-| `search/type`/`search/all/v2` 视频搜索 | **FAIL** | 200 但 body 是"出错啦"软风控页（无 JSON）；wbi 签名无效 |
+| `search/type`/`search/all/v2` 视频搜索 | **FAIL**（raw）/ PASS（浏览器） | 200 但 body 是"出错啦"软风控页（无 JSON）；wbi 无效；真实浏览器 DOM 返回真结果含 BV id |
 | `s.search.bilibili.com/main/suggest` | PASS | 真 JSON 自动补全，但只有关键词无 BV 结果 |
-| **真实浏览器（对照）** | PASS | Chrome 151 无登录直接打开：`search.bilibili.com/all?keyword=` 返回真结果含 BV id；`/video/*` 页完整加载 `__INITIAL_STATE__`（标题/分P/字幕表/ugc_season） |
 
 **结论**：第一版产品闭环（匿名播放 + BV 内选集 + 封顶清晰度 + 字幕槽）**纯 API 即可覆盖，浏览器取源对基础匿名播放不是硬依赖**。
 
-浏览器对照实验改变了分工边界：**搜索、rich metadata（view/合集）、弹幕在裸 API 全部 FAIL，但真实 Chrome 无登录全部可加载**——浏览器取源因此不是"可要可不要"，而是 MVP 后增强（搜索 UX、合集、元数据）的必经路径。这同时解释了两条路线的正确切法：
+浏览器对照实验改变了分工边界。**真实 Chrome 无登录即可加载搜索页与视频页**——浏览器取源不是"可要可不要"，而是发现层的必经路径。正确的切法：
 
 - **播放管道（匿名公开视频）**：纯 API 即可——#68 MVP 闭环可以显著简化；
-- **发现/元数据管道（搜索、合集、rich info）**：必须走已接受的 Browser 取源链（#165–#240）——那笔投资没有被浪费，只是用途从"播放必需"重新定位为"发现层必需"。
+- **发现管道（搜索、合集、rich metadata、related 推荐）**：必须走已接受的 Browser 取源链（#165–#240），提取形态 = **加载页面 → 读 `__INITIAL_STATE__` / DOM**，页内 fetch 也救不了 `view`（IP/端点级硬风控）；
+- **弹幕**：裸 API 即可（`x/v2/dm/web/seg.so` protobuf 或 `x/v1/dm/list.so` XML），不是浏览器依赖项。
 
-浏览器取源对播放降级为备选/增强路径，对搜索/元数据是硬依赖——这直接缩小 #68 剩余实现面，同时为后续搜索功能提供了实证可行性。
+那笔浏览器投资没有被浪费——用途从"播放必需"重新定位为"发现层必需"。这直接缩小 #68 剩余实现面，同时为搜索功能提供了实证可行性。
 
 ## 控制面能力对照（预研 → 契约映射）
 
@@ -63,7 +63,8 @@
 - **清晰度**：`accept_quality` 阶梯 + `qn` 钳制 → 契约侧 = 重新 resolve（新 `media_generation`）+ 客户端 position resume；匿名下展示档位须按实际返回的视频列表过滤，不能只信 `accept_quality`。
 - **字幕**：`x/player/v2` subtitle slot 匿名可达 → `SubtitleTrackView` 契约已有载体；需有字幕样本再验 URL 格式。
 - **倍速/音量/seek/全屏/PiP**：纯 HTMLMediaElement 客户端能力，与站点无关，控制面板直接实现，不进契约。
-- **弹幕**：端点需另验；不进 MVP。
+- **弹幕**：裸 API 可用（`x/v2/dm/web/seg.so` protobuf 已实测 200）；渲染到播放画面是 display 层的事，不进 MVP。
+- **搜索**：必须浏览器路径（页面 DOM/`__INITIAL_STATE__`）；对应 `BrowserObservationHandoff` 的场景扩展——导航到 `search.bilibili.com/all?keyword=X` 提取结果卡片（bvid/title），属于插件导航解析的既有模式。
 
 ## 第三轮：真实浏览器播放验证（2026-09-22）
 
@@ -88,7 +89,7 @@ headless Chrome 151（CDP 驱动）实测 `/display` 页，两条投递路径均
 - 登录态内容、4K/HEVC、drm（`protection` 未触发非 clear 值）；
 - 切 P 导航（prototype `navigation()` 已写出但未实测）、多并发、长期稳定性；
 - 有字幕样本的 `subtitle_url` 实际格式（本样本列表为空）；
-- 弹幕正确端点形态；
+- 弹幕 protobuf/XML 解析格式细节（端点已通，内容结构未深入）；
 - iPhone Safari 真实播放（部署好待人工确认）；
 - 本 spike 未实现 revision/CAS/Vault/EgressPolicy——这些是 Rust 层职责，原型不假装验证它们。
 
