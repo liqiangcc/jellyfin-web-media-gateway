@@ -75,7 +75,7 @@ const CONTROL_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport"
 <meta name="theme-color" content="#0b0e14">
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-body{font-family:-apple-system,'PingFang SC',system-ui,sans-serif;background:#0b0e14;color:#e8eaf0;max-width:640px;margin:0 auto;padding:0 14px 40px}
+body{font-family:-apple-system,'PingFang SC',system-ui,sans-serif;background:#0b0e14;color:#e8eaf0;max-width:640px;margin:0 auto;padding:0 14px calc(40px + env(safe-area-inset-bottom));overscroll-behavior-y:none}
 header{position:sticky;top:0;background:#0b0e14f0;backdrop-filter:blur(12px);padding:14px 0 10px;z-index:9;border-bottom:1px solid #1d2330}
 h1{font-size:1.15rem;font-weight:600;display:flex;align-items:center;gap:8px}
 .dot{width:9px;height:9px;border-radius:50%;background:#666}
@@ -83,7 +83,7 @@ h1{font-size:1.15rem;font-weight:600;display:flex;align-items:center;gap:8px}
 .acct{font-size:.78rem;color:#8b93a7;margin-left:auto;display:flex;gap:10px;align-items:center}
 .acct a{color:#6ea8fe;text-decoration:none}
 form{display:flex;gap:8px;margin:10px 0}
-input{flex:1;min-width:0;padding:11px 14px;font-size:.95rem;border-radius:12px;border:1px solid #2a3242;background:#141926;color:#e8eaf0;outline:none}
+input{flex:1;min-width:0;padding:11px 14px;font-size:16px;border-radius:12px;border:1px solid #2a3242;background:#141926;color:#e8eaf0;outline:none}
 input:focus{border-color:#4a7dff}
 button{padding:11px 16px;font-size:.9rem;border-radius:12px;border:1px solid #2a3242;background:#1c2333;color:#e8eaf0;cursor:pointer;white-space:nowrap}
 button:active{background:#2a3542;transform:scale(.97)}
@@ -163,7 +163,8 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
 <script type="module">
 const out=document.getElementById('out'),results=document.getElementById('results');
 let curSrc=null,curCover=null;
-const toast=(t,cls)=>{out.textContent=t;out.className=cls||''};
+let toastT=null;
+const toast=(t,cls)=>{out.textContent=t;out.className=cls||'';clearTimeout(toastT);if(cls==='ok')toastT=setTimeout(()=>{out.textContent='就绪';out.className=''},4000)};
 async function playSource(src,qn,cover){
   curSrc=src;if(cover)curCover=cover;
   toast('解析中…');
@@ -254,6 +255,10 @@ async function renderSession(j){
     document.getElementById('sess').style.display='none';
     toast('已停止');
   };
+  // 弹幕开关状态同步（恢复会话时也要对）
+  const dmt=document.getElementById('dmt');
+  const dmOn=j.dm_on!==false;
+  dmt.classList.toggle('on',dmOn);dmt.textContent=dmOn?'开':'关';
   // 直播：隐藏进度条和 seek 按钮 + 弹幕输入
   const live=j.media_mode==='hls-live';
   document.querySelector('.prog').style.display=live?'none':'';
