@@ -169,7 +169,8 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
 <div class="section" id="sect" style="display:none"></div>
 <div id="results" class="list"></div>
 <div id="favlist" class="list"></div>
-<p class="muted"><a href="/display" style="color:#6ea8fe">打开播放页 →</a></p>
+<p class="muted"><a href="/display" style="color:#6ea8fe">打开播放页 →</a> <a href="#" id="dispqr" style="color:#8b93a7;margin-left:12px">显示投屏码</a></p>
+<div id="dispqrc" style="display:none;text-align:center;padding:14px 0"></div>
 <script type="module">
 const out=document.getElementById('out'),results=document.getElementById('results');
 let curSrc=null,curCover=null;
@@ -432,6 +433,14 @@ document.getElementById('who').onclick=async()=>{
   });
   ac.style.display='';
   document.addEventListener('click',function h(e){if(!ac.contains(e.target)&&e.target.id!=='who'){ac.style.display='none';document.removeEventListener('click',h)}},true);
+};
+// 投屏码：展开显示 /display 二维码
+document.getElementById('dispqr').onclick=e=>{
+  e.preventDefault();
+  const c=document.getElementById('dispqrc');
+  if(c.style.display!=='none'){c.style.display='none';e.target.textContent='显示投屏码';return}
+  c.innerHTML='<div style="display:inline-block;background:#fff;padding:12px;border-radius:14px"><img src="/api/display-qr" style="display:block;width:180px;height:180px"></div><div style="color:#8b93a7;font-size:.78rem;margin-top:8px">另一台设备扫码打开播放页</div>';
+  c.style.display='';e.target.textContent='收起投屏码';
 };
 // mark active chip selection for quality/page/sub buttons
 document.addEventListener('click',e=>{
@@ -878,6 +887,14 @@ setInterval(async()=>{
         clearHistory();
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ ok: true }));
+      }
+      // QR code for the display URL — lets a phone push the page to a TV.
+      if (req.method === 'GET' && url.pathname === '/api/display-qr') {
+        const svg = qrcode(0, 'M');
+        svg.addData(`${BASE}/display`);
+        svg.make();
+        res.writeHead(200, { 'content-type': 'image/svg+xml' });
+        return res.end(svg.createSvgTag(6));
       }
       if (req.method === 'GET' && url.pathname === '/api/history') {
         res.writeHead(200, { 'content-type': 'application/json' });
