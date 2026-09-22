@@ -63,7 +63,7 @@
 - **清晰度**：`accept_quality` 阶梯 + `qn` 钳制 → 契约侧 = 重新 resolve（新 `media_generation`）+ 客户端 position resume；匿名下展示档位须按实际返回的视频列表过滤，不能只信 `accept_quality`。
 - **字幕**：`x/player/v2` subtitle slot 匿名可达 → `SubtitleTrackView` 契约已有载体；需有字幕样本再验 URL 格式。
 - **倍速/音量/seek/全屏/PiP**：纯 HTMLMediaElement 客户端能力，与站点无关，控制面板直接实现，不进契约。
-- **弹幕**：裸 API 可用（`x/v2/dm/web/seg.so` protobuf 已实测 200）；渲染到播放画面是 display 层的事，不进 MVP。
+- **弹幕**：裸 API 可用且已实现——`x/v1/dm/list.so` XML 全量池（本样本 7245 条），服务端解析为 `{t,mode,color,text}` JSON，display 层按 `currentTime` 车道渲染滚动弹幕（WAAPI 动画，pause/play 联动）。截图证据在会话内。渲染质量/密度控制是 display 细节，不进 MVP。
 - **搜索**：必须浏览器路径（页面 DOM/`__INITIAL_STATE__`）；对应 `BrowserObservationHandoff` 的场景扩展——导航到 `search.bilibili.com/all?keyword=X` 提取结果卡片（bvid/title），属于插件导航解析的既有模式。
 
 ## 第三轮：真实浏览器播放验证（2026-09-22）

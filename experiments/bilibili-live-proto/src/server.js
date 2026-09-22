@@ -4,7 +4,7 @@
 import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { recognize, resolve } from './sites/bilibili.js';
+import { recognize, resolve, danmaku } from './sites/bilibili.js';
 import { createSession, getSession, currentSession } from './session.js';
 import { proxyStream, remuxToHls } from './media.js';
 
@@ -36,10 +36,33 @@ const DISPLAY_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport"
 <title>proto display</title>
 <style>body{margin:0;background:#000}video{width:100vw;height:100vh;object-fit:contain}#s{position:fixed;top:0;color:#fff;font:14px system-ui;background:#0008;padding:.4rem}</style>
 <video id="v" controls playsinline></video><div id="s">waiting for control…</div>
+<div id="dm" style="position:fixed;inset:0;pointer-events:none;overflow:hidden"></div>
 <script src="/hls.min.js"></script>
 <script>
-const v=document.getElementById('v'),s=document.getElementById('s');
-let cur=null,hls=null;
+const v=document.getElementById('v'),s=document.getElementById('s'),dm=document.getElementById('dm');
+let cur=null,hls=null,pool=[],pidx=0,laneFree=[];
+const LANES=10,LINE_H=Math.floor(innerHeight*0.05),FLY_MS=7000;
+function laneFor(){for(let i=0;i<LANES;i++)if((laneFree[i]||0)<performance.now())return i;return -1}
+function spawn(d){
+  const lane=laneFor();if(lane<0)return;
+  const el=document.createElement('div');
+  el.textContent=d.text;
+  el.style.cssText='position:absolute;white-space:nowrap;font-size:'+LINE_H*0.8+'px;color:#'+d.color.toString(16).padStart(6,'0')+';text-shadow:1px 1px 2px #000;top:'+(lane*LINE_H)+'px;left:100%;will-change:transform';
+  dm.appendChild(el);
+  const w=el.offsetWidth+innerWidth;
+  const a=el.animate([{transform:'translateX(0)'},{transform:'translateX(-'+w+'px)'}],{duration:FLY_MS,easing:'linear'});
+  a.onfinish=()=>el.remove();
+  if(v.paused)a.pause();
+  laneFree[lane]=performance.now()+FLY_MS*(el.offsetWidth/w)+300;
+}
+setInterval(()=>{
+  if(!pool.length)return;
+  const t=v.currentTime;
+  if(pidx>0&&(pool[pidx-1]&&pool[pidx-1].t>t+2)){dm.innerHTML='';pidx=pool.findIndex(d=>d.t>t);if(pidx<0)pidx=pool.length}
+  while(pidx<pool.length&&pool[pidx].t<=t){if(pool[pidx].mode===1)spawn(pool[pidx]);pidx++}
+},200);
+v.addEventListener('pause',()=>{v.getAnimations?0:0;dm.querySelectorAll('div').forEach(e=>e.getAnimations().forEach(a=>a.pause()))});
+v.addEventListener('play',()=>{dm.querySelectorAll('div').forEach(e=>e.getAnimations().forEach(a=>a.play()))});
 setInterval(async()=>{
   try{
     const j=await (await fetch('/api/now')).json();
@@ -47,6 +70,8 @@ setInterval(async()=>{
     if(cur!==j.session.session_id+'|'+j.session.media_url){
       cur=j.session.session_id+'|'+j.session.media_url;
       if(hls){hls.destroy();hls=null}
+      pool=[];pidx=0;dm.innerHTML='';laneFree=[];
+      fetch('/dm/'+j.session.session_id).then(r=>r.json()).then(l=>{pool=l;pidx=0}).catch(()=>{});
       const url=j.session.media_url;
       if(url.endsWith('.m3u8')&&window.Hls&&Hls.isSupported()){
         hls=new Hls();hls.loadSource(url);hls.attachMedia(v);
@@ -120,6 +145,17 @@ http
         const [code, body] = await play(JSON.parse(raw || '{}'));
         res.writeHead(code, { 'content-type': 'application/json' });
         return res.end(JSON.stringify(body));
+      }
+      const dmMatch = /^\/dm\/([\w-]+)$/.exec(url.pathname);
+      if (dmMatch && req.method === 'GET') {
+        const s = getSession(dmMatch[1]);
+        if (!s) {
+          res.writeHead(404);
+          return res.end('no session');
+        }
+        const list = await danmaku(s.current_item.source_locator);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify(list));
       }
       if (req.method === 'GET' && url.pathname === '/api/now') {
         const s = currentSession();

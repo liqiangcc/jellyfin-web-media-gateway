@@ -116,6 +116,36 @@ export async function resolve(locator, { prefer } = {}) {
   };
 }
 
+/**
+ * Fetch the full danmaku pool for a locator's page as a normalized list.
+ * `x/v1/dm/list.so` returns XML; anonymous-reachable on this host.
+ * Each entry: { t: seconds, mode, color, text } sorted by t.
+ */
+export async function danmaku(locator) {
+  const { bvid, page } = locator.opaque_payload;
+  const pages = await api(`/x/player/pagelist?bvid=${bvid}`);
+  const entry = pages[Math.min(page, pages.length) - 1];
+  if (!entry) throw new Error('PAGE_NOT_FOUND');
+  const res = await fetch(
+    `https://api.bilibili.com/x/v1/dm/list.so?oid=${entry.cid}`,
+    { headers: { 'User-Agent': UA, Referer: REFERER } },
+  );
+  const xml = await res.text();
+  const out = [];
+  const re = /<d p="([^"]+)">([^<]*)<\/d>/g;
+  let m;
+  while ((m = re.exec(xml))) {
+    const p = m[1].split(',');
+    const t = Number(p[0]);
+    const text = m[2].trim();
+    if (Number.isFinite(t) && text) {
+      out.push({ t, mode: Number(p[1]), color: Number(p[3]), text });
+    }
+  }
+  out.sort((a, b) => a.t - b.t);
+  return out;
+}
+
 /** previous/next/queue locators for multipart content. */
 export async function navigation(locator) {
   const { bvid, page } = locator.opaque_payload;
