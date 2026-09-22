@@ -2,12 +2,37 @@
 // framework, no build step. Bind to the tailnet IP only.
 
 import http from 'node:http';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { recognize, resolve, danmaku } from './sites/bilibili.js';
+import { createRequire } from 'node:module';
+import {
+  recognize,
+  resolve,
+  danmaku,
+  qrLoginStart,
+  qrLoginPoll,
+  setAuthCookie,
+  getAuthCookie,
+  loggedIn,
+} from './sites/bilibili.js';
 import { search } from './browser.js';
 import { createSession, getSession, currentSession } from './session.js';
 import { proxyStream, remuxToHls } from './media.js';
+
+const require = createRequire(import.meta.url);
+const qrcode = require('./qrcode.cjs');
+const RUNTIME_DIR = new URL('../runtime/', import.meta.url).pathname;
+const AUTH_FILE = join(RUNTIME_DIR, 'auth.json');
+
+// Restore persisted cookie (prototype-local; real impl = Vault).
+try {
+  const saved = JSON.parse(readFileSync(AUTH_FILE, 'utf8'));
+  if (saved.cookie) setAuthCookie(saved.cookie);
+} catch {
+  /* no saved auth */
+}
+
+let pendingQr = null; // {qrcode_key, expires}
 
 const BIND = process.env.PROTO_BIND || '100.64.98.39';
 const PORT = Number(process.env.PROTO_PORT || 8899);
@@ -176,6 +201,60 @@ http
         }
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify(list));
+      }
+      if (req.method === 'GET' && url.pathname === '/qr') {
+        // Fresh QR each visit; page polls /api/qr-status.
+        const qr = await qrLoginStart();
+        pendingQr = {
+          qrcode_key: qr.qrcode_key,
+          expires: Date.now() + 170_000,
+        };
+        const qrSvg = qrcode(0, 'M');
+        qrSvg.addData(qr.url);
+        qrSvg.make();
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        return res.end(`<!doctype html><meta name="viewport" content="width=device-width"><title>bilibili login</title>
+<body style="font-family:system-ui;text-align:center;padding-top:2rem">
+<h3>用哔哩哔哩 App 扫码登录</h3>
+<div style="display:inline-block;border:1px solid #ddd;padding:8px">${qrSvg.createSvgTag(6)}</div>
+<p id="st">等待扫码…（二维码约 3 分钟过期，过期请刷新本页）</p>
+<script>
+setInterval(async()=>{
+  const j=await fetch('/api/qr-status').then(r=>r.json());
+  document.getElementById('st').textContent=j.status;
+  if(j.logged_in)location.href='/control';
+  if(j.status==='二维码已过期，请刷新')location.reload();
+},1500);
+</script>`);
+      }
+      if (req.method === 'GET' && url.pathname === '/api/qr-status') {
+        if (loggedIn()) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({ logged_in: true, status: '已登录' }));
+        }
+        if (!pendingQr || Date.now() > pendingQr.expires) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          return res.end(
+            JSON.stringify({ logged_in: false, status: '二维码已过期，请刷新' }),
+          );
+        }
+        const p = await qrLoginPoll(pendingQr.qrcode_key);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        if (p.code === 0 && p.cookies) {
+          setAuthCookie(p.cookies);
+          mkdirSync(RUNTIME_DIR, { recursive: true });
+          writeFileSync(AUTH_FILE, JSON.stringify({ cookie: p.cookies }));
+          pendingQr = null;
+          return res.end(JSON.stringify({ logged_in: true, status: '已登录' }));
+        }
+        const label =
+          { 86101: '等待扫码…', 86090: '已扫码，请在手机上确认' }[p.code] ||
+          `code ${p.code}`;
+        return res.end(JSON.stringify({ logged_in: false, status: label }));
+      }
+      if (req.method === 'GET' && url.pathname === '/api/auth') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ logged_in: loggedIn() }));
       }
       if (req.method === 'GET' && url.pathname === '/img') {
         // Bounded cover proxy: only bilibili image CDN hosts allowed.

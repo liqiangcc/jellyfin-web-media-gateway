@@ -40,22 +40,24 @@
 | `x/player/v2`（subtitle slot） | PASS | 匿名可达；本样本字幕列表为空，有待字幕样本复验 |
 | `x/frontend/finger/spi` | PASS | 匿名 buvid3 可用 |
 | `x/web-interface/nav` | PASS | 匿名返回 wbi img/sub key |
-| `x/web-interface/view` | **FAIL** | 412 风控；wbi + 真 buvid3 + **浏览器页内 fetch（credentials）**均无效——IP/端点级硬风控 |
+| `x/web-interface/view` | **FAIL**（匿名）/ **PASS**（登录 cookie） | 匿名 412 且浏览器页内 fetch 也挂——实为**鉴权门**不是 IP 风控；带 SESSDATA 直接 200 全量数据 |
+| `playurl` 清晰度 | 匿名封顶 480p | **登录后 1080p 解锁**（qn=116 请求 → quality=80，avc1+hev1 双编码 ladder；测试号非大会员，4K/60fps 未验证） |
+| `search/type`/`search/all/v2` 视频搜索 | **FAIL**（raw）/ **FAIL**（cookie+wbi）/ PASS（浏览器） | 登录态 cookie + wbi 签名仍返回假 200 HTML——**搜索是唯一的浏览器硬依赖** |
 | `www.bilibili.com/video/*` HTML | **FAIL**（raw）/ PASS（浏览器） | raw 412；真实 Chrome 完整加载且 `__INITIAL_STATE__` 含全量 videoData（bvid/aid/title/desc/duration/owner/stat/pages/subtitle/ugc_season + 40 条 related 推荐） |
 | `x/v2/dm/web/seg.so` 弹幕 | **PASS** | protobuf 200（早期 404 是路径笔误 `x2`）；`x/v1/dm/list.so` XML 也 200——弹幕裸 API 匿名可用 |
 | `x/player/online/total` | PASS | 参考性元数据可用 |
-| `search/type`/`search/all/v2` 视频搜索 | **FAIL**（raw）/ PASS（浏览器） | 200 但 body 是"出错啦"软风控页（无 JSON）；wbi 无效；真实浏览器 DOM 返回真结果含 BV id |
 | `s.search.bilibili.com/main/suggest` | PASS | 真 JSON 自动补全，但只有关键词无 BV 结果 |
 
-**结论**：第一版产品闭环（匿名播放 + BV 内选集 + 封顶清晰度 + 字幕槽）**纯 API 即可覆盖，浏览器取源对基础匿名播放不是硬依赖**。
+**结论**（登录态补测后修正）：`view` 的匿名 412 实为**鉴权门**——带 SESSDATA cookie 纯 API 即通，且 `playurl` 解锁 1080p（avc1+hev1）。QR 登录流程已在原型实现（`generate`→`poll`→cookie 持久化，页面自动续期）。
 
-浏览器对照实验改变了分工边界。**真实 Chrome 无登录即可加载搜索页与视频页**——浏览器取源不是"可要可不要"，而是发现层的必经路径。正确的切法：
+正确的三层切法：
 
 - **播放管道（匿名公开视频）**：纯 API 即可——#68 MVP 闭环可以显著简化；
-- **发现管道（搜索、合集、rich metadata、related 推荐）**：必须走已接受的 Browser 取源链（#165–#240），提取形态 = **加载页面 → 读 `__INITIAL_STATE__` / DOM**，页内 fetch 也救不了 `view`（IP/端点级硬风控）；
-- **弹幕**：裸 API 即可（`x/v2/dm/web/seg.so` protobuf 或 `x/v1/dm/list.so` XML），不是浏览器依赖项。
+- **登录增强（元数据/合集/1080p）**：`view` + 高清晰度 `playurl` 都是纯 API——**登录态不需要浏览器**；
+- **发现管道（搜索）**：唯一剩余的浏览器硬依赖——cookie+wbi 签名也过不了搜索的软风控，只能页面 DOM 提取（原型 `browser.js` 已验证）；
+- **弹幕**：裸 API 即可（`x/v2/dm/web/seg.so` protobuf 或 `x/v1/dm/list.so` XML），匿名可用。
 
-那笔浏览器投资没有被浪费——用途从"播放必需"重新定位为"发现层必需"。这直接缩小 #68 剩余实现面，同时为搜索功能提供了实证可行性。
+浏览器取源的角色进一步收窄：**只为搜索服务**。元数据/合集这类"发现"其实归登录 API 管；搜索是唯一只能在浏览器里做的事。
 
 ## 控制面能力对照（预研 → 契约映射）
 

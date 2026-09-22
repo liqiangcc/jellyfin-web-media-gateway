@@ -36,9 +36,65 @@ export function recognize(input) {
   };
 }
 
+// --- auth state (prototype-local; real impl owns this in Vault) ---
+let authCookie = null;
+
+export function setAuthCookie(c) {
+  authCookie = c;
+}
+export function getAuthCookie() {
+  return authCookie;
+}
+export function loggedIn() {
+  return !!authCookie;
+}
+
+/**
+ * Passport QR login. generate() → {qrcode_key, url}; poll(key) →
+ * {code, cookies} where code 0 = confirmed, 86038 = expired,
+ * 86090 = scanned-not-confirmed, 86101 = waiting.
+ */
+export async function qrLoginStart() {
+  const res = await fetch(
+    'https://passport.bilibili.com/x/passport-login/web/qrcode/generate',
+    { headers: { 'User-Agent': UA } },
+  ).then((r) => r.json());
+  if (res.code !== 0) throw new Error(`qr generate -> ${res.code}`);
+  return res.data; // {url, qrcode_key}
+}
+
+export async function qrLoginPoll(qrcode_key) {
+  const res = await fetch(
+    `https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key=${qrcode_key}`,
+    { headers: { 'User-Agent': UA } },
+  );
+  const body = await res.json();
+  const out = { code: body.data?.code ?? body.code, message: body.message };
+  // Confirmed login: cookies arrive via Set-Cookie AND the redirect url
+  // carries them as query params (SESSDATA etc.).
+  if (out.code === 0) {
+    const fromHeaders = (res.headers.getSetCookie?.() || [])
+      .map((c) => c.split(';')[0])
+      .filter(Boolean)
+      .join('; ');
+    const fromUrl = new URL(body.data.url).searchParams;
+    const parts = [];
+    for (const k of ['SESSDATA', 'bili_jct', 'DedeUserID']) {
+      const v = fromUrl.get(k);
+      if (v) parts.push(`${k}=${v}`);
+    }
+    out.cookies = fromHeaders || parts.join('; ');
+  }
+  return out;
+}
+
 async function api(path) {
   const res = await fetch(`https://api.bilibili.com${path}`, {
-    headers: { 'User-Agent': UA, Referer: REFERER },
+    headers: {
+      'User-Agent': UA,
+      Referer: REFERER,
+      ...(authCookie ? { Cookie: authCookie } : {}),
+    },
   });
   const body = await res.json();
   if (body.code !== 0) {
