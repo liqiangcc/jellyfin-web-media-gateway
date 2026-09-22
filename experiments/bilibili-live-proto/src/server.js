@@ -26,13 +26,34 @@ const qrcode = require('./qrcode.cjs');
 const RUNTIME_DIR = new URL('../runtime/', import.meta.url).pathname;
 const AUTH_FILE = join(RUNTIME_DIR, 'auth.json');
 
-// Restore persisted cookie (prototype-local; real impl = Vault).
+// Multi-account store (prototype-local; real impl = Vault).
+// Shape: { active: mid|null, accounts: { mid: {cookie, uname} } }
+let authStore = { active: null, accounts: {} };
 try {
   const saved = JSON.parse(readFileSync(AUTH_FILE, 'utf8'));
-  if (saved.cookie) setAuthCookie(saved.cookie);
+  if (saved.cookie) {
+    // migrate old single-cookie shape
+    authStore.accounts['?'] = { cookie: saved.cookie, uname: '(imported)' };
+    authStore.active = '?';
+  } else {
+    authStore = saved;
+  }
 } catch {
   /* no saved auth */
 }
+const saveAuth = () =>
+  writeFileSync(AUTH_FILE, JSON.stringify(authStore));
+const restoreActive = () => {
+  const a = authStore.accounts[authStore.active];
+  setAuthCookie(a?.cookie || null);
+};
+restoreActive();
+try {
+  mkdirSync(RUNTIME_DIR, { recursive: true });
+} catch {
+  /* exists */
+}
+saveAuth();
 
 let pendingQr = null; // {qrcode_key, expires}
 
@@ -49,7 +70,8 @@ const CONTROL_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport"
 <form id="sf"><input id="q" type="search" placeholder="search bilibili…"><button>Search</button></form>
 <div id="results"></div>
 <hr>
-<button id="fav">我的收藏夹</button> <button id="hot">热门</button> <button id="feed">推荐</button> <a href="/qr">登录</a>
+<button id="fav">我的收藏夹</button> <button id="hot">热门</button> <button id="feed">推荐</button>
+<div id="accline"><a href="/qr">登录/换号</a> <button id="logout" style="display:none">退出</button> <span id="who"></span></div>
 <div id="favlist"></div>
 <pre id="out">idle</pre>
 <p><a href="/display">open display →</a></p>
@@ -102,6 +124,15 @@ document.getElementById('hot').onclick=async()=>{
 document.getElementById('feed').onclick=async()=>{
   favlist.textContent='loading…';
   showVideos(await fetch('/api/discover?kind=rcmd').then(r=>r.json()));
+};
+const auth=await fetch('/api/auth').then(r=>r.json()).catch(()=>({}));
+if(auth.logged_in){
+  document.getElementById('who').textContent='已登录：'+(auth.uname||auth.mid);
+  document.getElementById('logout').style.display='';
+}
+document.getElementById('logout').onclick=async()=>{
+  await fetch('/api/logout',{method:'POST'});
+  location.reload();
 };
 </script>
 <style>#results{display:flex;flex-direction:column;gap:.5rem;margin:.8rem 0}.hit{display:flex;gap:.6rem;cursor:pointer;align-items:center}.hit img{width:96px;height:60px;object-fit:cover;border-radius:4px}</style>`;
@@ -280,33 +311,97 @@ setInterval(async()=>{
 </script>`);
       }
       if (req.method === 'GET' && url.pathname === '/api/qr-status') {
+        if (pendingQr && Date.now() <= pendingQr.expires) {
+          const p = await qrLoginPoll(pendingQr.qrcode_key);
+          if (p.code === 0 && p.cookies) {
+            // New login confirmed — store keyed by mid, make active.
+            const mid = /DedeUserID=(\d+)/.exec(p.cookies)?.[1] || '?';
+            const uname = await fetch(
+              'https://api.bilibili.com/x/web-interface/nav',
+              {
+                headers: {
+                  'User-Agent': 'Mozilla/5.0',
+                  Cookie: p.cookies,
+                },
+              },
+            )
+              .then((r) => r.json())
+              .then((d) => d.data?.uname)
+              .catch(() => null);
+            authStore.accounts[mid] = { cookie: p.cookies, uname };
+            authStore.active = mid;
+            setAuthCookie(p.cookies);
+            saveAuth();
+            pendingQr = null;
+            res.writeHead(200, { 'content-type': 'application/json' });
+            return res.end(
+              JSON.stringify({
+                logged_in: true,
+                status: `已登录${uname ? '：' + uname : ''}`,
+              }),
+            );
+          }
+          const label =
+            { 86101: '等待扫码…', 86090: '已扫码，请在手机上确认' }[p.code] ||
+            `code ${p.code}`;
+          res.writeHead(200, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({ logged_in: false, status: label }));
+        }
         if (loggedIn()) {
           res.writeHead(200, { 'content-type': 'application/json' });
           return res.end(JSON.stringify({ logged_in: true, status: '已登录' }));
         }
-        if (!pendingQr || Date.now() > pendingQr.expires) {
-          res.writeHead(200, { 'content-type': 'application/json' });
-          return res.end(
-            JSON.stringify({ logged_in: false, status: '二维码已过期，请刷新' }),
-          );
-        }
-        const p = await qrLoginPoll(pendingQr.qrcode_key);
         res.writeHead(200, { 'content-type': 'application/json' });
-        if (p.code === 0 && p.cookies) {
-          setAuthCookie(p.cookies);
-          mkdirSync(RUNTIME_DIR, { recursive: true });
-          writeFileSync(AUTH_FILE, JSON.stringify({ cookie: p.cookies }));
-          pendingQr = null;
-          return res.end(JSON.stringify({ logged_in: true, status: '已登录' }));
+        return res.end(
+          JSON.stringify({
+            logged_in: false,
+            status: pendingQr ? '二维码已过期，请刷新' : '打开 /qr 获取二维码',
+          }),
+        );
+      }
+      if (req.method === 'POST' && url.pathname === '/api/logout') {
+        authStore.active = null;
+        setAuthCookie(null);
+        pendingQr = null;
+        saveAuth();
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ logged_in: false }));
+      }
+      if (req.method === 'GET' && url.pathname === '/api/accounts') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(
+          JSON.stringify({
+            active: authStore.active,
+            accounts: Object.entries(authStore.accounts).map(
+              ([mid, a]) => ({ mid, uname: a.uname }),
+            ),
+          }),
+        );
+      }
+      if (req.method === 'POST' && url.pathname === '/api/accounts/switch') {
+        let raw = '';
+        for await (const c of req) raw += c;
+        const body = JSON.parse(raw || '{}');
+        if (!authStore.accounts[body.mid]) {
+          res.writeHead(404, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'NO_ACCOUNT' }));
         }
-        const label =
-          { 86101: '等待扫码…', 86090: '已扫码，请在手机上确认' }[p.code] ||
-          `code ${p.code}`;
-        return res.end(JSON.stringify({ logged_in: false, status: label }));
+        authStore.active = String(body.mid);
+        restoreActive();
+        saveAuth();
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ active: authStore.active }));
       }
       if (req.method === 'GET' && url.pathname === '/api/auth') {
+        const a = authStore.accounts[authStore.active];
         res.writeHead(200, { 'content-type': 'application/json' });
-        return res.end(JSON.stringify({ logged_in: loggedIn() }));
+        return res.end(
+          JSON.stringify({
+            logged_in: loggedIn(),
+            uname: a?.uname || null,
+            mid: authStore.active,
+          }),
+        );
       }
       if (req.method === 'GET' && url.pathname === '/api/discover') {
         const kind = url.searchParams.get('kind') || 'popular';
