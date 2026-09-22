@@ -5,6 +5,7 @@ import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { recognize, resolve, danmaku } from './sites/bilibili.js';
+import { search } from './browser.js';
 import { createSession, getSession, currentSession } from './session.js';
 import { proxyStream, remuxToHls } from './media.js';
 
@@ -17,20 +18,35 @@ const CONTROL_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport"
 <style>body{font-family:system-ui;max-width:640px;margin:2rem auto;padding:0 1rem}input{width:100%;padding:.6rem;font-size:1rem}button{padding:.6rem 1.4rem;font-size:1rem;margin-top:.6rem}pre{background:#f4f4f4;padding:.8rem;overflow:auto;font-size:.8rem}</style>
 <h2>Control</h2>
 <form id="f"><input id="src" type="url" required placeholder="https://www.bilibili.com/video/BV…?p=2"><button>Play on display</button></form>
+<hr>
+<form id="sf"><input id="q" type="search" placeholder="search bilibili…"><button>Search</button></form>
+<div id="results"></div>
 <pre id="out">idle</pre>
 <p><a href="/display">open display →</a></p>
 <script>
-const out=document.getElementById('out');
-document.getElementById('f').onsubmit=async e=>{
-  e.preventDefault();
+const out=document.getElementById('out'),results=document.getElementById('results');
+async function playSource(src){
   out.textContent='resolving…';
   try{
-    const r=await fetch('/api/play',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({source:document.getElementById('src').value})});
+    const r=await fetch('/api/play',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({source:src})});
     const j=await r.json();
-    out.textContent=r.ok?JSON.stringify({session:j.session_id,title:j.title,mode:j.media_mode,streams:j.streams},null,2):'ERR '+r.status+' '+JSON.stringify(j);
+    out.textContent=r.ok?JSON.stringify({session:j.session_id,title:j.title,mode:j.media_mode},null,2):'ERR '+r.status+' '+JSON.stringify(j);
   }catch(err){out.textContent='ERR '+err}
+}
+document.getElementById('f').onsubmit=e=>{e.preventDefault();playSource(document.getElementById('src').value)};
+document.getElementById('sf').onsubmit=async e=>{
+  e.preventDefault();
+  results.textContent='searching…';
+  try{
+    const r=await fetch('/api/search?q='+encodeURIComponent(document.getElementById('q').value));
+    const list=await r.json();
+    if(!r.ok)throw new Error(JSON.stringify(list));
+    results.innerHTML=list.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><img src="'+x.cover+'"><div><b>'+x.title+'</b><br><small>'+x.bvid+' '+x.duration+'</small></div></div>').join('')||'no results';
+    results.querySelectorAll('.hit').forEach(el=>el.onclick=()=>playSource('https://www.bilibili.com/video/'+el.dataset.bv));
+  }catch(err){results.textContent='ERR '+err}
 };
-</script>`;
+</script>
+<style>#results{display:flex;flex-direction:column;gap:.5rem;margin:.8rem 0}.hit{display:flex;gap:.6rem;cursor:pointer;align-items:center}.hit img{width:96px;height:60px;object-fit:cover;border-radius:4px}</style>`;
 
 const DISPLAY_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>proto display</title>
@@ -145,6 +161,42 @@ http
         const [code, body] = await play(JSON.parse(raw || '{}'));
         res.writeHead(code, { 'content-type': 'application/json' });
         return res.end(JSON.stringify(body));
+      }
+      if (req.method === 'GET' && url.pathname === '/api/search') {
+        const q = url.searchParams.get('q') || '';
+        if (!q.trim()) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'EMPTY_QUERY' }));
+        }
+        const list = await search(q);
+        // Route covers through the gateway so no third-party host is
+        // contacted by the client (same-origin boundary).
+        for (const x of list) {
+          x.cover = `${BASE}/img?u=${encodeURIComponent(x.cover)}`;
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify(list));
+      }
+      if (req.method === 'GET' && url.pathname === '/img') {
+        // Bounded cover proxy: only bilibili image CDN hosts allowed.
+        const u = url.searchParams.get('u') || '';
+        let up;
+        try {
+          up = new URL(u.startsWith('//') ? `https:${u}` : u);
+        } catch {
+          up = null;
+        }
+        if (!up || !/^[a-z0-9-]+\.hdslb\.com$/.test(up.hostname)) {
+          res.writeHead(403);
+          return res.end('host not allowed');
+        }
+        const img = await fetch(up, {
+          headers: { Referer: 'https://www.bilibili.com' },
+        });
+        res.writeHead(img.status, {
+          'content-type': img.headers.get('content-type') || 'image/jpeg',
+        });
+        return res.end(Buffer.from(await img.arrayBuffer()));
       }
       const dmMatch = /^\/dm\/([\w-]+)$/.exec(url.pathname);
       if (dmMatch && req.method === 'GET') {
