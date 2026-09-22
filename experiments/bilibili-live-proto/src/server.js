@@ -87,7 +87,16 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
 .list{display:flex;flex-direction:column;gap:8px;margin:12px 0}
 .hit{display:flex;gap:12px;padding:9px;border-radius:14px;background:#141926;border:1px solid #1d2330;cursor:pointer;align-items:center}
 .hit:active{background:#1c2333}
-.hit img{width:112px;height:66px;object-fit:cover;border-radius:9px;flex-shrink:0;background:#000}
+.hit .cov{position:relative;flex-shrink:0}
+.hit .cov::after{content:'▶';position:absolute;inset:0;display:grid;place-items:center;font-size:1.1rem;color:#fff;text-shadow:0 1px 6px #000;opacity:.85}
+.hit img{width:112px;height:66px;object-fit:cover;border-radius:9px;background:#000;display:block}
+.chip.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
+.badge{display:inline-block;font-size:.68rem;padding:2px 7px;border-radius:6px;background:#253050;color:#9db4ff;vertical-align:middle;margin-left:6px}
+.badge.live{background:#3d1f2a;color:#ff8fa3}
+.badge.prev{background:#3a2d12;color:#ffd479}
+.section{font-size:.75rem;color:#8b93a7;letter-spacing:.06em;margin:14px 2px 2px}
+@keyframes shimmer{from{opacity:.4}to{opacity:.9}}
+.sk{height:76px;border-radius:14px;background:#141926;border:1px solid #1d2330;animation:shimmer 1s infinite alternate}
 .hit .t{font-size:.88rem;font-weight:500;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .hit .m{font-size:.72rem;color:#8b93a7;margin-top:4px}
 .hit.folder img{display:none}
@@ -116,6 +125,7 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
   <button class="chip" id="hot">🔥 热门</button>
   <button class="chip" id="feed">✨ 推荐</button>
 </div>
+<div class="section" id="sect" style="display:none"></div>
 <div id="results" class="list"></div>
 <div id="favlist" class="list"></div>
 <p class="muted"><a href="/display" style="color:#6ea8fe">打开播放页 →</a></p>
@@ -132,10 +142,12 @@ async function playSource(src,qn){
     if(r.ok)renderSession(j);
   }catch(err){out.textContent='ERR '+err}
 }
+const skeleton=n=>'<div class="sk"></div>'.repeat(n);
 async function renderSession(j){
   const sess=document.getElementById('sess');
   sess.style.display='';
-  document.getElementById('stitle').textContent=j.title+(j.is_preview?' [预览]':'');
+  const mode=j.media_mode==='hls-live'?'<span class="badge live">直播</span>':j.is_preview?'<span class="badge prev">预览</span>':'<span class="badge">'+j.media_mode+'</span>';
+  document.getElementById('stitle').innerHTML=j.title+mode;
   // 清晰度：re-play same source at chosen qn
   document.getElementById('quals').innerHTML=(j.quality_options||[]).map(q=>'<button data-qn="'+q.qn+'"'+(q.qn===j.quality?' style="font-weight:bold"':'')+'>'+q.label+'</button>').join(' ')||'（仅一档）';
   document.querySelectorAll('#quals button').forEach(b=>b.onclick=()=>playSource(curSrc,b.dataset.qn));
@@ -157,41 +169,45 @@ async function renderSession(j){
 document.getElementById('f').onsubmit=e=>{e.preventDefault();playSource(document.getElementById('src').value)};
 document.getElementById('sf').onsubmit=async e=>{
   e.preventDefault();
-  results.textContent='searching…';
+  results.innerHTML=skeleton(4);
+  document.getElementById('sect').style.display='none';
   try{
     const r=await fetch('/api/search?q='+encodeURIComponent(document.getElementById('q').value));
     const list=await r.json();
     if(!r.ok)throw new Error(JSON.stringify(list));
-    results.innerHTML=list.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><img src="'+x.cover+'"><div><div class="t">'+x.title+'</div><div class="m">'+x.bvid+' · '+x.duration+'</div></div></div>').join('')||'<div class="muted">无结果</div>';
+    document.getElementById('sect').textContent='搜索结果';
+    document.getElementById('sect').style.display='';
+    results.innerHTML=list.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><div class="cov"><img src="'+x.cover+'" loading="lazy"></div><div><div class="t">'+x.title+'</div><div class="m">'+x.bvid+' · '+x.duration+'</div></div></div>').join('')||'<div class="muted">无结果</div>';
     results.querySelectorAll('.hit').forEach(el=>el.onclick=()=>playSource('https://www.bilibili.com/video/'+el.dataset.bv));
   }catch(err){results.textContent='ERR '+err}
 };
-const favlist=document.getElementById('favlist');
+const favlist=document.getElementById('favlist'),sect=document.getElementById('sect');
+const markChip=id=>{document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));document.getElementById(id).classList.add('on')};
 document.getElementById('fav').onclick=async()=>{
-  favlist.textContent='loading…';
+  markChip('fav');sect.style.display='';sect.textContent='收藏夹';favlist.innerHTML=skeleton(3);
   try{
     const r=await fetch('/api/favorites');
     const folders=await r.json();
     if(!r.ok)throw new Error(folders.error||r.status);
     favlist.innerHTML=folders.map(f=>'<div class="hit folder" data-fid="'+f.id+'"><div><div class="t">📁 '+f.title+'</div><div class="m">'+f.count+' 个内容</div></div></div>').join('')||'<div class="muted">无收藏夹</div>';
     favlist.querySelectorAll('.hit').forEach(el=>el.onclick=async()=>{
-      favlist.textContent='loading…';
+      favlist.innerHTML=skeleton(3);
       const items=await fetch('/api/favorites?folder='+el.dataset.fid).then(r=>r.json());
-      favlist.innerHTML=items.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><img src="'+x.cover+'"><div><div class="t">'+x.title+'</div><div class="m">'+x.bvid+' · '+x.duration+'</div></div></div>').join('')||'<div class="muted">空收藏夹</div>';
+      favlist.innerHTML=items.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><div class="cov"><img src="'+x.cover+'" loading="lazy"></div><div><div class="t">'+x.title+'</div><div class="m">'+x.bvid+' · '+x.duration+'</div></div></div>').join('')||'<div class="muted">空收藏夹</div>';
       favlist.querySelectorAll('.hit').forEach(i=>i.onclick=()=>playSource('https://www.bilibili.com/video/'+i.dataset.bv));
     });
   }catch(err){favlist.textContent='ERR '+err.message}
 };
 const showVideos=(items)=>{
-  favlist.innerHTML=items.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><img src="'+x.cover+'"><div><div class="t">'+x.title+'</div><div class="m">'+x.bvid+'</div></div></div>').join('')||'<div class="muted">无内容</div>';
+  favlist.innerHTML=items.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><div class="cov"><img src="'+x.cover+'" loading="lazy"></div><div><div class="t">'+x.title+'</div><div class="m">'+x.bvid+'</div></div></div>').join('')||'<div class="muted">无内容</div>';
   favlist.querySelectorAll('.hit').forEach(i=>i.onclick=()=>playSource('https://www.bilibili.com/video/'+i.dataset.bv));
 };
 document.getElementById('hot').onclick=async()=>{
-  favlist.textContent='loading…';
+  markChip('hot');sect.style.display='';sect.textContent='热门视频';favlist.innerHTML=skeleton(5);
   showVideos(await fetch('/api/discover?kind=popular').then(r=>r.json()));
 };
 document.getElementById('feed').onclick=async()=>{
-  favlist.textContent='loading…';
+  markChip('feed');sect.style.display='';sect.textContent='为你推荐';favlist.innerHTML=skeleton(5);
   showVideos(await fetch('/api/discover?kind=rcmd').then(r=>r.json()));
 };
 const auth=await fetch('/api/auth').then(r=>r.json()).catch(()=>({}));
@@ -230,11 +246,16 @@ video{width:100vw;height:100vh;object-fit:contain;display:block}
 @keyframes dmout{to{opacity:0}}
 #sub{position:fixed;bottom:7%;left:0;right:0;text-align:center;pointer-events:none;color:#fff;font:500 4vmin/1.5 -apple-system,'PingFang SC',system-ui;
   text-shadow:-1px -1px 2px #000,1px -1px 2px #000,-1px 1px 2px #000,1px 1px 2px #000,0 2px 8px #000}
+#buf{position:fixed;inset:0;display:none;place-items:center;pointer-events:none}
+#buf.on{display:grid}
+#buf .ring{width:52px;height:52px;border-radius:50%;border:3px solid #fff3;border-top-color:#fff;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>
 <video id="v" controls playsinline></video>
 <div id="s">等待控制端点播…</div>
 <div id="dm"></div>
 <div id="sub"></div>
+<div id="buf"><div class="ring"></div></div>
 <script src="/hls.min.js"></script>
 <script>
 const v=document.getElementById('v'),s=document.getElementById('s'),dm=document.getElementById('dm'),subEl=document.getElementById('sub');
@@ -287,6 +308,10 @@ setInterval(()=>{
 },200);
 v.addEventListener('pause',()=>{v.getAnimations?0:0;dm.querySelectorAll('div').forEach(e=>e.getAnimations().forEach(a=>a.pause()))});
 v.addEventListener('play',()=>{dm.querySelectorAll('div').forEach(e=>e.getAnimations().forEach(a=>a.play()))});
+const bufEl=document.getElementById('buf');
+v.addEventListener('waiting',()=>bufEl.classList.add('on'));
+v.addEventListener('playing',()=>bufEl.classList.remove('on'));
+v.addEventListener('canplay',()=>bufEl.classList.remove('on'));
 setInterval(async()=>{
   try{
     const j=await (await fetch('/api/now')).json();
@@ -439,11 +464,12 @@ http
         qrSvg.addData(qr.url);
         qrSvg.make();
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-        return res.end(`<!doctype html><meta name="viewport" content="width=device-width"><title>bilibili login</title>
-<body style="font-family:system-ui;text-align:center;padding-top:2rem">
-<h3>用哔哩哔哩 App 扫码登录</h3>
-<div style="display:inline-block;border:1px solid #ddd;padding:8px">${qrSvg.createSvgTag(6)}</div>
-<p id="st">等待扫码…（二维码约 3 分钟过期，过期请刷新本页）</p>
+        return res.end(`<!doctype html><meta name="viewport" content="width=device-width,viewport-fit=cover"><title>bilibili 登录</title>
+<body style="font-family:-apple-system,'PingFang SC',system-ui;background:#0b0e14;color:#e8eaf0;text-align:center;padding-top:3rem;min-height:100vh">
+<h3 style="font-weight:600">用哔哩哔哩 App 扫码登录</h3>
+<div style="display:inline-block;background:#fff;padding:14px;border-radius:18px;margin:1.4rem 0;box-shadow:0 8px 40px #4a7dff22">${qrSvg.createSvgTag(6)}</div>
+<p id="st" style="color:#8b93a7;font-size:.9rem">等待扫码…（二维码约 3 分钟过期，过期自动刷新）</p>
+<p><a href="/control" style="color:#6ea8fe;font-size:.85rem;text-decoration:none">← 返回控制端</a></p>
 <script>
 setInterval(async()=>{
   const j=await fetch('/api/qr-status').then(r=>r.json());
