@@ -64,27 +64,61 @@ const BIND = process.env.PROTO_BIND || '100.64.98.39';
 const PORT = Number(process.env.PROTO_PORT || 8899);
 const BASE = `http://${BIND}:${PORT}`;
 
-const CONTROL_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>proto control</title>
-<style>body{font-family:system-ui;max-width:640px;margin:2rem auto;padding:0 1rem}input{width:100%;padding:.6rem;font-size:1rem}button{padding:.6rem 1.4rem;font-size:1rem;margin-top:.6rem}pre{background:#f4f4f4;padding:.8rem;overflow:auto;font-size:.8rem}</style>
-<h2>Control</h2>
-<form id="f"><input id="src" type="url" required placeholder="https://www.bilibili.com/video/BV…?p=2"><button>Play on display</button></form>
-<hr>
-<form id="sf"><input id="q" type="search" placeholder="search bilibili…"><button>Search</button></form>
-<div id="results"></div>
-<hr>
-<button id="fav">我的收藏夹</button> <button id="hot">热门</button> <button id="feed">推荐</button>
-<div id="accline"><a href="/qr">登录/换号</a> <button id="logout" style="display:none">退出</button> <span id="who"></span></div>
-<div id="favlist"></div>
-<pre id="out">idle</pre>
+const CONTROL_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,viewport-fit=cover"><meta name="apple-mobile-web-app-capable" content="yes">
+<title>B站遥控器</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,'PingFang SC',system-ui,sans-serif;background:#0b0e14;color:#e8eaf0;max-width:640px;margin:0 auto;padding:0 14px 40px}
+header{position:sticky;top:0;background:#0b0e14f0;backdrop-filter:blur(12px);padding:14px 0 10px;z-index:9;border-bottom:1px solid #1d2330}
+h1{font-size:1.15rem;font-weight:600;display:flex;align-items:center;gap:8px}
+.dot{width:9px;height:9px;border-radius:50%;background:#666}
+.dot.on{background:#4ade80;box-shadow:0 0 8px #4ade8080}
+.acct{font-size:.78rem;color:#8b93a7;margin-left:auto;display:flex;gap:10px;align-items:center}
+.acct a{color:#6ea8fe;text-decoration:none}
+form{display:flex;gap:8px;margin:10px 0}
+input{flex:1;min-width:0;padding:11px 14px;font-size:.95rem;border-radius:12px;border:1px solid #2a3242;background:#141926;color:#e8eaf0;outline:none}
+input:focus{border-color:#4a7dff}
+button{padding:11px 16px;font-size:.9rem;border-radius:12px;border:1px solid #2a3242;background:#1c2333;color:#e8eaf0;cursor:pointer;white-space:nowrap}
+button:active{background:#2a3542;transform:scale(.97)}
+button.primary{background:#4a7dff;border-color:#4a7dff;color:#fff;font-weight:600}
+button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+.chip{font-size:.82rem;padding:7px 13px;border-radius:999px}
+.list{display:flex;flex-direction:column;gap:8px;margin:12px 0}
+.hit{display:flex;gap:12px;padding:9px;border-radius:14px;background:#141926;border:1px solid #1d2330;cursor:pointer;align-items:center}
+.hit:active{background:#1c2333}
+.hit img{width:112px;height:66px;object-fit:cover;border-radius:9px;flex-shrink:0;background:#000}
+.hit .t{font-size:.88rem;font-weight:500;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.hit .m{font-size:.72rem;color:#8b93a7;margin-top:4px}
+.hit.folder img{display:none}
+#sess{background:#141926;border:1px solid #253050;border-radius:16px;padding:14px;margin:14px 0}
+#sess h3{font-size:.95rem;font-weight:600;margin-bottom:10px;line-height:1.4}
+#sess .row{display:flex;align-items:flex-start;gap:8px;margin:9px 0;flex-wrap:wrap}
+#sess .lbl{font-size:.78rem;color:#8b93a7;min-width:38px;padding-top:7px}
+#sess .opts{display:flex;gap:6px;flex-wrap:wrap}
+#sess .opts button{padding:7px 11px;font-size:.78rem;border-radius:9px}
+#out{font-size:.72rem;color:#8b93a7;white-space:pre-wrap;word-break:break-all;background:#0d1119;border-radius:9px;padding:9px;max-height:110px;overflow:auto}
+.muted{color:#566;font-size:.8rem;padding:8px 2px}
+</style>
+<header><h1><span id="dot" class="dot"></span> B站遥控器 <span class="acct"><span id="who"></span><a href="/qr">登录/换号</a><a href="#" id="logout" style="display:none">退出</a></span></h1></header>
 <div id="sess" style="display:none">
-  <b id="stitle"></b>
-  <div>清晰度：<span id="quals"></span></div>
-  <div>选集：<span id="pages"></span></div>
-  <div>字幕：<span id="subs"></span></div>
-  <div>倍速：<span id="rates"></span></div>
+  <h3 id="stitle"></h3>
+  <div class="row"><span class="lbl">清晰度</span><div class="opts" id="quals"></div></div>
+  <div class="row"><span class="lbl">选集</span><div class="opts" id="pages"></div></div>
+  <div class="row"><span class="lbl">字幕</span><div class="opts" id="subs"></div></div>
+  <div class="row"><span class="lbl">倍速</span><div class="opts" id="rates"></div></div>
 </div>
-<p><a href="/display">open display →</a></p>
+<pre id="out">就绪</pre>
+<form id="f"><input id="src" type="text" placeholder="粘贴 BV 链接 / 番剧 ep / 直播房号…"><button class="primary">播放</button></form>
+<form id="sf"><input id="q" type="search" placeholder="搜索 bilibili…"><button>搜索</button></form>
+<div class="chips">
+  <button class="chip" id="fav">⭐ 收藏夹</button>
+  <button class="chip" id="hot">🔥 热门</button>
+  <button class="chip" id="feed">✨ 推荐</button>
+</div>
+<div id="results" class="list"></div>
+<div id="favlist" class="list"></div>
+<p class="muted"><a href="/display" style="color:#6ea8fe">打开播放页 →</a></p>
 <script type="module">
 const out=document.getElementById('out'),results=document.getElementById('results');
 let curSrc=null;
@@ -128,7 +162,7 @@ document.getElementById('sf').onsubmit=async e=>{
     const r=await fetch('/api/search?q='+encodeURIComponent(document.getElementById('q').value));
     const list=await r.json();
     if(!r.ok)throw new Error(JSON.stringify(list));
-    results.innerHTML=list.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><img src="'+x.cover+'"><div><b>'+x.title+'</b><br><small>'+x.bvid+' '+x.duration+'</small></div></div>').join('')||'no results';
+    results.innerHTML=list.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><img src="'+x.cover+'"><div><div class="t">'+x.title+'</div><div class="m">'+x.bvid+' · '+x.duration+'</div></div></div>').join('')||'<div class="muted">无结果</div>';
     results.querySelectorAll('.hit').forEach(el=>el.onclick=()=>playSource('https://www.bilibili.com/video/'+el.dataset.bv));
   }catch(err){results.textContent='ERR '+err}
 };
@@ -139,17 +173,17 @@ document.getElementById('fav').onclick=async()=>{
     const r=await fetch('/api/favorites');
     const folders=await r.json();
     if(!r.ok)throw new Error(folders.error||r.status);
-    favlist.innerHTML=folders.map(f=>'<div class="hit" data-fid="'+f.id+'"><div><b>📁 '+f.title+'</b> <small>('+f.count+')</small></div></div>').join('')||'no folders';
+    favlist.innerHTML=folders.map(f=>'<div class="hit folder" data-fid="'+f.id+'"><div><div class="t">📁 '+f.title+'</div><div class="m">'+f.count+' 个内容</div></div></div>').join('')||'<div class="muted">无收藏夹</div>';
     favlist.querySelectorAll('.hit').forEach(el=>el.onclick=async()=>{
       favlist.textContent='loading…';
       const items=await fetch('/api/favorites?folder='+el.dataset.fid).then(r=>r.json());
-      favlist.innerHTML=items.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><img src="'+x.cover+'"><div><b>'+x.title+'</b><br><small>'+x.bvid+' '+x.duration+'</small></div></div>').join('')||'empty folder';
+      favlist.innerHTML=items.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><img src="'+x.cover+'"><div><div class="t">'+x.title+'</div><div class="m">'+x.bvid+' · '+x.duration+'</div></div></div>').join('')||'<div class="muted">空收藏夹</div>';
       favlist.querySelectorAll('.hit').forEach(i=>i.onclick=()=>playSource('https://www.bilibili.com/video/'+i.dataset.bv));
     });
   }catch(err){favlist.textContent='ERR '+err.message}
 };
 const showVideos=(items)=>{
-  favlist.innerHTML=items.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><img src="'+x.cover+'"><div><b>'+x.title+'</b><br><small>'+x.bvid+'</small></div></div>').join('')||'empty';
+  favlist.innerHTML=items.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><img src="'+x.cover+'"><div><div class="t">'+x.title+'</div><div class="m">'+x.bvid+'</div></div></div>').join('')||'<div class="muted">无内容</div>';
   favlist.querySelectorAll('.hit').forEach(i=>i.onclick=()=>playSource('https://www.bilibili.com/video/'+i.dataset.bv));
 };
 document.getElementById('hot').onclick=async()=>{
@@ -162,45 +196,87 @@ document.getElementById('feed').onclick=async()=>{
 };
 const auth=await fetch('/api/auth').then(r=>r.json()).catch(()=>({}));
 if(auth.logged_in){
-  document.getElementById('who').textContent='已登录：'+(auth.uname||auth.mid);
+  document.getElementById('who').textContent=auth.uname||auth.mid;
+  document.getElementById('dot').classList.add('on');
   document.getElementById('logout').style.display='';
 }
-document.getElementById('logout').onclick=async()=>{
+document.getElementById('logout').onclick=async e=>{
+  e.preventDefault();
   await fetch('/api/logout',{method:'POST'});
   location.reload();
 };
-</script>
-<style>#results{display:flex;flex-direction:column;gap:.5rem;margin:.8rem 0}.hit{display:flex;gap:.6rem;cursor:pointer;align-items:center}.hit img{width:96px;height:60px;object-fit:cover;border-radius:4px}</style>`;
+// mark active chip selection for quality/page/sub buttons
+document.addEventListener('click',e=>{
+  const b=e.target.closest('#sess .opts button');if(!b)return;
+  b.parentElement.querySelectorAll('button').forEach(x=>x.classList.remove('on'));
+  b.classList.add('on');
+});
+</script>`;
 
-const DISPLAY_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>proto display</title>
-<style>body{margin:0;background:#000}video{width:100vw;height:100vh;object-fit:contain}#s{position:fixed;top:0;color:#fff;font:14px system-ui;background:#0008;padding:.4rem}</style>
-<video id="v" controls playsinline></video><div id="s">waiting for control…</div>
-<div id="dm" style="position:fixed;inset:0;pointer-events:none;overflow:hidden"></div>
-<div id="sub" style="position:fixed;bottom:8%;left:0;right:0;text-align:center;pointer-events:none;color:#fff;font-size:4.5vw;text-shadow:1px 1px 3px #000,-1px -1px 3px #000"></div>
+const DISPLAY_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,viewport-fit=cover">
+<title>display</title>
+<style>
+html,body{margin:0;height:100%;background:#000;overflow:hidden}
+video{width:100vw;height:100vh;object-fit:contain;display:block}
+#s{position:fixed;top:0;left:0;right:0;color:#fff;font:600 15px/1.5 -apple-system,'PingFang SC',system-ui;background:linear-gradient(#000b,#0000);padding:14px 18px 26px;pointer-events:none;transition:opacity .5s}
+#s.hide{opacity:0}
+#dm{position:fixed;inset:0;pointer-events:none;overflow:hidden}
+.dm-item{position:absolute;white-space:nowrap;font-weight:600;color:#fff;will-change:transform;pointer-events:none;
+  text-shadow:-1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000,1px 1px 0 #000,0 0 6px #0006}
+.dm-fixed{position:absolute;white-space:nowrap;font-weight:600;left:50%;transform:translateX(-50%);pointer-events:none;
+  text-shadow:-1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000,1px 1px 0 #000,0 0 6px #0006;
+  animation:dmfade .4s ease-in,dmout .4s ease-out forwards 4s}
+@keyframes dmfade{from{opacity:0}to{opacity:1}}
+@keyframes dmout{to{opacity:0}}
+#sub{position:fixed;bottom:7%;left:0;right:0;text-align:center;pointer-events:none;color:#fff;font:500 4vmin/1.5 -apple-system,'PingFang SC',system-ui;
+  text-shadow:-1px -1px 2px #000,1px -1px 2px #000,-1px 1px 2px #000,1px 1px 2px #000,0 2px 8px #000}
+</style>
+<video id="v" controls playsinline></video>
+<div id="s">等待控制端点播…</div>
+<div id="dm"></div>
+<div id="sub"></div>
 <script src="/hls.min.js"></script>
 <script>
 const v=document.getElementById('v'),s=document.getElementById('s'),dm=document.getElementById('dm'),subEl=document.getElementById('sub');
-let cur=null,hls=null,pool=[],pidx=0,laneFree=[],cues=[],cuesUrl=null;
-const LANES=10,LINE_H=Math.floor(innerHeight*0.05),FLY_MS=7000;
-function laneFor(){for(let i=0;i<LANES;i++)if((laneFree[i]||0)<performance.now())return i;return -1}
+let cur=null,hls=null,pool=[],pidx=0,cues=[],cuesUrl=null;
+let statusTimer=null;
+function flash(t){s.textContent=t;s.classList.remove('hide');clearTimeout(statusTimer);statusTimer=setTimeout(()=>s.classList.add('hide'),3500)}
+// --- danmaku engine: scroll lanes + fixed top/bottom ---
+const FONT=Math.max(18,Math.floor(innerHeight*0.052));
+const LANE_H=Math.floor(FONT*1.45),TOP_N=Math.floor(innerHeight*0.45/LANE_H),BOT_N=Math.floor(innerHeight*0.25/LANE_H);
+const laneFree=[],topFree=[],botFree=[];
+const FLY_MS=7500,FIX_MS=4500;
+function colorOf(d){return '#'+d.color.toString(16).padStart(6,'0')}
+function freeLane(arr,n){const now=performance.now();for(let i=0;i<n;i++)if(!arr[i]||arr[i]<now)return i;return -1}
 function spawn(d){
-  const lane=laneFor();if(lane<0)return;
+  // mode 4 = bottom-fixed, 5 = top-fixed, else scroll
+  if(d.mode===4||d.mode===5){
+    const arr=d.mode===5?topFree:botFree,n=d.mode===5?TOP_N:BOT_N;
+    const lane=freeLane(arr,n);if(lane<0)return;
+    const el=document.createElement('div');
+    el.className='dm-fixed';el.textContent=d.text;
+    el.style.cssText+='font-size:'+FONT+'px;color:'+colorOf(d)+';'+(d.mode===5?'top:'+lane*LANE_H+'px':'bottom:'+(lane*LANE_H+Math.floor(innerHeight*0.12))+'px');
+    dm.appendChild(el);
+    arr[lane]=performance.now()+FIX_MS;
+    setTimeout(()=>el.remove(),FIX_MS+400);
+    return;
+  }
+  const lane=freeLane(laneFree,Math.floor(innerHeight*0.85/LANE_H));if(lane<0)return;
   const el=document.createElement('div');
-  el.textContent=d.text;
-  el.style.cssText='position:absolute;white-space:nowrap;font-size:'+LINE_H*0.8+'px;color:#'+d.color.toString(16).padStart(6,'0')+';text-shadow:1px 1px 2px #000;top:'+(lane*LINE_H)+'px;left:100%;will-change:transform';
+  el.className='dm-item';el.textContent=d.text;
+  el.style.cssText+='font-size:'+FONT+'px;color:'+colorOf(d)+';top:'+(lane*LANE_H)+'px;left:100%';
   dm.appendChild(el);
   const w=el.offsetWidth+innerWidth;
   const a=el.animate([{transform:'translateX(0)'},{transform:'translateX(-'+w+'px)'}],{duration:FLY_MS,easing:'linear'});
   a.onfinish=()=>el.remove();
   if(v.paused)a.pause();
-  laneFree[lane]=performance.now()+FLY_MS*(el.offsetWidth/w)+300;
+  laneFree[lane]=performance.now()+FLY_MS*(el.offsetWidth/w)+200;
 }
 setInterval(()=>{
   if(!pool.length)return;
   const t=v.currentTime;
-  if(pidx>0&&(pool[pidx-1]&&pool[pidx-1].t>t+2)){dm.innerHTML='';pidx=pool.findIndex(d=>d.t>t);if(pidx<0)pidx=pool.length}
-  while(pidx<pool.length&&pool[pidx].t<=t){if(pool[pidx].mode===1)spawn(pool[pidx]);pidx++}
+  if(pidx>0&&(pool[pidx-1]&&pool[pidx-1].t>t+2)){dm.innerHTML='';laneFree.length=0;pidx=pool.findIndex(d=>d.t>t);if(pidx<0)pidx=pool.length}
+  while(pidx<pool.length&&pool[pidx].t<=t){spawn(pool[pidx]);pidx++}
 },200);
 // Subtitle overlay: cues synced to currentTime.
 setInterval(()=>{
@@ -214,11 +290,11 @@ v.addEventListener('play',()=>{dm.querySelectorAll('div').forEach(e=>e.getAnimat
 setInterval(async()=>{
   try{
     const j=await (await fetch('/api/now')).json();
-    if(!j.session){s.textContent='waiting for control…';return}
+    if(!j.session){flash('等待控制端点播…');return}
     if(cur!==j.session.session_id+'|'+j.session.media_url){
       cur=j.session.session_id+'|'+j.session.media_url;
       if(hls){hls.destroy();hls=null}
-      pool=[];pidx=0;dm.innerHTML='';laneFree=[];
+      pool=[];pidx=0;dm.innerHTML='';laneFree.length=0;topFree.length=0;botFree.length=0;
       fetch('/dm/'+j.session.session_id).then(r=>r.json()).then(l=>{pool=l;pidx=0}).catch(()=>{});
       // Load subtitle cues if control picked a track.
       cuesUrl=j.session.subtitle_url;
@@ -232,8 +308,8 @@ setInterval(async()=>{
       }else{
         v.src=url;v.load();
       }
-      s.textContent=j.session.title+' ('+j.session.media_mode+')';
-      v.play().catch(()=>{s.textContent+=' — tap to play'});
+      flash(j.session.title+' · '+j.session.media_mode);
+      v.play().catch(()=>{s.classList.remove('hide');s.textContent=j.session.title+' — 点按播放'});
     }
     if(j.session.playback_rate&&v.playbackRate!==j.session.playback_rate)v.playbackRate=j.session.playback_rate;
     // Subtitle track change without session change.
