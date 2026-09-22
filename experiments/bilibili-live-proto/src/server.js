@@ -30,6 +30,8 @@ import {
   closeSession,
   pushHistory,
   listHistory,
+  markHistoryPos,
+  historyPos,
 } from './session.js';
 import { proxyStream, remuxToHls } from './media.js';
 
@@ -382,7 +384,7 @@ document.getElementById('feed').onclick=async()=>{
 document.getElementById('hist').onclick=async()=>{
   markChip('hist');sect.style.display='';sect.textContent='最近播放';favlist.innerHTML=skeleton(3);
   const items=await fetch('/api/history').then(r=>r.json()).catch(()=>[]);
-  favlist.innerHTML=items.map(x=>'<div class="hit" data-src="'+encodeURIComponent(x.source)+'"><div><div class="t">'+x.title+'</div><div class="m">'+new Date(x.at).toLocaleTimeString()+'</div></div></div>').join('')||'<div class="muted">暂无记录</div>';
+  favlist.innerHTML=items.map(x=>'<div class="hit" data-src="'+encodeURIComponent(x.source)+'"><div><div class="t">'+x.title+'</div><div class="m">'+new Date(x.at).toLocaleTimeString()+(x.pos?' · 续播 '+fmt(x.pos):'')+'</div></div></div>').join('')||'<div class="muted">暂无记录</div>';
   favlist.querySelectorAll('.hit').forEach(i=>i.onclick=()=>playSource(decodeURIComponent(i.dataset.src)));
 };
 const auth=await fetch('/api/auth').then(r=>r.json()).catch(()=>({}));
@@ -664,8 +666,11 @@ async function play(body) {
     hlsDir = (await remuxToHls(video, audio, `${tag.bvid}-p${tag.page}`)).dir;
   }
   const session = createSession(rec.locator, media);
+  const resume = historyPos(rec.locator);
   pushHistory(rec.locator, media.title);
   session.hls_dir = hlsDir;
+  // Resume from last position — display seeks once the stream is up.
+  if (resume > 0) session.cmd = { seq: 1, op: 'seek', pos: resume };
   const media_mode = hlsDir ? 'hls-remux' : 'file';
   const media_url = hlsDir
     ? `${BASE}/hls/${session.session_id}/index.m3u8`
@@ -843,7 +848,7 @@ setInterval(async()=>{
                   : p.room_id
                     ? `https://live.bilibili.com/${p.room_id}`
                     : '';
-              return { title: h.title, source, at: h.at };
+              return { title: h.title, source, at: h.at, pos: h.pos || 0 };
             }),
           ),
         );
@@ -1044,6 +1049,7 @@ setInterval(async()=>{
         s.pos = pos;
         s.dur = dur;
         s.paused = paused;
+        markHistoryPos(s.current_item.source_locator, pos, dur);
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ ok: true }));
       }

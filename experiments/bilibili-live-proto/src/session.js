@@ -43,6 +43,21 @@ export function pushHistory(locator, title) {
   saveHistory();
 }
 
+const locKey = (l) => JSON.stringify(l?.opaque_payload || {});
+
+/** Remember playback position on the matching history entry. */
+export function markHistoryPos(locator, pos, dur) {
+  const h = history.find((x) => locKey(x.locator) === locKey(locator));
+  if (!h || !isFinite(pos)) return;
+  // Don't resume at the very start or the last 30s (episode finished).
+  h.pos = pos > 10 && (!dur || pos < dur - 30) ? Math.floor(pos) : 0;
+}
+
+/** Resume position for a locator, or 0. */
+export function historyPos(locator) {
+  return history.find((x) => locKey(x.locator) === locKey(locator))?.pos || 0;
+}
+
 export function listHistory() {
   return history;
 }
