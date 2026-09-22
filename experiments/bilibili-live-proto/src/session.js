@@ -4,11 +4,33 @@
 // that, and the prototype must not pretend to validate it.
 
 import { randomUUID } from 'node:crypto';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const sessions = new Map();
 let currentId = null;
 const history = [];
 const HISTORY_MAX = 10;
+const HIST_FILE = join(
+  dirname(fileURLToPath(import.meta.url)),
+  '../runtime/history.json',
+);
+try {
+  history.push(
+    ...JSON.parse(readFileSync(HIST_FILE, 'utf8')).slice(0, HISTORY_MAX),
+  );
+} catch {
+  /* first run */
+}
+const saveHistory = () => {
+  try {
+    mkdirSync(dirname(HIST_FILE), { recursive: true });
+    writeFileSync(HIST_FILE, JSON.stringify(history));
+  } catch {
+    /* runtime dir may be readonly */
+  }
+};
 
 export function pushHistory(locator, title) {
   const key = JSON.stringify(locator?.opaque_payload || {});
@@ -18,6 +40,7 @@ export function pushHistory(locator, title) {
   if (i >= 0) history.splice(i, 1);
   history.unshift({ locator, title, at: Date.now() });
   if (history.length > HISTORY_MAX) history.pop();
+  saveHistory();
 }
 
 export function listHistory() {

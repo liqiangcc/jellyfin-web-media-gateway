@@ -14,6 +14,17 @@ export const manifest = { plugin_id: PLUGIN_ID, site_id: SITE_ID };
 
 /** URL → SourceLocator. Recognizes BV ids (+?p=) and bangumi ep ids. */
 export function recognize(input) {
+  // b23.tv short links — what the Bilibili app shares produce. Resolve
+  // via HEAD redirect, then recognize the canonical URL.
+  if (/b23\.tv\//i.test(input)) {
+    return {
+      matched: true,
+      site_id: SITE_ID,
+      plugin_id: PLUGIN_ID,
+      short: true,
+      locator: null,
+    };
+  }
   const ep = /bangumi\/play\/ep(\d+)/i.exec(input);
   if (ep) {
     return {
@@ -63,6 +74,16 @@ export function recognize(input) {
       opaque_payload: { bvid: match[1], page },
     },
   };
+}
+
+/** Follow a b23.tv short link and return the canonical URL it points to. */
+export async function resolveShortLink(url) {
+  const r = await fetch(url, {
+    method: 'HEAD',
+    redirect: 'follow',
+    headers: { 'User-Agent': UA },
+  });
+  return r.url;
 }
 
 // --- auth state (prototype-local; real impl owns this in Vault) ---

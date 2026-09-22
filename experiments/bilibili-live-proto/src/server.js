@@ -15,6 +15,7 @@ import {
   subtitleCues,
   navigation,
   sendDanmaku,
+  resolveShortLink,
   qrLoginStart,
   qrLoginPoll,
   setAuthCookie,
@@ -569,8 +570,19 @@ setInterval(()=>{
 </script>`;
 
 async function play(body) {
-  const rec = recognize(body.source || '');
-  if (!rec.matched) return [400, { error: 'SOURCE_NOT_RECOGNIZED' }];
+  let source = body.source || '';
+  // b23.tv share links: expand to canonical before recognize.
+  if (/b23\.tv\//i.test(source)) {
+    try {
+      source = await resolveShortLink(
+        source.startsWith('http') ? source : 'https://' + source,
+      );
+    } catch {
+      return [400, { error: 'SHORT_LINK_FAILED' }];
+    }
+  }
+  const rec = recognize(source);
+  if (!rec.matched || rec.short) return [400, { error: 'SOURCE_NOT_RECOGNIZED' }];
   const media = await resolve(rec.locator, {
     prefer: {
       ...(body.force_dash ? { mode: 'dash' } : {}),
