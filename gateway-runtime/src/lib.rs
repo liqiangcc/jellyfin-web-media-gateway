@@ -35,8 +35,11 @@ pub struct GatewayRuntimeConfig {
     pub bind_addr: IpAddr,
     pub port: u16,
     pub http_authority: Url,
-    pub bilibili_account_ref: String,
-    pub bilibili_account_label: String,
+    /// Optional server-owned account registration. Public/no-login operation
+    /// intentionally leaves both values unset; authenticated routes still
+    /// require the pair and never accept request-provided material.
+    pub bilibili_account_ref: Option<String>,
+    pub bilibili_account_label: Option<String>,
     pub max_capabilities: usize,
 }
 
@@ -117,16 +120,23 @@ impl GatewayRuntimeConfig {
             return Err(RuntimeConfigError::InvalidValue(HTTP_AUTHORITY_ENV));
         }
 
-        let bilibili_account_ref = bounded_ref(
-            account_ref.ok_or(RuntimeConfigError::Missing(BILIBILI_ACCOUNT_REF_ENV))?,
-            MAX_ACCOUNT_REF,
-            BILIBILI_ACCOUNT_REF_ENV,
-        )?;
-        let bilibili_account_label = bounded_label(
-            account_label.ok_or(RuntimeConfigError::Missing(BILIBILI_ACCOUNT_LABEL_ENV))?,
-            MAX_ACCOUNT_LABEL,
-            BILIBILI_ACCOUNT_LABEL_ENV,
-        )?;
+        let (bilibili_account_ref, bilibili_account_label) = match (account_ref, account_label) {
+            (None, None) => (None, None),
+            (Some(account_ref), Some(account_label)) => (
+                Some(bounded_ref(
+                    account_ref,
+                    MAX_ACCOUNT_REF,
+                    BILIBILI_ACCOUNT_REF_ENV,
+                )?),
+                Some(bounded_label(
+                    account_label,
+                    MAX_ACCOUNT_LABEL,
+                    BILIBILI_ACCOUNT_LABEL_ENV,
+                )?),
+            ),
+            (None, Some(_)) => return Err(RuntimeConfigError::Missing(BILIBILI_ACCOUNT_REF_ENV)),
+            (Some(_), None) => return Err(RuntimeConfigError::Missing(BILIBILI_ACCOUNT_LABEL_ENV)),
+        };
 
         Ok(Self {
             bind_addr,
@@ -209,13 +219,14 @@ pub fn build_service(config: &GatewayRuntimeConfig) -> Result<GatewayService, Ru
     service
         .configure_http_authority(config.http_authority.clone())
         .map_err(RuntimeConfigError::Authority)?;
-    service
-        .configure_auth_account(
-            BILIBILI_SITE_ID,
-            config.bilibili_account_ref.clone(),
-            config.bilibili_account_label.clone(),
-        )
-        .map_err(RuntimeConfigError::Vault)?;
+    if let (Some(account_ref), Some(account_label)) = (
+        config.bilibili_account_ref.clone(),
+        config.bilibili_account_label.clone(),
+    ) {
+        service
+            .configure_auth_account(BILIBILI_SITE_ID, account_ref, account_label)
+            .map_err(RuntimeConfigError::Vault)?;
+    }
     Ok(service)
 }
 
@@ -302,6 +313,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn public_config_does_not_require_account_material() {
+        let config = GatewayRuntimeConfig::from_values(
+            None,
+            None,
+            Some("http://127.0.0.1:8787"),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(config.bilibili_account_ref, None);
+        assert_eq!(config.bilibili_account_label, None);
+        build_service(&config).unwrap();
+    }
+
     #[tokio::test]
     async fn fake_runtime_reaches_auth_start_for_registered_account_and_rejects_unregistered() {
         let config = config();
@@ -313,8 +339,8 @@ mod tests {
         service
             .configure_auth_account(
                 BILIBILI_SITE_ID,
-                config.bilibili_account_ref,
-                config.bilibili_account_label,
+                config.bilibili_account_ref.clone().unwrap(),
+                config.bilibili_account_label.clone().unwrap(),
             )
             .unwrap();
         let app = service.router();

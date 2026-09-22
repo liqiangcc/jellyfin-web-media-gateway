@@ -252,6 +252,7 @@ struct GatewayState {
     display_sessions: DisplaySessionService,
     source_sessions: source_session::SourceSessionService,
     auth_routes: auth_route::AuthRouteCoordinator,
+    public_browser_worker: browser_chromium::ChromiumBrowserWorker,
     media_delivery: media_delivery::MediaDeliverySupervisor,
     pending_media_deliveries: Arc<Mutex<HashMap<String, PendingMediaDelivery>>>,
 }
@@ -514,6 +515,8 @@ impl GatewayService {
                 display_sessions: DisplaySessionService::default(),
                 source_sessions: source_session::SourceSessionService::new(registry),
                 auth_routes: auth_route::AuthRouteCoordinator::new(SessionVault::default()),
+                public_browser_worker:
+                    browser_chromium::ChromiumBrowserWorker::for_public_observation(),
                 pending_media_deliveries: Arc::new(Mutex::new(HashMap::new())),
             }),
         }
@@ -727,6 +730,8 @@ impl GatewayService {
                 display_sessions: DisplaySessionService::default(),
                 source_sessions: source_session::SourceSessionService::new(registry),
                 auth_routes: auth_route::AuthRouteCoordinator::fake_for_tests(vault),
+                public_browser_worker:
+                    browser_chromium::ChromiumBrowserWorker::for_public_observation(),
                 pending_media_deliveries: Arc::new(Mutex::new(HashMap::new())),
             }),
         }
@@ -812,16 +817,52 @@ impl GatewayService {
         self.state.control.clone()
     }
 
-    pub(crate) fn create_session(
+    pub(crate) async fn create_public_session(
         &self,
         request: CreateSessionRequest,
     ) -> source_session::CreationOutcome {
-        self.state.source_sessions.create(
-            self,
-            &self.state.control,
-            &self.state.display_sessions,
-            request,
-        )
+        let egress = self
+            .state
+            .egress_policy
+            .read()
+            .expect("egress policy poisoned")
+            .clone();
+        self.state
+            .source_sessions
+            .create_public_browser(
+                self,
+                &self.state.control,
+                &self.state.display_sessions,
+                request,
+                &self.state.public_browser_worker,
+                egress,
+            )
+            .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn create_public_session_with_worker<W: browser::BrowserWorker + 'static>(
+        &self,
+        request: CreateSessionRequest,
+        worker: &W,
+    ) -> source_session::CreationOutcome {
+        let egress = self
+            .state
+            .egress_policy
+            .read()
+            .expect("egress policy poisoned")
+            .clone();
+        self.state
+            .source_sessions
+            .create_public_browser(
+                self,
+                &self.state.control,
+                &self.state.display_sessions,
+                request,
+                worker,
+                egress,
+            )
+            .await
     }
 
     /// Production server-side seam for authenticated browser playback. The
@@ -888,6 +929,21 @@ impl GatewayService {
             );
         }
         self.state.control.execute_command(session_id, request)
+    }
+
+    /// Test-only delegation so SourceSession reservation tests can observe
+    /// waiter counts through the product composition entry point.
+    #[cfg(test)]
+    pub(crate) async fn wait_creation_waiters(&self, request_id: &str, expected: usize) {
+        self.state
+            .source_sessions
+            .wait_creation_waiters(request_id, expected)
+            .await;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn creation_slot_count(&self) -> usize {
+        self.state.source_sessions.creation_slot_count()
     }
 
     pub fn router(&self) -> Router {
@@ -1714,7 +1770,8 @@ async fn create_session_handler(
         }
     };
     GatewayService { state }
-        .create_session(request)
+        .create_public_session(request)
+        .await
         .into_response()
 }
 
