@@ -193,7 +193,7 @@ http
           res.writeHead(400, { 'content-type': 'application/json' });
           return res.end(JSON.stringify({ error: 'EMPTY_QUERY' }));
         }
-        const list = await search(q);
+        const list = await search(q, { cookies: getAuthCookie() });
         // Route covers through the gateway so no third-party host is
         // contacted by the client (same-origin boundary).
         for (const x of list) {

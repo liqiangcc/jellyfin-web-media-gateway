@@ -39,12 +39,13 @@ async function evaluate(ws, expr) {
 /**
  * Navigate a fresh tab to `url`, wait until `waitFor` evaluates truthy,
  * then run `extract` and return its value. Tab is always closed.
+ * `cookies` (optional "k=v; k=v" string) is injected for .bilibili.com
+ * before navigation so the browser reuses the QR-login session.
  */
-export async function observe(url, waitFor, extract) {
-  const tab = await fetch(
-    `${CDP_HTTP}/json/new?${encodeURIComponent(url)}`,
-    { method: 'PUT' },
-  ).then((r) => r.json());
+export async function observe(url, waitFor, extract, cookies) {
+  const tab = await fetch(`${CDP_HTTP}/json/new`, { method: 'PUT' }).then(
+    (r) => r.json(),
+  );
   const wsUrl = tab.webSocketDebuggerUrl;
   try {
     const ws = await new Promise((res, rej) => {
@@ -54,6 +55,20 @@ export async function observe(url, waitFor, extract) {
     });
     try {
       await rpc(ws, 'Runtime.enable');
+      await rpc(ws, 'Network.enable');
+      if (cookies) {
+        for (const pair of cookies.split(';')) {
+          const eq = pair.indexOf('=');
+          if (eq < 0) continue;
+          await rpc(ws, 'Network.setCookie', {
+            name: pair.slice(0, eq).trim(),
+            value: pair.slice(eq + 1).trim(),
+            domain: '.bilibili.com',
+          });
+        }
+      }
+      await rpc(ws, 'Page.enable');
+      await rpc(ws, 'Page.navigate', { url });
       // Poll for readiness rather than racing the load event.
       const deadline = Date.now() + NAV_TIMEOUT_MS;
       let ready = false;
@@ -77,7 +92,7 @@ export async function observe(url, waitFor, extract) {
 }
 
 /** Search bilibili via the real search page; extract result cards. */
-export async function search(keyword, { limit = 12 } = {}) {
+export async function search(keyword, { limit = 12, cookies } = {}) {
   const url = `https://search.bilibili.com/all?keyword=${encodeURIComponent(keyword)}`;
   const waitFor = `!!document.querySelector('.bili-video-card a[href*=BV]')`;
   const extract = `
@@ -98,5 +113,5 @@ export async function search(keyword, { limit = 12 } = {}) {
           cover,
         };
       })`;
-  return observe(url, waitFor, extract);
+  return observe(url, waitFor, extract, cookies);
 }
