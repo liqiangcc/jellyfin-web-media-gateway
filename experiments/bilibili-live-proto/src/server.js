@@ -149,7 +149,7 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
   <div class="row"><span class="lbl">字幕</span><div class="opts" id="subs"></div></div>
   <div class="row"><span class="lbl">倍速</span><div class="opts" id="rates"></div></div>
   <div class="row"><span class="lbl">音量</span><div class="opts"><button data-vd="-0.1">−</button><button id="vmute">🔇</button><button data-vd="0.1">＋</button><span id="vvol" class="lbl" style="padding-top:7px">100%</span></div></div>
-  <div class="row"><span class="lbl">弹幕</span><div class="opts"><button id="dmt" class="on">开</button><button data-ds="0.8">小</button><button data-ds="1">中</button><button data-ds="1.3">大</button><button data-sp="1.4">慢</button><button data-sp="1">常速</button><button data-sp="0.7">快</button></div>
+  <div class="row"><span class="lbl">弹幕</span><div class="opts"><button id="dmt" class="on">开</button><button data-ds="0.8">小</button><button data-ds="1">中</button><button data-ds="1.3">大</button><button data-sp="1.4">慢</button><button data-sp="1">常速</button><button data-sp="0.7">快</button><button data-do="1">实</button><button data-do="0.6">淡</button><button data-do="0.3">浅</button></div>
     <span class="opts" style="margin-left:auto"><button id="tstop" style="color:#ff8fa3">■ 停止</button></span></div>
   <div class="row" id="dmrow"><input id="dminput" type="text" maxlength="100" placeholder="发条弹幕…" style="flex:1"><button class="primary" id="dmsend">发送</button></div>
   <div class="section" id="relsec" style="display:none">相关推荐</div>
@@ -265,6 +265,11 @@ async function renderSession(j){
   document.querySelectorAll('[data-sp]').forEach(b=>{
     b.classList.toggle('on',Number(b.dataset.sp)===(j.dm_speed||1));
     b.onclick=()=>{fetch('/api/session/'+j.session_id+'/dmspeed',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({speed:Number(b.dataset.sp)})});document.querySelectorAll('[data-sp]').forEach(x=>x.classList.toggle('on',x===b))};
+  });
+  // 弹幕透明度
+  document.querySelectorAll('[data-do]').forEach(b=>{
+    b.classList.toggle('on',Number(b.dataset.do)===(j.dm_opacity??1));
+    b.onclick=()=>{fetch('/api/session/'+j.session_id+'/dmopacity',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({opacity:Number(b.dataset.do)})});document.querySelectorAll('[data-do]').forEach(x=>x.classList.toggle('on',x===b))};
   });
   // 音量
   document.querySelectorAll('[data-vd]').forEach(b=>b.onclick=()=>fetch('/api/session/'+j.session_id+'/vol',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({delta:Number(b.dataset.vd)})}).then(r=>r.json()).then(y=>{if(typeof y.volume==='number')document.getElementById('vvol').textContent=Math.round(y.volume*100)+'%'}));
@@ -539,6 +544,7 @@ v.addEventListener('ended',async()=>{
   if(!sid)return;
   const nav=await fetch('/api/session/'+sid+'/nav').then(r=>r.json()).catch(()=>null);
   if(nav&&nav.next){
+    flash('即将播放下一集…');
     const nx=nav.next.opaque_payload;
     fetch('/api/play',{method:'POST',headers:{'content-type':'application/json'},
       body:JSON.stringify({source:'https://www.bilibili.com/video/'+nx.bvid+'?p='+nx.page})});
@@ -578,6 +584,7 @@ setInterval(async()=>{
     dm.style.display=j.session.dm_on===false?'none':'';
     if((j.session.dm_scale||1)!==dmScale)setDmScale(j.session.dm_scale||1);
     if((j.session.dm_speed||1)*7500!==FLY_MS)FLY_MS=7500*(j.session.dm_speed||1);
+    dm.style.opacity=j.session.dm_opacity??1;
     sid=j.session.session_id;
     // Apply transport commands (guarded by seq).
     if(j.session.cmd&&j.session.cmd.seq!==lastCmd){
@@ -1130,6 +1137,22 @@ setInterval(async()=>{
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ ok: true }));
       }
+      // Danmaku opacity (0.2–1).
+      const dopSel = /^\/api\/session\/([\w-]+)\/dmopacity$/.exec(url.pathname);
+      if (dopSel && req.method === 'POST') {
+        const s = getSession(dopSel[1]);
+        if (!s) {
+          res.writeHead(404);
+          return res.end('no session');
+        }
+        let raw = '';
+        for await (const c of req) raw += c;
+        const { opacity } = JSON.parse(raw || '{}');
+        if (typeof opacity === 'number' && opacity >= 0.2 && opacity <= 1)
+          s.dm_opacity = opacity;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, dm_opacity: s.dm_opacity }));
+      }
       // Danmaku fly speed multiplier (duration scale: >1 slower).
       const dspSel = /^\/api\/session\/([\w-]+)\/dmspeed$/.exec(url.pathname);
       if (dspSel && req.method === 'POST') {
@@ -1223,6 +1246,7 @@ setInterval(async()=>{
                 dm_on: s.dm_on !== false,
                 dm_scale: s.dm_scale || 1,
                 dm_speed: s.dm_speed || 1,
+                dm_opacity: s.dm_opacity ?? 1,
                 volume: s.volume ?? 1,
                 pos: s.pos || 0,
                 dur: s.dur || 0,
