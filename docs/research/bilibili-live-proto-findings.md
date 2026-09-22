@@ -72,6 +72,19 @@
 - **发现面（推荐/热门/相关/排行）**：**全部匿名纯 API 可达**——`popular`（40 条）、`archive/related`（40 条）、`index/top/feed/rcmd`（30 条，登录后个性化）、`ranking/v2`（100 条）。已实现 `/api/discover?kind=` 和控制面板"热门/推荐"按钮。**发现层最终定型：只有搜索需要浏览器**，其余发现面（热门、推荐 feed、相关推荐、收藏夹）全是纯 API。
 - **搜索**：已实现且端到端验证——原型新增 `browser.js`（CDP 驱动既有 Chrome，镜像 `BrowserObservationHandoff`：导航 → 等待卡片渲染 → 提取 `{bvid,title,duration,cover}` → 关 tab）。`/api/search` → 控制面板结果列表 → 点击播放实测通过（BML 搜索 → 点选 → 播放 2h38m 视频 + 弹幕）。封面经 `/img` 有界代理（`*.hdslb.com` allowlist + 服务端 Referer），不开放泛代理。这是浏览器取源在发现层的首次实证。
 
+## 延迟预算实测（2026-09-22，本机 loopback 到网关，上游为 bilibili CDN）
+
+| 环节 | 耗时 | 说明 |
+|---|---|---|
+| `/api/play` BV→durl | ~0.9s | recognize + pagelist + playurl 两次上游往返 + session 创建 |
+| `/api/play` BV→dash remux | ~2.3–4.1s | resolve + ffmpeg 启动 + 首段产出才发布会话（publish-after-ready 的代价） |
+| `/api/play` live 房间 | ~1.8s | getRoomPlayInfo + 逐候选探活（死变体要等 5s 超时） |
+| `/stream` 首字节 | ~1.2s | 上游 bilivideo fetch + Range 透传 |
+| `/api/favorites` / `/api/discover` | ~0.5s | 纯 API 单次往返 |
+| `/api/search`（浏览器） | ~2.6s | Chrome 开 tab + 导航 + 卡片渲染等待 + DOM 提取 |
+
+**结论**：durl 路径从点选到可播约 2s（resolve + 首字节）；dash remux 多 ~1.5–3s（ffmpeg 冷启动 + 首段缓冲）。display 轮询间隔是叠加项——轮询越慢感知延迟越高，正式实现可用 SSE/长轮询消掉。直播的候选探活是必要开销（盲选死链会挂整次播放），但可并行探测压缩到 ~0.5s。
+
 ## 第三轮：真实浏览器播放验证（2026-09-22）
 
 headless Chrome 151（CDP 驱动）实测 `/display` 页，两条投递路径均播放成功：
