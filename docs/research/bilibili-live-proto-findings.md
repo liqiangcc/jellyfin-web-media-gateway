@@ -135,3 +135,43 @@ PROTO_BIND=100.64.98.39 PROTO_PORT=8899 node src/server.js
 # iPhone: http://100.64.98.39:8899/control （提交 BV 链接）
 #        http://100.64.98.39:8899/display （播放端）
 ```
+
+## Youku 预研（2026-03，ECS + headless Chrome CDP）
+
+### 可达性矩阵
+
+| 路径 | 本机 VM | ecs-node（阿里云） |
+|---|---|---|
+| 播放页 HTML | ❌ rgv587 滑块 punish（连真 Chrome 都拦） | ✅ 200 真页面 |
+| `__PAGE_CONF__` 元数据 | — | ✅ title/videoId/seconds/isDRM 可读 |
+| 播放取流 | — | ✅ m3u8 + 签名段 URL |
+| 弹幕 | 未探 | 未探（不同协议） |
+
+**IP 画像差异极端**：B 站 VM≈ECS，优酷 VM 全拦 ECS 全通——阿里系风控对阿里自家 IP 放行。
+
+### 取流链路（ECS 实测）
+
+```
+v.youku.com/v_show/id_<vid>.html
+  → headless Chrome 加载页面
+  → 播放器自动调 un-acs.youku.com/h5/mtop.youku.play.ups.appinfo.get/1.1/
+      appKey=24679788, sign=md5(_m_h5_tk&t&appKey&data)
+      data.steal_params={ccode:"0502",utid=cna,ckey:<JS生成>,...}
+  → data.stream[] = [{stream_type:flvhd|mp4hd|mp4hd2|mp4hd3, m3u8_url, w,h,size}]
+  → m3u8 内段 URL 带 vkey/expire=18000/ups_client_netip 签名（IP 绑定）
+```
+
+### 架构结论
+
+- **浏览器管道是主力方案**：mtop sign + steal_params.ckey 是 JS 动态生成，纯 API 重放易碎——优酷上 BrowserWorker 不是降级，是主路径
+- **ECS 上浏览器取流可行**：headless Chrome 加载页面 → CDP 拦截 ups 响应 → 提取 m3u8 → 段代理（同直播 HLS 代理模式，需重写段 URL 过网关）
+- **段 URL IP 绑定**（`ups_client_netip`）——必须从 ECS 出网拉段，手机端不能直接拉
+- **VIP/付费内容**：`pay_info_ext.can_play`/`is_vip` 字段区分；测试片 `can_play:true` 匿名可播
+- **元数据免浏览器**：`__PAGE_CONF__` SSR JSON 可直接 curl 解析（ECS 上）
+
+### 待办
+
+- [ ] 实现 youku adapter（recognize `id_*.html` + browser-driven resolve）
+- [ ] 弹幕协议（优酷弹幕是不同格式，需探）
+- [ ] 登录/VIP 链路
+- [ ] 搜索
