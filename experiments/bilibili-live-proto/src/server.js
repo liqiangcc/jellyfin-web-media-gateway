@@ -198,21 +198,22 @@ async function renderSession(j){
   if(!curSrc&&j.locator?.opaque_payload?.bvid)
     curSrc='https://www.bilibili.com/video/'+j.locator.opaque_payload.bvid+(j.locator.opaque_payload.page?'?p='+j.locator.opaque_payload.page:'');
   // 清晰度：re-play same source at chosen qn
-  document.getElementById('quals').innerHTML=(j.quality_options||[]).map(q=>'<button data-qn="'+q.qn+'"'+(q.qn===j.quality?' style="font-weight:bold"':'')+'>'+q.label+'</button>').join(' ')||'（仅一档）';
+  document.getElementById('quals').innerHTML=(j.quality_options||[]).map(q=>'<button data-qn="'+q.qn+'"'+(q.qn===j.quality?' class="on"':'')+'>'+q.label+'</button>').join(' ')||'（仅一档）';
   document.querySelectorAll('#quals button').forEach(b=>b.onclick=()=>playSource(curSrc,b.dataset.qn));
   // 选集：BV 分 P 列表
   const nav=await fetch('/api/session/'+j.session_id+'/nav').then(r=>r.json()).catch(()=>null);
   if(nav&&nav.queue&&nav.queue.length>1){
     const bv=nav.queue[0].opaque_payload.bvid;
-    document.getElementById('pages').innerHTML=nav.queue.map((l,i)=>'<button data-p="'+l.opaque_payload.page+'"'+(i===nav.current_index?' style="font-weight:bold"':'')+'>P'+l.opaque_payload.page+'</button>').join(' ');
+    document.getElementById('pages').innerHTML=nav.queue.map((l,i)=>'<button data-p="'+l.opaque_payload.page+'"'+(i===nav.current_index?' class="on"':'')+'>P'+l.opaque_payload.page+'</button>').join(' ');
     document.querySelectorAll('#pages button').forEach(b=>b.onclick=()=>playSource('https://www.bilibili.com/video/'+bv+'?p='+b.dataset.p));
   }else document.getElementById('pages').textContent='（单集）';
-  // 字幕轨选择
+  // 字幕轨选择（当前选中高亮）
   const subs=await fetch('/api/session/'+j.session_id+'/subs').then(r=>r.json()).catch(()=>[]);
-  document.getElementById('subs').innerHTML=['<button data-u="">关闭</button>'].concat((subs||[]).map(x=>'<button data-u="'+x.url+'">'+x.label+'</button>')).join(' ');
+  document.getElementById('subs').innerHTML=['<button data-u=""'+(!j.subtitle_url?' class="on"':'')+'>关闭</button>'].concat((subs||[]).map(x=>'<button data-u="'+x.url+'"'+(x.url===j.subtitle_url?' class="on"':'')+'>'+x.label+'</button>')).join(' ');
   document.querySelectorAll('#subs button').forEach(b=>b.onclick=()=>fetch('/api/session/'+j.session_id+'/subtitle',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url:b.dataset.u||null})}));
-  // 倍速
-  document.getElementById('rates').innerHTML=[0.5,1,1.25,1.5,2].map(r=>'<button data-r="'+r+'">'+r+'x</button>').join(' ');
+  // 倍速（当前倍速高亮）
+  const curRate=j.playback_rate||1;
+  document.getElementById('rates').innerHTML=[0.5,1,1.25,1.5,2].map(r=>'<button data-r="'+r+'"'+(r===curRate?' class="on"':'')+'>'+r+'x</button>').join(' ');
   document.querySelectorAll('#rates button').forEach(b=>b.onclick=()=>fetch('/api/session/'+j.session_id+'/rate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({rate:Number(b.dataset.r)})}));
   // 播放控制：命令经 session 下发给 display
   const cmd=(op,pos)=>fetch('/api/session/'+j.session_id+'/cmd',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({op,pos})});
@@ -548,6 +549,14 @@ setInterval(()=>{
   fetch('/api/session/'+sid+'/pos',{method:'POST',headers:{'content-type':'application/json'},
     body:JSON.stringify({pos:v.currentTime||0,dur:v.duration||0,paused:v.paused})}).catch(()=>{});
 },2000);
+// Re-fetch the danmaku pool every 60s so newly-posted ones appear.
+setInterval(()=>{
+  if(!sid||!pool.length)return;
+  fetch('/dm/'+sid).then(r=>r.json()).then(l=>{
+    const t=v.currentTime;
+    pool=l;pidx=pool.findIndex(d=>d.t>t);if(pidx<0)pidx=pool.length;
+  }).catch(()=>{});
+},60000);
 </script>`;
 
 async function play(body) {
