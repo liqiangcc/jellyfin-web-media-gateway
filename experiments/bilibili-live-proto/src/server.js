@@ -481,6 +481,7 @@ document.addEventListener('click',e=>{
 </script>`;
 
 const DISPLAY_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23000'/><text x='50' y='68' font-size='52' text-anchor='middle' fill='%234a7dff'>▶</text></svg>">
 <title>display</title>
 <style>
@@ -527,6 +528,16 @@ function flash(t){s.textContent=t;s.classList.remove('hide');clearTimeout(status
 let idleT=null;
 document.addEventListener('mousemove',()=>{document.body.classList.remove('idle');clearTimeout(idleT);idleT=setTimeout(()=>document.body.classList.add('idle'),3000)});
 idleT=setTimeout(()=>document.body.classList.add('idle'),3000);
+// Auto-fullscreen: enter on first tap and whenever playback (re)starts.
+function goFs(){
+  const el=document.documentElement;
+  const f=el.requestFullscreen||el.webkitRequestFullscreen;
+  if(f&&!document.fullscreenElement&&!document.webkitFullscreenElement){
+    try{const p=f.call(el);if(p&&p.catch)p.catch(()=>{})}catch(e){}
+  }
+}
+document.addEventListener('click',goFs);
+v.addEventListener('play',()=>{if(!document.fullscreenElement&&!document.webkitFullscreenElement)goFs()});
 // --- danmaku engine: scroll lanes + fixed top/bottom ---
 let dmScale=1;
 let FONT=Math.max(18,Math.floor(innerHeight*0.052));
@@ -712,7 +723,7 @@ async function play(body) {
         session_id: session.session_id,
         title: media.title,
         media_mode: media.live ? 'hls-live' : 'hls-proxy',
-        media_url: `${BASE}/livepl/${session.session_id}/index.m3u8`,
+        media_url: `/livepl/${session.session_id}/index.m3u8`,
         streams: media.streams.map((s) => ({
           id: s.id,
           kind: s.kind,
@@ -757,8 +768,8 @@ async function play(body) {
   if (resume > 0) session.cmd = { seq: 1, op: 'seek', pos: resume };
   const media_mode = hlsDir ? 'hls-remux' : 'file';
   const media_url = hlsDir
-    ? `${BASE}/hls/${session.session_id}/index.m3u8`
-    : `${BASE}/stream/${session.session_id}/0`;
+    ? `/hls/${session.session_id}/index.m3u8`
+    : `/stream/${session.session_id}/0`;
   return [200, expose(session, media, media_mode, media_url)];
 }
 
