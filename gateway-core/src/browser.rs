@@ -891,6 +891,22 @@ impl FakeBrowserWorker {
         )
     }
 
+    /// Test-only leak detector: sessions whose status is still `Open`.
+    /// A cancelled acquisition must close its session; a count above zero
+    /// after the future resolves or is dropped means the worker leaked.
+    #[cfg(test)]
+    pub(crate) fn active_session_count(&self) -> usize {
+        self.lock_state()
+            .map(|state| {
+                state
+                    .sessions
+                    .values()
+                    .filter(|session| session.status == BrowserStatus::Open)
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
     #[cfg(test)]
     pub(crate) fn arm_navigation_gate(&self) {
         self.navigation_gate.started.store(false, Ordering::SeqCst);
@@ -900,8 +916,9 @@ impl FakeBrowserWorker {
     #[cfg(test)]
     pub(crate) async fn wait_navigation_started(&self) {
         loop {
-            let mut notified = self.navigation_gate.started_notify.notified();
-            notified.enable();
+            let notified = self.navigation_gate.started_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             if self.navigation_gate.started.load(Ordering::SeqCst) {
                 return;
             }

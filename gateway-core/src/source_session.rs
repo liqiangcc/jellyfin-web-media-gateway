@@ -6,7 +6,8 @@
 //! authority stays behind `ControlService`.
 
 use crate::browser::{
-    BrowserNavigationRequest, BrowserObservationHandoff, BrowserWorker, R008NavigationPolicy,
+    BrowserNavigationRequest, BrowserObservationHandoff, BrowserSessionId, BrowserWorker,
+    R008NavigationPolicy,
 };
 use crate::control::{
     ControlCommandError, ControlCommandRequest, ControlCommandResponse, ControlService,
@@ -147,9 +148,10 @@ impl CreationSlot {
 
     async fn acquire_async(self: &Arc<Self>) -> CreationPermit {
         loop {
-            let mut notified = self.notify.notified();
-            notified.enable();
-            let (notified, _waiter) = {
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            let _waiter = {
                 let mut state = self.state.lock().expect("source creation slot poisoned");
                 if !state.in_flight {
                     state.in_flight = true;
@@ -167,7 +169,7 @@ impl CreationSlot {
                 };
                 #[cfg(not(test))]
                 let waiter = ();
-                (notified, waiter)
+                waiter
             };
             notified.await;
         }
@@ -221,6 +223,21 @@ impl Drop for CreationPermit {
 struct PreparedResolution {
     locator: SourceLocator,
     media: Option<ResolvedMedia>,
+}
+
+/// Cancellation-safe browser-session guard.  `close` is synchronous, so a
+/// `Drop` guard covers every exit path — including the caller dropping the
+/// acquisition future while `open_session`/`navigate` is still pending —
+/// and prevents a real Chromium session from leaking.
+struct BrowserSessionLease<'a, W: BrowserWorker + 'static> {
+    worker: &'a W,
+    session: BrowserSessionId,
+}
+
+impl<W: BrowserWorker + 'static> Drop for BrowserSessionLease<'_, W> {
+    fn drop(&mut self) {
+        let _ = self.worker.close(&self.session);
+    }
 }
 
 #[derive(Clone)]
@@ -315,8 +332,9 @@ impl SourceSessionService {
                 .expect("creation reservation should be active")
         };
         loop {
-            let mut notified = slot.waiter_notify.notified();
-            notified.enable();
+            let notified = slot.waiter_notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             if slot.waiter_count.load(Ordering::SeqCst) >= expected {
                 return;
             }
@@ -505,6 +523,10 @@ impl SourceSessionService {
             Ok(session) => session,
             Err(_) => return public_browser_failure("SOURCE_BROWSER_UNAVAILABLE"),
         };
+        let lease = BrowserSessionLease {
+            worker,
+            session: session.id().clone(),
+        };
         // The owning plugin supplied this target. Core does not parse or
         // reproduce site URL/BVID/part semantics; R008 authorizes the target
         // before the generic worker consumes it.
@@ -519,7 +541,6 @@ impl SourceSessionService {
             )
             .await;
         if result.is_err() {
-            let _ = worker.close(session.id());
             return public_browser_failure("SOURCE_BROWSER_NAVIGATION_FAILED");
         }
 
@@ -548,7 +569,7 @@ impl SourceSessionService {
             ),
             Ok(None) | Err(_) => public_browser_failure("SOURCE_BROWSER_OBSERVATION_UNAVAILABLE"),
         };
-        let _ = worker.close(session.id());
+        drop(lease);
         outcome
     }
 
@@ -1893,6 +1914,7 @@ mod tests {
         assert_eq!(first.session_id, third.session_id);
         assert_eq!(target_count.load(Ordering::SeqCst), 1);
         assert_eq!(worker.counts(), (1, 1));
+        assert_eq!(worker.active_session_count(), 0);
     }
 
     #[tokio::test]
@@ -1940,6 +1962,9 @@ mod tests {
         }
         worker.release_navigation();
         assert_eq!(service.creation_slot_count(), 0);
+        // The cancelled acquisition must close its browser session instead
+        // of leaking a worker process.
+        assert_eq!(worker.active_session_count(), 0);
 
         let (observation, server_observation) = observation_context();
         worker
@@ -1954,6 +1979,7 @@ mod tests {
             .await;
         assert!(matches!(retry, super::CreationOutcome::Success(_)));
         assert_eq!(target_count.load(Ordering::SeqCst), 2);
+        assert_eq!(worker.active_session_count(), 0);
     }
 
     #[tokio::test]
