@@ -320,7 +320,7 @@ impl SourceSessionService {
     }
 
     #[cfg(test)]
-    async fn wait_creation_waiters(&self, request_id: &str, expected: usize) {
+    pub(crate) async fn wait_creation_waiters(&self, request_id: &str, expected: usize) {
         let slot = {
             let slots = self
                 .creation_slots
@@ -343,7 +343,7 @@ impl SourceSessionService {
     }
 
     #[cfg(test)]
-    fn creation_slot_count(&self) -> usize {
+    pub(crate) fn creation_slot_count(&self) -> usize {
         let mut slots = self
             .creation_slots
             .lock()
@@ -548,7 +548,7 @@ impl SourceSessionService {
             worker,
             session.id(),
             operation_id,
-            locator,
+            locator.clone(),
             crate::browser::BROWSER_HANDOFF_TTL,
         );
         let outcome = match handoff {

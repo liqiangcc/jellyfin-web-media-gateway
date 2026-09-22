@@ -931,6 +931,21 @@ impl GatewayService {
         self.state.control.execute_command(session_id, request)
     }
 
+    /// Test-only delegation so SourceSession reservation tests can observe
+    /// waiter counts through the product composition entry point.
+    #[cfg(test)]
+    pub(crate) async fn wait_creation_waiters(&self, request_id: &str, expected: usize) {
+        self.state
+            .source_sessions
+            .wait_creation_waiters(request_id, expected)
+            .await;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn creation_slot_count(&self) -> usize {
+        self.state.source_sessions.creation_slot_count()
+    }
+
     pub fn router(&self) -> Router {
         Router::new()
             .route("/", get(entry_handler))
