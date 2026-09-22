@@ -91,7 +91,7 @@ let pendingQr = null; // {qrcode_key, expires}
 
 const BIND = process.env.PROTO_BIND || '100.64.98.39';
 const PORT = Number(process.env.PROTO_PORT || 8899);
-const BASE = `http://${BIND}:${PORT}`;
+const BASE = process.env.PROTO_BASE || `http://${BIND}:${PORT}`;
 
 const CONTROL_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,viewport-fit=cover"><meta name="apple-mobile-web-app-capable" content="yes">
 <title>B站遥控器</title>
