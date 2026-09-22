@@ -176,7 +176,10 @@ const out=document.getElementById('out'),results=document.getElementById('result
 let curSrc=null,curCover=null;
 let toastT=null;
 const toast=(t,cls)=>{out.textContent=t;out.className=cls||'';clearTimeout(toastT);if(cls==='ok')toastT=setTimeout(()=>{out.textContent='就绪';out.className=''},4000)};
+let playing=false;
 async function playSource(src,qn,cover){
+  if(playing)return;
+  playing=true;
   curSrc=src;if(cover)curCover=cover;
   toast('解析中…');
   try{
@@ -187,6 +190,7 @@ async function playSource(src,qn,cover){
     markPlaying();
     renderSession(j);
   }catch(err){toast(String(err),'err')}
+  finally{playing=false}
 }
 function markPlaying(){
   const bv=/video\\/(BV\\w+)/.exec(curSrc||'')?.[1];
@@ -316,6 +320,15 @@ async function renderSession(j){
   if(x){renderSession(x);pollPos();
     const bv=x.locator?.opaque_payload?.bvid;
     if(bv)setTimeout(()=>document.querySelectorAll('.hit').forEach(h=>h.classList.toggle('playing',h.dataset.bv===bv)),0);
+    // 恢复封面：从历史记录里取（session 持久化里带的）
+    if(!curCover){
+      const hc=await fetch('/api/history-cover').then(r=>r.json()).catch(()=>null);
+      if(hc&&hc.cover){curCover=hc.cover;
+        let cov=document.getElementById('sesscov');
+        if(!cov){cov=document.createElement('img');cov.id='sesscov';cov.style.cssText='width:100%;border-radius:10px;margin-bottom:8px;display:block';document.getElementById('sess').insertBefore(cov,document.getElementById('stitle'))}
+        cov.src=curCover;
+      }
+    }
   }
 })();
 const fmt=t=>{if(!isFinite(t))return'0:00';const m=Math.floor(t/60),s=Math.floor(t%60);return m+':'+String(s).padStart(2,'0')};
@@ -920,6 +933,18 @@ setInterval(async()=>{
             }),
           ),
         );
+      }
+      if (req.method === 'GET' && url.pathname === '/api/history-cover') {
+        const m = currentSession();
+        const h = m
+          ? listHistory().find(
+              (x) =>
+                JSON.stringify(x.locator?.opaque_payload) ===
+                JSON.stringify(m.current_item.source_locator?.opaque_payload),
+            )
+          : null;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ cover: h?.cover || null }));
       }
       if (req.method === 'GET' && url.pathname === '/api/discover') {
         const kind = url.searchParams.get('kind') || 'popular';
