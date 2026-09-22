@@ -10,6 +10,7 @@ import {
   resolve,
   danmaku,
   favorites,
+  discovery,
   qrLoginStart,
   qrLoginPoll,
   setAuthCookie,
@@ -48,7 +49,7 @@ const CONTROL_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport"
 <form id="sf"><input id="q" type="search" placeholder="search bilibili…"><button>Search</button></form>
 <div id="results"></div>
 <hr>
-<button id="fav">我的收藏夹</button> <a href="/qr">登录</a>
+<button id="fav">我的收藏夹</button> <button id="hot">热门</button> <button id="feed">推荐</button> <a href="/qr">登录</a>
 <div id="favlist"></div>
 <pre id="out">idle</pre>
 <p><a href="/display">open display →</a></p>
@@ -89,6 +90,18 @@ document.getElementById('fav').onclick=async()=>{
       favlist.querySelectorAll('.hit').forEach(i=>i.onclick=()=>playSource('https://www.bilibili.com/video/'+i.dataset.bv));
     });
   }catch(err){favlist.textContent='ERR '+err.message}
+};
+const showVideos=(items)=>{
+  favlist.innerHTML=items.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><img src="'+x.cover+'"><div><b>'+x.title+'</b><br><small>'+x.bvid+'</small></div></div>').join('')||'empty';
+  favlist.querySelectorAll('.hit').forEach(i=>i.onclick=()=>playSource('https://www.bilibili.com/video/'+i.dataset.bv));
+};
+document.getElementById('hot').onclick=async()=>{
+  favlist.textContent='loading…';
+  showVideos(await fetch('/api/discover?kind=popular').then(r=>r.json()));
+};
+document.getElementById('feed').onclick=async()=>{
+  favlist.textContent='loading…';
+  showVideos(await fetch('/api/discover?kind=rcmd').then(r=>r.json()));
 };
 </script>
 <style>#results{display:flex;flex-direction:column;gap:.5rem;margin:.8rem 0}.hit{display:flex;gap:.6rem;cursor:pointer;align-items:center}.hit img{width:96px;height:60px;object-fit:cover;border-radius:4px}</style>`;
@@ -294,6 +307,16 @@ setInterval(async()=>{
       if (req.method === 'GET' && url.pathname === '/api/auth') {
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ logged_in: loggedIn() }));
+      }
+      if (req.method === 'GET' && url.pathname === '/api/discover') {
+        const kind = url.searchParams.get('kind') || 'popular';
+        const bvid = url.searchParams.get('bvid');
+        const list = await discovery(kind, bvid);
+        for (const x of list) {
+          if (x.cover) x.cover = `${BASE}/img?u=${encodeURIComponent(x.cover)}`;
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify(list));
       }
       if (req.method === 'GET' && url.pathname === '/api/favorites') {
         if (!loggedIn()) {

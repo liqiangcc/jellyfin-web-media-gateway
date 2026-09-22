@@ -69,6 +69,7 @@
 - **收藏夹**：已实现——`x/v3/fav/folder/created/list-all` + `x/v3/fav/resource/list` 纯 API（登录态），控制面板可浏览文件夹并点播。实测收藏 "凡人修仙传" 可取回。
 - **番剧（bangumi）**：**独立媒体类型**——收藏到番剧 BV 时 `x/player/playurl` 返回 -404；`view`（登录态）经 `redirect_url` 给出 `bangumi/play/ep<id>`；正解是 `pgc/player/web/playurl?ep_id=`。已实现：BV→bangumi 自动跳转 + `/bangumi/play/epN` 直接识别。**大会员内容非会员只给预览**（`is_preview:1`，3 分钟流 vs 正片 19.5min）——`is_preview`/`has_paid` 必须成为 ResolvedMedia 的一等字段，控制端要区分"预览"和"正片"。免费/限免集数（badge `free`/`限免`）应能拿到全片。
 - **直播**：已实现且浏览器实测——`live.bilibili.com/<room>` 识别 → `xlive getRoomPlayInfo` → 多候选探测（部分房间 avc 档 404/超时，hevc/fmp4 存活，需**逐候选探活**而非盲选）→ playlist 代理 + 段重写（含 `#EXT-X-MAP:URI=` init 段）→ hls.js 播放实测 `readyState=4` 720p。直播 URL 分钟级过期 → `/livepl` 每次上游失败时经 locator 重新 resolve（refresh-via-locator 在直播形态下的实现）。`LIVE_OFFLINE` 是一等错误。直播列表 `getList` 被风控（-352）——发现直播房间需走浏览器或已知房间号。
+- **发现面（推荐/热门/相关/排行）**：**全部匿名纯 API 可达**——`popular`（40 条）、`archive/related`（40 条）、`index/top/feed/rcmd`（30 条，登录后个性化）、`ranking/v2`（100 条）。已实现 `/api/discover?kind=` 和控制面板"热门/推荐"按钮。**发现层最终定型：只有搜索需要浏览器**，其余发现面（热门、推荐 feed、相关推荐、收藏夹）全是纯 API。
 - **搜索**：已实现且端到端验证——原型新增 `browser.js`（CDP 驱动既有 Chrome，镜像 `BrowserObservationHandoff`：导航 → 等待卡片渲染 → 提取 `{bvid,title,duration,cover}` → 关 tab）。`/api/search` → 控制面板结果列表 → 点击播放实测通过（BML 搜索 → 点选 → 播放 2h38m 视频 + 弹幕）。封面经 `/img` 有界代理（`*.hdslb.com` allowlist + 服务端 Referer），不开放泛代理。这是浏览器取源在发现层的首次实证。
 
 ## 第三轮：真实浏览器播放验证（2026-09-22）

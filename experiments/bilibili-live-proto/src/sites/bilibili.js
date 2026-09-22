@@ -323,6 +323,54 @@ export async function resolve(locator, { prefer } = {}) {
 }
 
 /**
+ * Discovery surfaces — all anonymous-reachable:
+ *  popular() → 热门视频; related(bvid) → 相关推荐; rcmd() → feed
+ *  (personalized when logged in). Returns [{bvid,title,duration,cover}].
+ */
+export async function discovery(kind = 'popular', bvid = null) {
+  const headers = {
+    'User-Agent': UA,
+    Referer: REFERER,
+    ...(authCookie ? { Cookie: authCookie } : {}),
+  };
+  const map = (list) =>
+    (list || []).map((v) => ({
+      bvid: v.bvid,
+      title: v.title,
+      duration: v.duration,
+      cover: v.pic || v.cover,
+      owner: v.owner?.name,
+      stat: v.stat?.view,
+    }));
+  if (kind === 'related' && bvid) {
+    const d = await fetch(
+      `https://api.bilibili.com/x/web-interface/archive/related?bvid=${bvid}`,
+      { headers },
+    ).then((r) => r.json());
+    return map(d.data);
+  }
+  if (kind === 'rcmd') {
+    const d = await fetch(
+      'https://api.bilibili.com/x/web-interface/index/top/feed/rcmd',
+      { headers },
+    ).then((r) => r.json());
+    return map(d.data?.item);
+  }
+  if (kind === 'ranking') {
+    const d = await fetch(
+      'https://api.bilibili.com/x/web-interface/ranking/v2?rid=0&type=all',
+      { headers },
+    ).then((r) => r.json());
+    return map(d.data?.list);
+  }
+  const d = await fetch(
+    'https://api.bilibili.com/x/web-interface/popular?ps=40',
+    { headers },
+  ).then((r) => r.json());
+  return map(d.data?.list);
+}
+
+/**
  * List the logged-in user's favorite folders, or the videos inside one.
  * Requires login. folderId=null → folder list; else → [{bvid,title,duration,cover}].
  */
