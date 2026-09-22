@@ -32,6 +32,7 @@ import {
   listHistory,
   markHistoryPos,
   historyPos,
+  clearHistory,
 } from './session.js';
 import { proxyStream, remuxToHls } from './media.js';
 
@@ -384,8 +385,11 @@ document.getElementById('feed').onclick=async()=>{
 document.getElementById('hist').onclick=async()=>{
   markChip('hist');sect.style.display='';sect.textContent='最近播放';favlist.innerHTML=skeleton(3);
   const items=await fetch('/api/history').then(r=>r.json()).catch(()=>[]);
-  favlist.innerHTML=items.map(x=>'<div class="hit" data-src="'+encodeURIComponent(x.source)+'">'+(x.cover?'<div class="cov"><img src="'+x.cover+'" loading="lazy"></div>':'')+'<div><div class="t">'+x.title+'</div><div class="m">'+new Date(x.at).toLocaleTimeString()+(x.pos?' · 续播 '+fmt(x.pos):'')+'</div></div></div>').join('')||'<div class="muted">暂无记录</div>';
-  favlist.querySelectorAll('.hit').forEach(i=>i.onclick=()=>playSource(decodeURIComponent(i.dataset.src),0,i.querySelector('img')?.src));
+  const histHead=items.length?'<div class="hit folder" id="histclear"><div><div class="t">🗑 清空历史</div></div></div>':'';
+  favlist.innerHTML=histHead+items.map(x=>'<div class="hit" data-src="'+encodeURIComponent(x.source)+'"'+(x.bvid?' data-bv="'+x.bvid+'"':'')+'>'+(x.cover?'<div class="cov"><img src="'+x.cover+'" loading="lazy"></div>':'')+'<div><div class="t">'+x.title+'</div><div class="m">'+new Date(x.at).toLocaleTimeString()+(x.pos?' · 续播 '+fmt(x.pos):'')+'</div></div></div>').join('')||'<div class="muted">暂无记录</div>';
+  if(items.length)document.getElementById('histclear').onclick=()=>fetch('/api/history',{method:'DELETE'}).then(()=>document.getElementById('hist').click());
+  favlist.querySelectorAll('.hit[data-src]').forEach(i=>i.onclick=()=>playSource(decodeURIComponent(i.dataset.src),0,i.querySelector('img')?.src));
+  markPlaying();
 };
 const auth=await fetch('/api/auth').then(r=>r.json()).catch(()=>({}));
 if(auth.logged_in){
@@ -835,6 +839,11 @@ setInterval(async()=>{
           }),
         );
       }
+      if (req.method === 'DELETE' && url.pathname === '/api/history') {
+        clearHistory();
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true }));
+      }
       if (req.method === 'GET' && url.pathname === '/api/history') {
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(
@@ -851,6 +860,7 @@ setInterval(async()=>{
               return {
                 title: h.title,
                 source,
+                bvid: p.bvid || null,
                 at: h.at,
                 pos: h.pos || 0,
                 cover: h.cover || null,

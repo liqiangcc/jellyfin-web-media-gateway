@@ -68,6 +68,11 @@ export function listHistory() {
   return history;
 }
 
+export function clearHistory() {
+  history.length = 0;
+  saveHistory();
+}
+
 export function createSession(locator, media) {
   const session = {
     session_id: `s-${randomUUID().replaceAll('-', '')}`,
