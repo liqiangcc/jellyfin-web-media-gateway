@@ -40,7 +40,7 @@
 | `x/player/v2`（subtitle slot） | PASS | 匿名可达；本样本字幕列表为空，有待字幕样本复验 |
 | `x/frontend/finger/spi` | PASS | 匿名 buvid3 可用 |
 | `x/web-interface/nav` | PASS | 匿名返回 wbi img/sub key |
-| `x/web-interface/view` | **FAIL**（匿名）/ **PASS**（登录 cookie） | 匿名 412 且浏览器页内 fetch 也挂——实为**鉴权门**不是 IP 风控；带 SESSDATA 直接 200 全量数据 |
+| `x/web-interface/view` | **FAIL**（本机匿名）/ **PASS**（ECS 匿名 + 本机登录） | 本机 412 且页内 fetch 也挂；但 ecs-node 匿名直接 200 全量数据——**实为 IP 画像风控不是鉴权门**，登录 cookie 只是恰好改变信誉画像 |
 | `playurl` 清晰度 | 匿名封顶 480p | **登录后 1080p 解锁**（qn=116 请求 → quality=80，avc1+hev1 双编码 ladder；测试号非大会员，4K/60fps 未验证） |
 | `search/type`/`search/all/v2` 视频搜索 | **FAIL**（raw）/ **FAIL**（cookie+wbi）/ PASS（浏览器） | 登录态 cookie + wbi 签名仍返回假 200 HTML——**搜索是唯一的浏览器硬依赖** |
 | `www.bilibili.com/video/*` HTML | **FAIL**（raw）/ PASS（浏览器） | raw 412；真实 Chrome 完整加载且 `__INITIAL_STATE__` 含全量 videoData（bvid/aid/title/desc/duration/owner/stat/pages/subtitle/ugc_season + 40 条 related 推荐） |
@@ -84,6 +84,21 @@
 | `/api/search`（浏览器） | ~2.6s | Chrome 开 tab + 导航 + 卡片渲染等待 + DOM 提取 |
 
 **结论**：durl 路径从点选到可播约 2s（resolve + 首字节）；dash remux 多 ~1.5–3s（ffmpeg 冷启动 + 首段缓冲）。display 轮询间隔是叠加项——轮询越慢感知延迟越高，正式实现可用 SSE/长轮询消掉。直播的候选探活是必要开销（盲选死链会挂整次播放），但可并行探测压缩到 ~0.5s。
+
+## 出口 IP 画像对比（2026-09-22，本机 VM vs ecs-node 阿里云）
+
+延迟大头是上游 RTT：本机→网关 ~3ms，网关→`api.bilibili.com` 本机 250–550ms/次、ECS 105–130ms/次，网关→bilivideo CDN 波动大（80–1090ms）。resolve 的 ~0.9s 即两次串行 API 往返之和。
+
+| 端点 | 本机 VM 匿名 | ecs-node 匿名 | 判定 |
+|---|---|---|---|
+| `playurl`/`pagelist`/`nav`/`dm`/`popular`/`rcmd`/`ranking` | PASS | PASS | 匿名稳定 |
+| `view` | FAIL 412 | **PASS 200 真数据** | IP 画像风控，非鉴权门 |
+| `search` | FAIL 假 200 | FAIL 假 200 | 端点级风控，与 IP 无关 |
+| `getRoomPlayInfo`（直播） | PASS | 未测 | 预计 PASS |
+
+**修正结论**：`view` 的本机 412 不是"必须登录"——ECS 匿名直连就通。风控粒度是 **IP 画像 × 端点**：本机 IP 被标记拦 `view`，ECS IP 未被标记。登录 cookie 在本机能过是因为凭证改变了请求信誉，并非 `view` 本身需要鉴权。
+
+**架构推论**：部署环境的风控画像必须在部署后实测（同一份代码在两个 IP 下结论相反）；每条通道保持可降级；登录态的价值在本机是"解锁 `view`/1080p"，在 ECS 上 `view` 本就匿名可达、登录仅剩清晰度/收藏夹/个性化价值。
 
 ## 第三轮：真实浏览器播放验证（2026-09-22）
 
