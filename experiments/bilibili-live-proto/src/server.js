@@ -138,6 +138,8 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
   <div class="row"><span class="lbl">音量</span><div class="opts"><button data-vd="-0.1">−</button><button id="vmute">🔇</button><button data-vd="0.1">＋</button></div></div>
   <div class="row"><span class="lbl">弹幕</span><div class="opts"><button id="dmt" class="on">开</button></div>
     <span class="opts" style="margin-left:auto"><button id="tstop" style="color:#ff8fa3">■ 停止</button></span></div>
+  <div class="section" id="relsec" style="display:none">相关推荐</div>
+  <div id="rel" class="list"></div>
 </div>
 <pre id="out">就绪</pre>
 <form id="f"><input id="src" type="text" placeholder="粘贴 BV 链接 / 番剧 ep / 直播房号…"><button class="primary">播放</button></form>
@@ -229,6 +231,16 @@ async function renderSession(j){
   document.getElementById('tfwd').style.display=live?'none':'';
   document.getElementById('tprev').style.display=live?'none':'';
   document.getElementById('tnext').style.display=live?'none':'';
+  // 相关推荐（播完接着看的入口）
+  const bv=j.locator?.opaque_payload?.bvid;
+  const rel=document.getElementById('rel'),relsec=document.getElementById('relsec');
+  if(bv&&!live){
+    rel.innerHTML=skeleton(3);relsec.style.display='';
+    const items=await fetch('/api/discover?kind=related&bvid='+bv).then(r=>r.json()).catch(()=>[]);
+    rel.innerHTML=(items||[]).slice(0,8).map(x=>'<div class="hit" data-bv="'+x.bvid+'"><div class="cov"><img src="'+x.cover+'" loading="lazy"></div><div><div class="t">'+x.title+'</div><div class="m">'+(x.owner||'')+' · '+x.bvid+'</div></div></div>').join('')||'';
+    if(!rel.innerHTML)relsec.style.display='none';
+    rel.querySelectorAll('.hit').forEach(i=>i.onclick=()=>playSource('https://www.bilibili.com/video/'+i.dataset.bv));
+  }else{rel.innerHTML='';relsec.style.display='none'}
 }
 // 页面加载时恢复正在播放的会话面板
 (async()=>{
@@ -394,6 +406,16 @@ const bufEl=document.getElementById('buf');
 v.addEventListener('waiting',()=>bufEl.classList.add('on'));
 v.addEventListener('playing',()=>bufEl.classList.remove('on'));
 v.addEventListener('canplay',()=>bufEl.classList.remove('on'));
+// 播完自动连播下一集（BV 分 P 场景）
+v.addEventListener('ended',async()=>{
+  if(!sid)return;
+  const nav=await fetch('/api/session/'+sid+'/nav').then(r=>r.json()).catch(()=>null);
+  if(nav&&nav.next){
+    const nx=nav.next.opaque_payload;
+    fetch('/api/play',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({source:'https://www.bilibili.com/video/'+nx.bvid+'?p='+nx.page})});
+  }
+});
 setInterval(async()=>{
   try{
     const j=await (await fetch('/api/now')).json();
@@ -965,6 +987,7 @@ setInterval(async()=>{
                   : s.hls_dir
                     ? 'hls-remux'
                     : 'file',
+                is_preview: !!m.is_preview,
                 media_url: m.live
                   ? `/livepl/${s.session_id}/index.m3u8`
                   : s.hls_dir
