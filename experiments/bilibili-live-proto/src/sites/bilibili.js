@@ -28,6 +28,21 @@ export function recognize(input) {
       },
     };
   }
+  // Live room: live.bilibili.com/<room_id>
+  const live = /live\.bilibili\.com\/(?:h5\/)?(\d+)/i.exec(input);
+  if (live) {
+    return {
+      matched: true,
+      site_id: SITE_ID,
+      plugin_id: PLUGIN_ID,
+      locator: {
+        site_id: SITE_ID,
+        plugin_id: PLUGIN_ID,
+        locator_version: LOCATOR_VERSION,
+        opaque_payload: { room_id: Number(live[1]) },
+      },
+    };
+  }
   const match = /(?:^|\/)(BV[0-9A-Za-z]{10})(?:[/?#]|$)/i.exec(input);
   if (!match) return { matched: false };
   let page = 1;
@@ -122,7 +137,78 @@ export async function resolve(locator, { prefer } = {}) {
   if (locator.locator_version !== LOCATOR_VERSION) {
     throw new Error('SOURCE_LOCATOR_UNSUPPORTED');
   }
-  const { bvid, page, ep_id } = locator.opaque_payload;
+  const { bvid, page, ep_id, room_id } = locator.opaque_payload;
+
+  // Live path: getRoomPlayInfo → prefer http_hls/ts/avc (plays natively
+  // on Safari, hls.js elsewhere). Live streams are infinite, no duration.
+  if (room_id) {
+    const headers = {
+      'User-Agent': UA,
+      Referer: 'https://live.bilibili.com',
+      ...(authCookie ? { Cookie: authCookie } : {}),
+    };
+    const d = await fetch(
+      `https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=${room_id}&protocol=0,1&format=0,1,2&codec=0,1&platform=h5`,
+      { headers },
+    ).then((r) => r.json());
+    if (d.data?.live_status !== 1) throw new Error('LIVE_OFFLINE');
+    const pi = d.data.playurl_info || {};
+    // Collect HLS candidates; prefer fmp4/ts + avc (Safari-friendly),
+    // fall back to hevc variants. Probe each with a short timeout —
+    // dead variants (some rooms serve stale CDN URLs) are skipped.
+    const cands = [];
+    for (const s of pi.playurl?.stream || []) {
+      if (s.protocol_name !== 'http_hls') continue;
+      for (const f of s.format || []) {
+        for (const c of f.codec || []) {
+          const u = c.url_info?.[0];
+          if (!u) continue;
+          const score =
+            (f.format_name === 'fmp4' ? 0 : 10) +
+            (c.codec_name === 'avc' ? 0 : 1);
+          cands.push({
+            score,
+            url: u.host + c.base_url + (u.extra || ''),
+            fmt: `${f.format_name}/${c.codec_name}`,
+          });
+        }
+      }
+    }
+    cands.sort((a, b) => a.score - b.score);
+    let picked = null;
+    for (const c of cands) {
+      try {
+        const r = await fetch(c.url, {
+          headers,
+          signal: AbortSignal.timeout(5000),
+        });
+        r.body?.cancel();
+        if (r.ok) {
+          picked = c;
+          break;
+        }
+      } catch {
+        /* dead candidate */
+      }
+    }
+    if (!picked) throw new Error('NO_STREAMS');
+    return {
+      title: `live room ${room_id} (${picked.fmt})`,
+      duration: null, // live — no duration
+      live: true,
+      source_site: SITE_ID,
+      protection: 'clear',
+      streams: [
+        {
+          id: 'live-hls',
+          kind: 'muxed',
+          protocol: 'hls_live',
+          url: picked.url,
+          upstream_headers: { 'User-Agent': UA, Referer: 'https://live.bilibili.com' },
+        },
+      ],
+    };
+  }
 
   // Bangumi path: pgc endpoint, ep_id instead of bvid+cid.
   if (ep_id) {

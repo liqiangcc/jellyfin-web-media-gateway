@@ -154,6 +154,25 @@ async function play(body) {
   });
   const streams = media.streams;
 
+  // Live: proxy the upstream playlist, rewriting segment URIs through us.
+  if (media.live) {
+    const session = createSession(rec.locator, media);
+    return [
+      200,
+      {
+        session_id: session.session_id,
+        title: media.title,
+        media_mode: 'hls-live',
+        media_url: `${BASE}/livepl/${session.session_id}/index.m3u8`,
+        streams: media.streams.map((s) => ({
+          id: s.id,
+          kind: s.kind,
+          protocol: s.protocol,
+        })),
+      },
+    ];
+  }
+
   // Muxed file → direct gateway proxy path. Separate A/V → remux to HLS.
   // The session is only created after the media path is ready, so the
   // display never sees a half-prepared session (media_url is stable).
@@ -312,6 +331,71 @@ setInterval(async()=>{
         });
         return res.end(Buffer.from(await img.arrayBuffer()));
       }
+      const livepl = /^\/livepl\/([\w-]+)\/index\.m3u8$/.exec(url.pathname);
+      if (livepl && req.method === 'GET') {
+        const s = getSession(livepl[1]);
+        if (!s || !s.current_item.resolved_media.live) {
+          res.writeHead(404);
+          return res.end('no live session');
+        }
+        let st = s.current_item.resolved_media.streams[0];
+        let up = await fetch(st.url, { headers: st.upstream_headers });
+        // Live playlist URLs expire fast — refresh via the locator on failure.
+        if (!up.ok) {
+          const fresh = await resolve(s.current_item.source_locator, {});
+          s.current_item.resolved_media = fresh;
+          st = fresh.streams[0];
+          up = await fetch(st.url, { headers: st.upstream_headers });
+        }
+        if (!up.ok) {
+          res.writeHead(502);
+          return res.end('upstream playlist failed');
+        }
+        const text = await up.text();
+        const base = st.url.slice(0, st.url.lastIndexOf('/') + 1);
+        // Rewrite segment URIs (standalone lines AND URI= attrs like
+        // #EXT-X-MAP) to route through /seg with upstream headers.
+        const rewrite = (u) => {
+          const abs = u.startsWith('http') ? u : base + u;
+          return `${BASE}/seg?u=${encodeURIComponent(abs)}`;
+        };
+        const rewritten = text
+          .split('\n')
+          .map((line) => {
+            const t = line.trim();
+            if (!t) return line;
+            if (t.startsWith('#')) {
+              return line.replace(/URI="([^"]+)"/g, (_, u) => `URI="${rewrite(u)}"`);
+            }
+            return rewrite(t);
+          })
+          .join('\n');
+        res.writeHead(200, {
+          'content-type': 'application/vnd.apple.mpegurl',
+          'cache-control': 'no-store',
+        });
+        return res.end(rewritten);
+      }
+      if (req.method === 'GET' && url.pathname === '/seg') {
+        const u = url.searchParams.get('u') || '';
+        let up;
+        try {
+          up = new URL(u);
+        } catch {
+          up = null;
+        }
+        if (!up || !/^[a-z0-9-]+\.bilivideo\.com$/.test(up.hostname)) {
+          res.writeHead(403);
+          return res.end('host not allowed');
+        }
+        return proxyStream(req, res, {
+          url: u,
+          upstream_headers: {
+            'User-Agent': 'Mozilla/5.0',
+            Referer: 'https://live.bilibili.com',
+          },
+        });
+      }
       const dmMatch = /^\/dm\/([\w-]+)$/.exec(url.pathname);
       if (dmMatch && req.method === 'GET') {
         const s = getSession(dmMatch[1]);
@@ -330,10 +414,16 @@ setInterval(async()=>{
               session: {
                 session_id: s.session_id,
                 title: s.current_item.resolved_media.title,
-                media_mode: s.hls_dir ? 'hls-remux' : 'file',
-                media_url: s.hls_dir
-                  ? `/hls/${s.session_id}/index.m3u8`
-                  : `/stream/${s.session_id}/0`,
+                media_mode: s.current_item.resolved_media.live
+                  ? 'hls-live'
+                  : s.hls_dir
+                    ? 'hls-remux'
+                    : 'file',
+                media_url: s.current_item.resolved_media.live
+                  ? `/livepl/${s.session_id}/index.m3u8`
+                  : s.hls_dir
+                    ? `/hls/${s.session_id}/index.m3u8`
+                    : `/stream/${s.session_id}/0`,
               },
             }
           : { session: null };
