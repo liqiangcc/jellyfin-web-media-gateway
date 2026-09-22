@@ -153,6 +153,40 @@ async function api(path) {
   return body.data;
 }
 
+/**
+ * Search without a browser: the SSR'd search page embeds result cards in
+ * the HTML (bili-video-card blocks). Returns [] when the page is
+ * soft-blocked (no cards rendered) so callers can fall back to Chrome.
+ */
+export async function searchHtml(keyword, { limit = 20 } = {}) {
+  const u = `https://search.bilibili.com/all?keyword=${encodeURIComponent(keyword)}`;
+  const res = await fetch(u, {
+    headers: {
+      'User-Agent': UA,
+      Referer: 'https://www.bilibili.com',
+      ...(authCookie ? { Cookie: authCookie } : {}),
+    },
+  });
+  if (!res.ok) return [];
+  const html = await res.text();
+  const out = [];
+  for (const part of html.split('<div class="bili-video-card"').slice(1)) {
+    const a = /href="\/\/www\.bilibili\.com\/video\/(BV\w+)/.exec(part);
+    if (!a) continue;
+    const t = /title="([^"]+)"/.exec(part);
+    const d = /(\d{1,2}:\d{2}(?::\d{2})?)<\/span>/.exec(part);
+    const img = /(?:src|data-src)="(\/\/i\d\.hdslb\.com[^"]+)"/.exec(part);
+    out.push({
+      bvid: a[1],
+      title: t ? t[1] : '',
+      duration: d ? d[1] : '',
+      cover: img ? 'https:' + img[1] : '',
+    });
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 /** SourceLocator → ResolvedMedia. Prefers muxed durl; falls back to DASH A/V. */
 export async function resolve(locator, { prefer } = {}) {
   if (locator.locator_version !== LOCATOR_VERSION) {

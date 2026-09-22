@@ -16,6 +16,7 @@ import {
   navigation,
   sendDanmaku,
   resolveShortLink,
+  searchHtml,
   qrLoginStart,
   qrLoginPoll,
   setAuthCookie,
@@ -802,7 +803,10 @@ http
           res.writeHead(400, { 'content-type': 'application/json' });
           return res.end(JSON.stringify({ error: 'EMPTY_QUERY' }));
         }
-        const list = await search(q, { cookies: getAuthCookie() });
+        // HTML SSR path first (no browser needed); fall back to headless
+        // Chrome when the page is soft-blocked (empty card list).
+        let list = await searchHtml(q).catch(() => []);
+        if (!list.length) list = await search(q, { cookies: getAuthCookie() });
         // Route covers through the gateway so no third-party host is
         // contacted by the client (same-origin boundary).
         for (const x of list) {
