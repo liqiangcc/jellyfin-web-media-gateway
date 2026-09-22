@@ -151,7 +151,9 @@ impl CreationSlot {
             let notified = self.notify.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            let _waiter = {
+            #[cfg(test)]
+            let _waiter;
+            {
                 let mut state = self.state.lock().expect("source creation slot poisoned");
                 if !state.in_flight {
                     state.in_flight = true;
@@ -160,17 +162,14 @@ impl CreationSlot {
                     };
                 }
                 #[cfg(test)]
-                let waiter = {
+                {
                     self.waiter_count.fetch_add(1, Ordering::SeqCst);
                     self.waiter_notify.notify_waiters();
-                    CreationWaiter {
+                    _waiter = CreationWaiter {
                         slot: Arc::clone(self),
-                    }
-                };
-                #[cfg(not(test))]
-                let waiter = ();
-                waiter
-            };
+                    };
+                }
+            }
             notified.await;
         }
     }
@@ -397,9 +396,7 @@ impl SourceSessionService {
         };
         let slot = self.creation_slot(&request.request_id)?;
         let permit = slot.acquire_sync();
-        if let Err(outcome) = self.check_creation_record(request, &fingerprint) {
-            return Err(outcome);
-        }
+        self.check_creation_record(request, &fingerprint)?;
         Ok((permit, fingerprint))
     }
 
@@ -413,26 +410,8 @@ impl SourceSessionService {
         };
         let slot = self.creation_slot(&request.request_id)?;
         let permit = slot.acquire_async().await;
-        if let Err(outcome) = self.check_creation_record(request, &fingerprint) {
-            return Err(outcome);
-        }
+        self.check_creation_record(request, &fingerprint)?;
         Ok((permit, fingerprint))
-    }
-
-    pub(crate) fn create(
-        &self,
-        gateway: &GatewayService,
-        control: &ControlService,
-        displays: &DisplaySessionService,
-        request: CreateSessionRequest,
-    ) -> CreationOutcome {
-        self.create_with_context(
-            gateway,
-            control,
-            displays,
-            request,
-            ResolveContext::default(),
-        )
     }
 
     /// Resolve a public source through the generic Browser Worker before
