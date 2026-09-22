@@ -173,6 +173,42 @@ export async function resolve(locator, { prefer } = {}) {
 }
 
 /**
+ * List the logged-in user's favorite folders, or the videos inside one.
+ * Requires login. folderId=null → folder list; else → [{bvid,title,duration,cover}].
+ */
+export async function favorites(folderId = null) {
+  if (!authCookie) throw new Error('NOT_LOGGED_IN');
+  const headers = { 'User-Agent': UA, Referer: REFERER, Cookie: authCookie };
+  if (folderId === null) {
+    const nav = await fetch(
+      'https://api.bilibili.com/x/web-interface/nav',
+      { headers },
+    ).then((r) => r.json());
+    const mid = nav.data?.mid;
+    const d = await fetch(
+      `https://api.bilibili.com/x/v3/fav/folder/created/list-all?up_mid=${mid}`,
+      { headers },
+    ).then((r) => r.json());
+    return (d.data?.list || []).map((f) => ({
+      id: f.id,
+      title: f.title,
+      count: f.media_count,
+    }));
+  }
+  const d = await fetch(
+    `https://api.bilibili.com/x/v3/fav/resource/list?media_id=${folderId}&ps=40&platform=web`,
+    { headers },
+  ).then((r) => r.json());
+  return (d.data?.medias || []).map((m) => ({
+    bvid: m.bvid,
+    title: m.title,
+    duration: `${Math.floor(m.duration / 60)}:${String(m.duration % 60).padStart(2, '0')}`,
+    cover: m.cover,
+    pages: m.page,
+  }));
+}
+
+/**
  * Fetch the full danmaku pool for a locator's page as a normalized list.
  * `x/v1/dm/list.so` returns XML; anonymous-reachable on this host.
  * Each entry: { t: seconds, mode, color, text } sorted by t.

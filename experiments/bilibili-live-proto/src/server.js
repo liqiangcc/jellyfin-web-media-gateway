@@ -9,6 +9,7 @@ import {
   recognize,
   resolve,
   danmaku,
+  favorites,
   qrLoginStart,
   qrLoginPoll,
   setAuthCookie,
@@ -46,6 +47,9 @@ const CONTROL_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport"
 <hr>
 <form id="sf"><input id="q" type="search" placeholder="search bilibili…"><button>Search</button></form>
 <div id="results"></div>
+<hr>
+<button id="fav">我的收藏夹</button> <a href="/qr">登录</a>
+<div id="favlist"></div>
 <pre id="out">idle</pre>
 <p><a href="/display">open display →</a></p>
 <script>
@@ -69,6 +73,22 @@ document.getElementById('sf').onsubmit=async e=>{
     results.innerHTML=list.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><img src="'+x.cover+'"><div><b>'+x.title+'</b><br><small>'+x.bvid+' '+x.duration+'</small></div></div>').join('')||'no results';
     results.querySelectorAll('.hit').forEach(el=>el.onclick=()=>playSource('https://www.bilibili.com/video/'+el.dataset.bv));
   }catch(err){results.textContent='ERR '+err}
+};
+const favlist=document.getElementById('favlist');
+document.getElementById('fav').onclick=async()=>{
+  favlist.textContent='loading…';
+  try{
+    const r=await fetch('/api/favorites');
+    const folders=await r.json();
+    if(!r.ok)throw new Error(folders.error||r.status);
+    favlist.innerHTML=folders.map(f=>'<div class="hit" data-fid="'+f.id+'"><div><b>📁 '+f.title+'</b> <small>('+f.count+')</small></div></div>').join('')||'no folders';
+    favlist.querySelectorAll('.hit').forEach(el=>el.onclick=async()=>{
+      favlist.textContent='loading…';
+      const items=await fetch('/api/favorites?folder='+el.dataset.fid).then(r=>r.json());
+      favlist.innerHTML=items.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><img src="'+x.cover+'"><div><b>'+x.title+'</b><br><small>'+x.bvid+' '+x.duration+'</small></div></div>').join('')||'empty folder';
+      favlist.querySelectorAll('.hit').forEach(i=>i.onclick=()=>playSource('https://www.bilibili.com/video/'+i.dataset.bv));
+    });
+  }catch(err){favlist.textContent='ERR '+err.message}
 };
 </script>
 <style>#results{display:flex;flex-direction:column;gap:.5rem;margin:.8rem 0}.hit{display:flex;gap:.6rem;cursor:pointer;align-items:center}.hit img{width:96px;height:60px;object-fit:cover;border-radius:4px}</style>`;
@@ -255,6 +275,21 @@ setInterval(async()=>{
       if (req.method === 'GET' && url.pathname === '/api/auth') {
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ logged_in: loggedIn() }));
+      }
+      if (req.method === 'GET' && url.pathname === '/api/favorites') {
+        if (!loggedIn()) {
+          res.writeHead(401, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify({ error: 'NOT_LOGGED_IN' }));
+        }
+        const fid = url.searchParams.get('folder');
+        const list = await favorites(fid ? Number(fid) : null);
+        if (fid) {
+          for (const x of list) {
+            x.cover = `${BASE}/img?u=${encodeURIComponent(x.cover)}`;
+          }
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify(list));
       }
       if (req.method === 'GET' && url.pathname === '/img') {
         // Bounded cover proxy: only bilibili image CDN hosts allowed.
