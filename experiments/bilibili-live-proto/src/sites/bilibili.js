@@ -247,10 +247,11 @@ export async function resolve(locator, { prefer } = {}) {
   // fnval=0: legacy durl — returns a muxed MP4 for anonymous/public content.
   // If the BV is actually a bangumi (playurl -404), hop through view's
   // redirect_url (needs login) and resolve via the pgc path.
+  const qn = prefer?.qn ? `&qn=${prefer.qn}` : '';
   let durlRes;
   try {
     durlRes = await api(
-      `/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=0&platform=html5`,
+      `/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=0&platform=html5${qn}`,
     );
   } catch (e) {
     if (authCookie && /-404/.test(e.message)) {
@@ -268,12 +269,22 @@ export async function resolve(locator, { prefer } = {}) {
     }
     throw e;
   }
-  if (prefer !== 'dash' && durlRes.durl?.length) {
+  // Quality ladder for the control UI: accept_quality ids + descriptions.
+  // Anonymous caps at 480p regardless of the advertised ladder — the UI
+  // must filter by the streams actually returned.
+  const quality_options = (durlRes.accept_quality || []).map((q, i) => ({
+    qn: q,
+    label: durlRes.accept_description?.[i] || `${q}p`,
+  }));
+
+  if (prefer?.mode !== 'dash' && durlRes.durl?.length) {
     return {
       title: entry.part,
       duration: entry.duration,
       source_site: SITE_ID,
       protection: 'clear',
+      quality: durlRes.quality,
+      quality_options,
       streams: durlRes.durl.map((d, i) => ({
         id: `durl-${i}`,
         kind: 'muxed',
@@ -285,20 +296,27 @@ export async function resolve(locator, { prefer } = {}) {
     };
   }
 
-  // fnval=16: DASH — separate video/audio candidates.
+  // fnval=16: DASH — separate video/audio candidates. qn selects the
+  // video ladder entry; audio takes the best available.
   const dashRes = await api(
-    `/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=16&fnver=0`,
+    `/x/player/playurl?bvid=${bvid}&cid=${cid}&fnval=16&fnver=0${qn}`,
   );
-  const video = dashRes.dash?.video?.[0];
+  const vids = dashRes.dash?.video || [];
+  const video = prefer?.qn
+    ? vids.find((x) => x.id === Number(prefer.qn)) || vids[0]
+    : vids[0];
   const audio = dashRes.dash?.audio?.[0];
   if (!video || !audio) {
     throw new Error('NO_STREAMS');
   }
+  const dashQ = vids.map((x) => ({ qn: x.id, label: `${x.height}p` }));
   return {
     title: entry.part,
     duration: entry.duration,
     source_site: SITE_ID,
     protection: 'clear',
+    quality: video.id,
+    quality_options: dashQ.length ? dashQ : quality_options,
     streams: [
       {
         id: 'dash-video',
@@ -368,6 +386,42 @@ export async function discovery(kind = 'popular', bvid = null) {
     { headers },
   ).then((r) => r.json());
   return map(d.data?.list);
+}
+
+/**
+ * Subtitle tracks for a locator's page via x/player/v2.
+ * Returns [{lan, lan_doc, url}] — url is protocol-relative hdslb JSON.
+ */
+export async function subtitles(locator) {
+  const { bvid, page = 1 } = locator.opaque_payload;
+  const pages = await api(`/x/player/pagelist?bvid=${bvid}`);
+  const entry = pages[Math.min(page, pages.length) - 1];
+  if (!entry) return [];
+  const d = await api(`/x/player/v2?bvid=${bvid}&cid=${entry.cid}`);
+  return (d.subtitle?.subtitles || []).map((s) => ({
+    lan: s.lan,
+    label: s.lan_doc,
+    url: s.subtitle_url?.startsWith('//')
+      ? 'https:' + s.subtitle_url
+      : s.subtitle_url,
+  }));
+}
+
+/**
+ * Fetch one subtitle track's cue list: [{from,to,content}].
+ */
+export async function subtitleCues(url) {
+  const headers = {
+    'User-Agent': UA,
+    Referer: REFERER,
+    ...(authCookie ? { Cookie: authCookie } : {}),
+  };
+  const d = await fetch(url, { headers }).then((r) => r.json());
+  return (d.body || []).map((c) => ({
+    from: c.from,
+    to: c.to,
+    text: c.content,
+  }));
 }
 
 /**

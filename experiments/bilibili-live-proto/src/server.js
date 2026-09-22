@@ -11,6 +11,9 @@ import {
   danmaku,
   favorites,
   discovery,
+  subtitles,
+  subtitleCues,
+  navigation,
   qrLoginStart,
   qrLoginPoll,
   setAuthCookie,
@@ -74,16 +77,48 @@ const CONTROL_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport"
 <div id="accline"><a href="/qr">登录/换号</a> <button id="logout" style="display:none">退出</button> <span id="who"></span></div>
 <div id="favlist"></div>
 <pre id="out">idle</pre>
+<div id="sess" style="display:none">
+  <b id="stitle"></b>
+  <div>清晰度：<span id="quals"></span></div>
+  <div>选集：<span id="pages"></span></div>
+  <div>字幕：<span id="subs"></span></div>
+  <div>倍速：<span id="rates"></span></div>
+</div>
 <p><a href="/display">open display →</a></p>
-<script>
+<script type="module">
 const out=document.getElementById('out'),results=document.getElementById('results');
-async function playSource(src){
+let curSrc=null;
+async function playSource(src,qn){
+  curSrc=src;
   out.textContent='resolving…';
   try{
-    const r=await fetch('/api/play',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({source:src})});
+    const r=await fetch('/api/play',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({source:src,...(qn?{qn}:{})})});
     const j=await r.json();
     out.textContent=r.ok?JSON.stringify({session:j.session_id,title:j.title,mode:j.media_mode},null,2):'ERR '+r.status+' '+JSON.stringify(j);
+    if(r.ok)renderSession(j);
   }catch(err){out.textContent='ERR '+err}
+}
+async function renderSession(j){
+  const sess=document.getElementById('sess');
+  sess.style.display='';
+  document.getElementById('stitle').textContent=j.title+(j.is_preview?' [预览]':'');
+  // 清晰度：re-play same source at chosen qn
+  document.getElementById('quals').innerHTML=(j.quality_options||[]).map(q=>'<button data-qn="'+q.qn+'"'+(q.qn===j.quality?' style="font-weight:bold"':'')+'>'+q.label+'</button>').join(' ')||'（仅一档）';
+  document.querySelectorAll('#quals button').forEach(b=>b.onclick=()=>playSource(curSrc,b.dataset.qn));
+  // 选集：BV 分 P 列表
+  const nav=await fetch('/api/session/'+j.session_id+'/nav').then(r=>r.json()).catch(()=>null);
+  if(nav&&nav.queue&&nav.queue.length>1){
+    const bv=nav.queue[0].opaque_payload.bvid;
+    document.getElementById('pages').innerHTML=nav.queue.map((l,i)=>'<button data-p="'+l.opaque_payload.page+'"'+(i===nav.current_index?' style="font-weight:bold"':'')+'>P'+l.opaque_payload.page+'</button>').join(' ');
+    document.querySelectorAll('#pages button').forEach(b=>b.onclick=()=>playSource('https://www.bilibili.com/video/'+bv+'?p='+b.dataset.p));
+  }else document.getElementById('pages').textContent='（单集）';
+  // 字幕轨选择
+  const subs=await fetch('/api/session/'+j.session_id+'/subs').then(r=>r.json()).catch(()=>[]);
+  document.getElementById('subs').innerHTML=['<button data-u="">关闭</button>'].concat((subs||[]).map(x=>'<button data-u="'+x.url+'">'+x.label+'</button>')).join(' ');
+  document.querySelectorAll('#subs button').forEach(b=>b.onclick=()=>fetch('/api/session/'+j.session_id+'/subtitle',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url:b.dataset.u||null})}));
+  // 倍速
+  document.getElementById('rates').innerHTML=[0.5,1,1.25,1.5,2].map(r=>'<button data-r="'+r+'">'+r+'x</button>').join(' ');
+  document.querySelectorAll('#rates button').forEach(b=>b.onclick=()=>fetch('/api/session/'+j.session_id+'/rate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({rate:Number(b.dataset.r)})}));
 }
 document.getElementById('f').onsubmit=e=>{e.preventDefault();playSource(document.getElementById('src').value)};
 document.getElementById('sf').onsubmit=async e=>{
@@ -142,10 +177,11 @@ const DISPLAY_HTML = `<!doctype html><meta charset="utf-8"><meta name="viewport"
 <style>body{margin:0;background:#000}video{width:100vw;height:100vh;object-fit:contain}#s{position:fixed;top:0;color:#fff;font:14px system-ui;background:#0008;padding:.4rem}</style>
 <video id="v" controls playsinline></video><div id="s">waiting for control…</div>
 <div id="dm" style="position:fixed;inset:0;pointer-events:none;overflow:hidden"></div>
+<div id="sub" style="position:fixed;bottom:8%;left:0;right:0;text-align:center;pointer-events:none;color:#fff;font-size:4.5vw;text-shadow:1px 1px 3px #000,-1px -1px 3px #000"></div>
 <script src="/hls.min.js"></script>
 <script>
-const v=document.getElementById('v'),s=document.getElementById('s'),dm=document.getElementById('dm');
-let cur=null,hls=null,pool=[],pidx=0,laneFree=[];
+const v=document.getElementById('v'),s=document.getElementById('s'),dm=document.getElementById('dm'),subEl=document.getElementById('sub');
+let cur=null,hls=null,pool=[],pidx=0,laneFree=[],cues=[],cuesUrl=null;
 const LANES=10,LINE_H=Math.floor(innerHeight*0.05),FLY_MS=7000;
 function laneFor(){for(let i=0;i<LANES;i++)if((laneFree[i]||0)<performance.now())return i;return -1}
 function spawn(d){
@@ -166,6 +202,13 @@ setInterval(()=>{
   if(pidx>0&&(pool[pidx-1]&&pool[pidx-1].t>t+2)){dm.innerHTML='';pidx=pool.findIndex(d=>d.t>t);if(pidx<0)pidx=pool.length}
   while(pidx<pool.length&&pool[pidx].t<=t){if(pool[pidx].mode===1)spawn(pool[pidx]);pidx++}
 },200);
+// Subtitle overlay: cues synced to currentTime.
+setInterval(()=>{
+  if(!cues.length){subEl.textContent='';return}
+  const t=v.currentTime;
+  const c=cues.find(x=>t>=x.from&&t<x.to);
+  subEl.textContent=c?c.text:'';
+},200);
 v.addEventListener('pause',()=>{v.getAnimations?0:0;dm.querySelectorAll('div').forEach(e=>e.getAnimations().forEach(a=>a.pause()))});
 v.addEventListener('play',()=>{dm.querySelectorAll('div').forEach(e=>e.getAnimations().forEach(a=>a.play()))});
 setInterval(async()=>{
@@ -177,6 +220,12 @@ setInterval(async()=>{
       if(hls){hls.destroy();hls=null}
       pool=[];pidx=0;dm.innerHTML='';laneFree=[];
       fetch('/dm/'+j.session.session_id).then(r=>r.json()).then(l=>{pool=l;pidx=0}).catch(()=>{});
+      // Load subtitle cues if control picked a track.
+      cuesUrl=j.session.subtitle_url;
+      if(cuesUrl){
+        fetch('/api/session/'+j.session.session_id+'/subcues?u='+encodeURIComponent(cuesUrl))
+          .then(r=>r.json()).then(l=>{cues=l}).catch(()=>{});
+      } else cues=[];
       const url=j.session.media_url;
       if(url.endsWith('.m3u8')&&window.Hls&&Hls.isSupported()){
         hls=new Hls();hls.loadSource(url);hls.attachMedia(v);
@@ -186,6 +235,15 @@ setInterval(async()=>{
       s.textContent=j.session.title+' ('+j.session.media_mode+')';
       v.play().catch(()=>{s.textContent+=' — tap to play'});
     }
+    if(j.session.playback_rate&&v.playbackRate!==j.session.playback_rate)v.playbackRate=j.session.playback_rate;
+    // Subtitle track change without session change.
+    if(j.session.subtitle_url!==cuesUrl){
+      cuesUrl=j.session.subtitle_url;
+      if(cuesUrl){
+        fetch('/api/session/'+j.session.session_id+'/subcues?u='+encodeURIComponent(cuesUrl))
+          .then(r=>r.json()).then(l=>{cues=l}).catch(()=>{});
+      } else cues=[];
+    }
   }catch(e){s.textContent='display reconnecting…'}
 },1500);
 </script>`;
@@ -194,7 +252,10 @@ async function play(body) {
   const rec = recognize(body.source || '');
   if (!rec.matched) return [400, { error: 'SOURCE_NOT_RECOGNIZED' }];
   const media = await resolve(rec.locator, {
-    prefer: body.force_dash ? 'dash' : undefined,
+    prefer: {
+      ...(body.force_dash ? { mode: 'dash' } : {}),
+      ...(body.qn ? { qn: Number(body.qn) } : {}),
+    },
   });
   const streams = media.streams;
 
@@ -217,6 +278,21 @@ async function play(body) {
     ];
   }
 
+  const expose = (session, media, mode, media_url) => ({
+    session_id: session.session_id,
+    title: media.title,
+    media_mode: mode,
+    media_url,
+    quality: media.quality,
+    quality_options: media.quality_options || [],
+    is_preview: !!media.is_preview,
+    streams: media.streams.map((s) => ({
+      id: s.id,
+      kind: s.kind,
+      protocol: s.protocol,
+    })),
+  });
+
   // Muxed file → direct gateway proxy path. Separate A/V → remux to HLS.
   // The session is only created after the media path is ready, so the
   // display never sees a half-prepared session (media_url is stable).
@@ -235,16 +311,7 @@ async function play(body) {
   const media_url = hlsDir
     ? `${BASE}/hls/${session.session_id}/index.m3u8`
     : `${BASE}/stream/${session.session_id}/0`;
-  return [
-    200,
-    {
-      session_id: session.session_id,
-      title: media.title,
-      media_mode,
-      media_url,
-      streams: streams.map((s) => ({ id: s.id, kind: s.kind, protocol: s.protocol })),
-    },
-  ];
+  return [200, expose(session, media, media_mode, media_url)];
 }
 
 http
@@ -525,19 +592,99 @@ setInterval(async()=>{
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify(list));
       }
+      // Per-session navigation (BV pages), subtitles, quality for control UI.
+      const navMatch = /^\/api\/session\/([\w-]+)\/nav$/.exec(url.pathname);
+      if (navMatch && req.method === 'GET') {
+        const s = getSession(navMatch[1]);
+        if (!s) {
+          res.writeHead(404);
+          return res.end('no session');
+        }
+        const nav = await navigation(s.current_item.source_locator);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify(nav));
+      }
+      const subsMatch = /^\/api\/session\/([\w-]+)\/subs$/.exec(url.pathname);
+      if (subsMatch && req.method === 'GET') {
+        const s = getSession(subsMatch[1]);
+        if (!s) {
+          res.writeHead(404);
+          return res.end('no session');
+        }
+        const list = await subtitles(s.current_item.source_locator);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify(list));
+      }
+      // Cue list for a chosen subtitle track (bounded to hdslb/json).
+      const cuesMatch = /^\/api\/session\/([\w-]+)\/subcues$/.exec(
+        url.pathname,
+      );
+      if (cuesMatch && req.method === 'GET') {
+        const s = getSession(cuesMatch[1]);
+        const u = url.searchParams.get('u') || '';
+        let up;
+        try {
+          up = new URL(u);
+        } catch {
+          up = null;
+        }
+        if (!s || !up || !/\.hdslb\.com$/.test(up.hostname)) {
+          res.writeHead(up ? 404 : 403);
+          return res.end('not allowed');
+        }
+        const cues = await subtitleCues(u);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify(cues));
+      }
+      // Control sets playback rate on the session; display applies it.
+      const rateSel = /^\/api\/session\/([\w-]+)\/rate$/.exec(url.pathname);
+      if (rateSel && req.method === 'POST') {
+        const s = getSession(rateSel[1]);
+        if (!s) {
+          res.writeHead(404);
+          return res.end('no session');
+        }
+        let raw = '';
+        for await (const c of req) raw += c;
+        const { rate } = JSON.parse(raw || '{}');
+        s.playback_rate = Number(rate) || 1;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true }));
+      }
+      // Control sets the active subtitle track for the session.
+      const subSel = /^\/api\/session\/([\w-]+)\/subtitle$/.exec(url.pathname);
+      if (subSel && req.method === 'POST') {
+        const s = getSession(subSel[1]);
+        if (!s) {
+          res.writeHead(404);
+          return res.end('no session');
+        }
+        let raw = '';
+        for await (const c of req) raw += c;
+        const { url: subUrl } = JSON.parse(raw || '{}');
+        s.subtitle_url = subUrl || null;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true }));
+      }
       if (req.method === 'GET' && url.pathname === '/api/now') {
         const s = currentSession();
+        const m = s?.current_item.resolved_media;
         const body = s
           ? {
               session: {
                 session_id: s.session_id,
-                title: s.current_item.resolved_media.title,
-                media_mode: s.current_item.resolved_media.live
+                title: m.title,
+                locator: s.current_item.source_locator,
+                quality: m.quality,
+                quality_options: m.quality_options || [],
+                subtitle_url: s.subtitle_url || null,
+                playback_rate: s.playback_rate || 1,
+                media_mode: m.live
                   ? 'hls-live'
                   : s.hls_dir
                     ? 'hls-remux'
                     : 'file',
-                media_url: s.current_item.resolved_media.live
+                media_url: m.live
                   ? `/livepl/${s.session_id}/index.m3u8`
                   : s.hls_dir
                     ? `/hls/${s.session_id}/index.m3u8`
