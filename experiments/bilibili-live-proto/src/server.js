@@ -774,6 +774,45 @@ async function play(body) {
   return [200, expose(session, media, media_mode, media_url)];
 }
 
+// Relay mode: PROTO_RELAY=1 turns this process into a restricted egress
+// fetcher — GET /fetch?u=<url> streams the upstream response, allowlisted
+// to known CDN hosts. Deploy on the node whose egress IP the site
+// credentials were resolved from (segments are IP-bound).
+if (process.env.PROTO_RELAY === '1') {
+  const RELAY_HOSTS = /\.(bilivideo\.com|cibntv\.net|youku\.com|hdslb\.com)$/;
+  http
+    .createServer(async (req, res) => {
+      try {
+        const url = new URL(req.url, 'http://x');
+        if (req.method !== 'GET' || url.pathname !== '/fetch') {
+          res.writeHead(404);
+          return res.end();
+        }
+        const u = url.searchParams.get('u') || '';
+        let up;
+        try {
+          up = new URL(u);
+        } catch {
+          up = null;
+        }
+        if (!up || !/^https?:$/.test(up.protocol) || !RELAY_HOSTS.test(up.hostname)) {
+          res.writeHead(403);
+          return res.end('host not allowed');
+        }
+        const r = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        res.writeHead(r.status, {
+          'content-type': r.headers.get('content-type') || 'video/mp2t',
+        });
+        res.end(Buffer.from(await r.arrayBuffer()));
+      } catch (e) {
+        res.writeHead(502);
+        res.end(String(e.message || e));
+      }
+    })
+    .listen(PORT, '127.0.0.1', () =>
+      console.log(`egress relay on 127.0.0.1:${PORT}`),
+    );
+} else
 http
   .createServer(async (req, res) => {
     const url = new URL(req.url, BASE);
@@ -810,7 +849,7 @@ http
         // Route covers through the gateway so no third-party host is
         // contacted by the client (same-origin boundary).
         for (const x of list) {
-          x.cover = `${BASE}/img?u=${encodeURIComponent(x.cover)}`;
+          x.cover = `/img?u=${encodeURIComponent(x.cover)}`;
         }
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify(list));
@@ -991,7 +1030,7 @@ setInterval(async()=>{
         const bvid = url.searchParams.get('bvid');
         const list = await discovery(kind, bvid);
         for (const x of list) {
-          if (x.cover) x.cover = `${BASE}/img?u=${encodeURIComponent(x.cover)}`;
+          if (x.cover) x.cover = `/img?u=${encodeURIComponent(x.cover)}`;
         }
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify(list));
@@ -1005,7 +1044,7 @@ setInterval(async()=>{
         const list = await favorites(fid ? Number(fid) : null);
         if (fid) {
           for (const x of list) {
-            x.cover = `${BASE}/img?u=${encodeURIComponent(x.cover)}`;
+            x.cover = `/img?u=${encodeURIComponent(x.cover)}`;
           }
         }
         res.writeHead(200, { 'content-type': 'application/json' });
@@ -1059,7 +1098,13 @@ setInterval(async()=>{
         // #EXT-X-MAP) to route through /seg with upstream headers.
         const rewrite = (u) => {
           const abs = u.startsWith('http') ? u : base + u;
-          return `${BASE}/seg?u=${encodeURIComponent(abs)}`;
+          // Same-origin relative path — works regardless of which IP the
+          // client connected through (LAN / tailnet / localhost).
+          // Youku/cibntv segments are egress-IP-bound to the resolving
+          // browser — route them via /yseg which can relay through the
+          // browser's egress node (PROTO_EGRESS_RELAY).
+          const host = /cibntv\.net|youku\.com/.test(abs) ? '/yseg' : '/seg';
+          return `${host}?u=${encodeURIComponent(abs)}`;
         };
         const rewritten = text
           .split('\n')
@@ -1105,6 +1150,25 @@ setInterval(async()=>{
           ...(isYk ? {} : { Referer: 'https://live.bilibili.com' }),
         },
       });
+      }
+      // Youku segments resolved by a remote browser (ECS) are bound to the
+      // browser's egress IP — fetch them through the relay on that node.
+      if (req.method === 'GET' && url.pathname === '/yseg') {
+        const u = url.searchParams.get('u') || '';
+        const relay = process.env.PROTO_EGRESS_RELAY;
+        if (relay) {
+          const r = await fetch(
+            `${relay}/fetch?u=${encodeURIComponent(u)}`,
+          );
+          res.writeHead(r.status, {
+            'content-type': r.headers.get('content-type') || 'video/mp2t',
+          });
+          return res.end(Buffer.from(await r.arrayBuffer()));
+        }
+        return proxyStream(req, res, {
+          url: u,
+          upstream_headers: { 'User-Agent': 'Mozilla/5.0' },
+        });
       }
       const dmMatch = /^\/dm\/([\w-]+)$/.exec(url.pathname);
       if (dmMatch && req.method === 'GET') {
