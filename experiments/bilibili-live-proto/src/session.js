@@ -33,3 +33,8 @@ export function getSession(id) {
 export function currentSession() {
   return currentId ? sessions.get(currentId) : null;
 }
+
+export function closeSession(id) {
+  sessions.delete(id);
+  if (currentId === id) currentId = null;
+}

@@ -21,7 +21,12 @@ import {
   loggedIn,
 } from './sites/bilibili.js';
 import { search } from './browser.js';
-import { createSession, getSession, currentSession } from './session.js';
+import {
+  createSession,
+  getSession,
+  currentSession,
+  closeSession,
+} from './session.js';
 import { proxyStream, remuxToHls } from './media.js';
 
 const require = createRequire(import.meta.url);
@@ -130,7 +135,9 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
   <div class="row"><span class="lbl">选集</span><div class="opts" id="pages"></div></div>
   <div class="row"><span class="lbl">字幕</span><div class="opts" id="subs"></div></div>
   <div class="row"><span class="lbl">倍速</span><div class="opts" id="rates"></div></div>
-  <div class="row"><span class="lbl">弹幕</span><div class="opts"><button id="dmt" class="on">开</button></div></div>
+  <div class="row"><span class="lbl">音量</span><div class="opts"><button data-vd="-0.1">−</button><button id="vmute">🔇</button><button data-vd="0.1">＋</button></div></div>
+  <div class="row"><span class="lbl">弹幕</span><div class="opts"><button id="dmt" class="on">开</button></div>
+    <span class="opts" style="margin-left:auto"><button id="tstop" style="color:#ff8fa3">■ 停止</button></span></div>
 </div>
 <pre id="out">就绪</pre>
 <form id="f"><input id="src" type="text" placeholder="粘贴 BV 链接 / 番剧 ep / 直播房号…"><button class="primary">播放</button></form>
@@ -205,6 +212,23 @@ async function renderSession(j){
     document.getElementById('dmt').classList.toggle('on',on);
     document.getElementById('dmt').textContent=on?'开':'关';
   };
+  // 音量
+  document.querySelectorAll('[data-vd]').forEach(b=>b.onclick=()=>fetch('/api/session/'+j.session_id+'/vol',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({delta:Number(b.dataset.vd)})}));
+  document.getElementById('vmute').onclick=async()=>{const x=await st();fetch('/api/session/'+j.session_id+'/vol',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({vol:x&&x.volume>0?0:1})})};
+  // 停止播放：关 session，display 回 idle
+  document.getElementById('tstop').onclick=async()=>{
+    await fetch('/api/session/'+j.session_id+'/stop',{method:'POST'});
+    document.getElementById('sess').style.display='none';
+    out.textContent='已停止';
+  };
+  // 直播：隐藏进度条和 seek 按钮
+  const live=j.media_mode==='hls-live';
+  document.querySelector('.prog').style.display=live?'none':'';
+  document.querySelector('.ptimes').style.display=live?'none':'';
+  document.getElementById('tback').style.display=live?'none':'';
+  document.getElementById('tfwd').style.display=live?'none':'';
+  document.getElementById('tprev').style.display=live?'none':'';
+  document.getElementById('tnext').style.display=live?'none':'';
 }
 // 页面加载时恢复正在播放的会话面板
 (async()=>{
@@ -246,10 +270,13 @@ document.getElementById('fav').onclick=async()=>{
     if(!r.ok)throw new Error(folders.error||r.status);
     favlist.innerHTML=folders.map(f=>'<div class="hit folder" data-fid="'+f.id+'"><div><div class="t">📁 '+f.title+'</div><div class="m">'+f.count+' 个内容</div></div></div>').join('')||'<div class="muted">无收藏夹</div>';
     favlist.querySelectorAll('.hit').forEach(el=>el.onclick=async()=>{
+      sect.textContent='📁 '+el.querySelector('.t').textContent.replace(/^📁 /,'');
       favlist.innerHTML=skeleton(3);
       const items=await fetch('/api/favorites?folder='+el.dataset.fid).then(r=>r.json());
-      favlist.innerHTML=items.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><div class="cov"><img src="'+x.cover+'" loading="lazy"></div><div><div class="t">'+x.title+'</div><div class="m">'+x.bvid+' · '+x.duration+'</div></div></div>').join('')||'<div class="muted">空收藏夹</div>';
-      favlist.querySelectorAll('.hit').forEach(i=>i.onclick=()=>playSource('https://www.bilibili.com/video/'+i.dataset.bv));
+      const back='<div class="hit folder" id="favback"><div><div class="t">← 返回收藏夹</div></div></div>';
+      favlist.innerHTML=back+(items.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><div class="cov"><img src="'+x.cover+'" loading="lazy"></div><div><div class="t">'+x.title+'</div><div class="m">'+x.bvid+' · '+x.duration+'</div></div></div>').join('')||'<div class="muted">空收藏夹</div>');
+      document.getElementById('favback').onclick=()=>document.getElementById('fav').click();
+      favlist.querySelectorAll('.hit[data-bv]').forEach(i=>i.onclick=()=>playSource('https://www.bilibili.com/video/'+i.dataset.bv));
     });
   }catch(err){favlist.textContent='ERR '+err.message}
 };
@@ -370,7 +397,10 @@ v.addEventListener('canplay',()=>bufEl.classList.remove('on'));
 setInterval(async()=>{
   try{
     const j=await (await fetch('/api/now')).json();
-    if(!j.session){flash('等待控制端点播…');return}
+    if(!j.session){
+      if(cur){cur=null;sid=null;if(hls){hls.destroy();hls=null}v.pause();v.removeAttribute('src');v.load();dm.innerHTML='';pool=[];cues=[];subEl.textContent=''}
+      flash('等待控制端点播…');return;
+    }
     if(cur!==j.session.session_id+'|'+j.session.media_url){
       cur=j.session.session_id+'|'+j.session.media_url;
       if(hls){hls.destroy();hls=null}
@@ -392,6 +422,7 @@ setInterval(async()=>{
       v.play().catch(()=>{s.classList.remove('hide');s.textContent=j.session.title+' — 点按播放'});
     }
     if(j.session.playback_rate&&v.playbackRate!==j.session.playback_rate)v.playbackRate=j.session.playback_rate;
+    if(typeof j.session.volume==='number'&&Math.abs(v.volume-j.session.volume)>0.02)v.volume=j.session.volume;
     dm.style.display=j.session.dm_on===false?'none':'';
     sid=j.session.session_id;
     // Apply transport commands (guarded by seq).
@@ -842,6 +873,30 @@ setInterval(async()=>{
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ ok: true }));
       }
+      // Volume: {vol 0..1} or {delta}; display applies to v.volume.
+      const volSel = /^\/api\/session\/([\w-]+)\/vol$/.exec(url.pathname);
+      if (volSel && req.method === 'POST') {
+        const s = getSession(volSel[1]);
+        if (!s) {
+          res.writeHead(404);
+          return res.end('no session');
+        }
+        let raw = '';
+        for await (const c of req) raw += c;
+        const { vol, delta } = JSON.parse(raw || '{}');
+        if (typeof vol === 'number') s.volume = Math.min(1, Math.max(0, vol));
+        else if (typeof delta === 'number')
+          s.volume = Math.min(1, Math.max(0, (s.volume ?? 1) + delta));
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, volume: s.volume }));
+      }
+      // Stop: close the session; display returns to idle.
+      const stopSel = /^\/api\/session\/([\w-]+)\/stop$/.exec(url.pathname);
+      if (stopSel && req.method === 'POST') {
+        closeSession(stopSel[1]);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true }));
+      }
       // Danmaku visibility toggle for the session.
       const dmSel = /^\/api\/session\/([\w-]+)\/dm$/.exec(url.pathname);
       if (dmSel && req.method === 'POST') {
@@ -901,6 +956,7 @@ setInterval(async()=>{
                 playback_rate: s.playback_rate || 1,
                 cmd: s.cmd || null,
                 dm_on: s.dm_on !== false,
+                volume: s.volume ?? 1,
                 pos: s.pos || 0,
                 dur: s.dur || 0,
                 paused: !!s.paused,
