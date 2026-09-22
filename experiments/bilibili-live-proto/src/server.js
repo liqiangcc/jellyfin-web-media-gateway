@@ -107,11 +107,25 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
 #sess .opts{display:flex;gap:6px;flex-wrap:wrap}
 #sess .opts button{padding:7px 11px;font-size:.78rem;border-radius:9px}
 #out{font-size:.72rem;color:#8b93a7;white-space:pre-wrap;word-break:break-all;background:#0d1119;border-radius:9px;padding:9px;max-height:110px;overflow:auto}
+.prog{height:5px;border-radius:3px;background:#253050;overflow:hidden;margin:10px 0 4px}
+#pfill{height:100%;width:0;background:#4a7dff;border-radius:3px;transition:width .8s linear}
+.ptimes{display:flex;justify-content:space-between;font-size:.72rem;color:#8b93a7;margin-bottom:8px}
+.transport{display:flex;gap:8px;justify-content:center;margin:6px 0 10px}
+.transport button{min-width:52px;font-size:.95rem}
 .muted{color:#566;font-size:.8rem;padding:8px 2px}
 </style>
 <header><h1><span id="dot" class="dot"></span> B站遥控器 <span class="acct"><span id="who"></span><a href="/qr">登录/换号</a><a href="#" id="logout" style="display:none">退出</a></span></h1></header>
 <div id="sess" style="display:none">
   <h3 id="stitle"></h3>
+  <div class="prog"><div id="pfill"></div></div>
+  <div class="ptimes"><span id="pcur">0:00</span><span id="pdur">0:00</span></div>
+  <div class="transport">
+    <button id="tprev">⏮</button>
+    <button id="tback">−15s</button>
+    <button id="tpp" class="primary">⏸</button>
+    <button id="tfwd">+15s</button>
+    <button id="tnext">⏭</button>
+  </div>
   <div class="row"><span class="lbl">清晰度</span><div class="opts" id="quals"></div></div>
   <div class="row"><span class="lbl">选集</span><div class="opts" id="pages"></div></div>
   <div class="row"><span class="lbl">字幕</span><div class="opts" id="subs"></div></div>
@@ -165,7 +179,25 @@ async function renderSession(j){
   // 倍速
   document.getElementById('rates').innerHTML=[0.5,1,1.25,1.5,2].map(r=>'<button data-r="'+r+'">'+r+'x</button>').join(' ');
   document.querySelectorAll('#rates button').forEach(b=>b.onclick=()=>fetch('/api/session/'+j.session_id+'/rate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({rate:Number(b.dataset.r)})}));
+  // 播放控制：命令经 session 下发给 display
+  const cmd=(op,pos)=>fetch('/api/session/'+j.session_id+'/cmd',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({op,pos})});
+  const st=()=>fetch('/api/now').then(r=>r.json()).then(x=>x.session);
+  document.getElementById('tpp').onclick=async()=>{const x=await st();cmd(x&&x.paused?'play':'pause');setTimeout(pollPos,600)};
+  document.getElementById('tback').onclick=async()=>{const x=await st();if(x)cmd('seek',(x.pos||0)-15)};
+  document.getElementById('tfwd').onclick=async()=>{const x=await st();if(x)cmd('seek',(x.pos||0)+15)};
+  document.getElementById('tprev').onclick=async()=>{const n=await fetch('/api/session/'+j.session_id+'/nav').then(r=>r.json()).catch(()=>null);if(n&&n.previous)playSource('https://www.bilibili.com/video/'+n.previous.opaque_payload.bvid+'?p='+n.previous.opaque_payload.page)};
+  document.getElementById('tnext').onclick=async()=>{const n=await fetch('/api/session/'+j.session_id+'/nav').then(r=>r.json()).catch(()=>null);if(n&&n.next)playSource('https://www.bilibili.com/video/'+n.next.opaque_payload.bvid+'?p='+n.next.opaque_payload.page)};
 }
+const fmt=t=>{if(!isFinite(t))return'0:00';const m=Math.floor(t/60),s=Math.floor(t%60);return m+':'+String(s).padStart(2,'0')};
+async function pollPos(){
+  const x=await fetch('/api/now').then(r=>r.json()).then(y=>y.session).catch(()=>null);
+  if(!x)return;
+  document.getElementById('pcur').textContent=fmt(x.pos);
+  document.getElementById('pdur').textContent=fmt(x.dur);
+  document.getElementById('pfill').style.width=(x.dur?Math.min(100,x.pos/x.dur*100):0)+'%';
+  document.getElementById('tpp').textContent=x.paused?'▶':'⏸';
+}
+setInterval(()=>{if(document.getElementById('sess').style.display!=='none')pollPos()},2000);
 document.getElementById('f').onsubmit=e=>{e.preventDefault();playSource(document.getElementById('src').value)};
 document.getElementById('sf').onsubmit=async e=>{
   e.preventDefault();
@@ -259,7 +291,7 @@ video{width:100vw;height:100vh;object-fit:contain;display:block}
 <script src="/hls.min.js"></script>
 <script>
 const v=document.getElementById('v'),s=document.getElementById('s'),dm=document.getElementById('dm'),subEl=document.getElementById('sub');
-let cur=null,hls=null,pool=[],pidx=0,cues=[],cuesUrl=null;
+let cur=null,hls=null,pool=[],pidx=0,cues=[],cuesUrl=null,lastCmd=0,sid=null;
 let statusTimer=null;
 function flash(t){s.textContent=t;s.classList.remove('hide');clearTimeout(statusTimer);statusTimer=setTimeout(()=>s.classList.add('hide'),3500)}
 // --- danmaku engine: scroll lanes + fixed top/bottom ---
@@ -337,6 +369,15 @@ setInterval(async()=>{
       v.play().catch(()=>{s.classList.remove('hide');s.textContent=j.session.title+' — 点按播放'});
     }
     if(j.session.playback_rate&&v.playbackRate!==j.session.playback_rate)v.playbackRate=j.session.playback_rate;
+    sid=j.session.session_id;
+    // Apply transport commands (guarded by seq).
+    if(j.session.cmd&&j.session.cmd.seq!==lastCmd){
+      lastCmd=j.session.cmd.seq;
+      const c=j.session.cmd;
+      if(c.op==='pause')v.pause();
+      else if(c.op==='play')v.play().catch(()=>{});
+      else if(c.op==='seek'&&typeof c.pos==='number')v.currentTime=Math.max(0,c.pos);
+    }
     // Subtitle track change without session change.
     if(j.session.subtitle_url!==cuesUrl){
       cuesUrl=j.session.subtitle_url;
@@ -347,6 +388,12 @@ setInterval(async()=>{
     }
   }catch(e){s.textContent='display reconnecting…'}
 },1500);
+// Report position back to the gateway every 2s for the control UI.
+setInterval(()=>{
+  if(!sid)return;
+  fetch('/api/session/'+sid+'/pos',{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({pos:v.currentTime||0,dur:v.duration||0,paused:v.paused})}).catch(()=>{});
+},2000);
 </script>`;
 
 async function play(body) {
@@ -738,6 +785,39 @@ setInterval(async()=>{
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify(cues));
       }
+      // Transport commands: {op:'pause'|'play'|'seek', pos?} — display
+      // applies them on next poll; seq guards against replays.
+      const cmdSel = /^\/api\/session\/([\w-]+)\/cmd$/.exec(url.pathname);
+      if (cmdSel && req.method === 'POST') {
+        const s = getSession(cmdSel[1]);
+        if (!s) {
+          res.writeHead(404);
+          return res.end('no session');
+        }
+        let raw = '';
+        for await (const c of req) raw += c;
+        const { op, pos } = JSON.parse(raw || '{}');
+        s.cmd = { seq: (s.cmd?.seq || 0) + 1, op, pos };
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true }));
+      }
+      // Display reports its playback position back; control renders it.
+      const posSel = /^\/api\/session\/([\w-]+)\/pos$/.exec(url.pathname);
+      if (posSel && req.method === 'POST') {
+        const s = getSession(posSel[1]);
+        if (!s) {
+          res.writeHead(404);
+          return res.end('no session');
+        }
+        let raw = '';
+        for await (const c of req) raw += c;
+        const { pos, dur, paused } = JSON.parse(raw || '{}');
+        s.pos = pos;
+        s.dur = dur;
+        s.paused = paused;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true }));
+      }
       // Control sets playback rate on the session; display applies it.
       const rateSel = /^\/api\/session\/([\w-]+)\/rate$/.exec(url.pathname);
       if (rateSel && req.method === 'POST') {
@@ -781,6 +861,10 @@ setInterval(async()=>{
                 quality_options: m.quality_options || [],
                 subtitle_url: s.subtitle_url || null,
                 playback_rate: s.playback_rate || 1,
+                cmd: s.cmd || null,
+                pos: s.pos || 0,
+                dur: s.dur || 0,
+                paused: !!s.paused,
                 media_mode: m.live
                   ? 'hls-live'
                   : s.hls_dir
