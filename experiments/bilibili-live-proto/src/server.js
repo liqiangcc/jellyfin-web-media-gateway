@@ -162,10 +162,10 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
 <p class="muted"><a href="/display" style="color:#6ea8fe">打开播放页 →</a></p>
 <script type="module">
 const out=document.getElementById('out'),results=document.getElementById('results');
-let curSrc=null;
+let curSrc=null,curCover=null;
 const toast=(t,cls)=>{out.textContent=t;out.className=cls||''};
-async function playSource(src,qn){
-  curSrc=src;
+async function playSource(src,qn,cover){
+  curSrc=src;if(cover)curCover=cover;
   toast('解析中…');
   try{
     const r=await fetch('/api/play',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({source:src,...(qn?{qn}:{})})});
@@ -189,6 +189,10 @@ async function renderSession(j){
   sess.style.display='';
   const mode=j.media_mode==='hls-live'?'<span class="badge live">直播</span>':j.is_preview?'<span class="badge prev">预览</span>':'<span class="badge">'+j.media_mode+'</span>';
   document.getElementById('stitle').innerHTML=j.title+mode;
+  // 会话卡片封面（从列表点进来时带上）
+  let cov=document.getElementById('sesscov');
+  if(curCover){if(!cov){cov=document.createElement('img');cov.id='sesscov';cov.style.cssText='width:100%;border-radius:10px;margin-bottom:8px;display:block';sess.insertBefore(cov,document.getElementById('stitle'))}cov.src=curCover}
+  else if(cov)cov.remove();
   // Restore curSrc from locator when panel is rebuilt on page load.
   if(!curSrc&&j.locator?.opaque_payload?.bvid)
     curSrc='https://www.bilibili.com/video/'+j.locator.opaque_payload.bvid+(j.locator.opaque_payload.page?'?p='+j.locator.opaque_payload.page:'');
@@ -267,7 +271,7 @@ async function renderSession(j){
     const items=await fetch('/api/discover?kind=related&bvid='+bv).then(r=>r.json()).catch(()=>[]);
     rel.innerHTML=(items||[]).slice(0,8).map(x=>'<div class="hit" data-bv="'+x.bvid+'"><div class="cov"><img src="'+x.cover+'" loading="lazy"></div><div><div class="t">'+x.title+'</div><div class="m">'+metaOf(x)+'</div></div></div>').join('')||'';
     if(!rel.innerHTML)relsec.style.display='none';
-    rel.querySelectorAll('.hit').forEach(i=>i.onclick=()=>playSource('https://www.bilibili.com/video/'+i.dataset.bv));
+    rel.querySelectorAll('.hit').forEach(i=>i.onclick=()=>playSource('https://www.bilibili.com/video/'+i.dataset.bv,0,i.querySelector('img')?.src));markPlaying();
   }else{rel.innerHTML='';relsec.style.display='none'}
 }
 // 页面加载时恢复正在播放的会话面板
@@ -292,7 +296,7 @@ document.getElementById('f').onsubmit=e=>{e.preventDefault();playSource(document
 document.getElementById('sf').onsubmit=async e=>{
   e.preventDefault();
   results.innerHTML=skeleton(4);
-  document.getElementById('sect').style.display='none';
+  favlistClear();
   try{
     const r=await fetch('/api/search?q='+encodeURIComponent(document.getElementById('q').value));
     const list=await r.json();
@@ -300,11 +304,13 @@ document.getElementById('sf').onsubmit=async e=>{
     document.getElementById('sect').textContent='搜索结果';
     document.getElementById('sect').style.display='';
     results.innerHTML=list.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><div class="cov"><img src="'+x.cover+'" loading="lazy"></div><div><div class="t">'+x.title+'</div><div class="m">'+metaOf(x)+'</div></div></div>').join('')||'<div class="muted">无结果</div>';
-    results.querySelectorAll('.hit').forEach(el=>el.onclick=()=>playSource('https://www.bilibili.com/video/'+el.dataset.bv));
+    results.querySelectorAll('.hit').forEach(el=>el.onclick=()=>playSource('https://www.bilibili.com/video/'+el.dataset.bv,0,el.querySelector('img')?.src));markPlaying();
   }catch(err){results.textContent='ERR '+err}
 };
 const favlist=document.getElementById('favlist'),sect=document.getElementById('sect');
-const markChip=id=>{document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));document.getElementById(id).classList.add('on')};
+const favlistClear=()=>{favlist.innerHTML=''};
+const clearSearch=()=>{results.innerHTML='';document.getElementById('sect').style.display='none'};
+const markChip=id=>{document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));document.getElementById(id).classList.add('on');clearSearch()};
 document.getElementById('fav').onclick=async()=>{
   markChip('fav');sect.style.display='';sect.textContent='收藏夹';favlist.innerHTML=skeleton(3);
   try{
@@ -319,13 +325,13 @@ document.getElementById('fav').onclick=async()=>{
       const back='<div class="hit folder" id="favback"><div><div class="t">← 返回收藏夹</div></div></div>';
       favlist.innerHTML=back+(items.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><div class="cov"><img src="'+x.cover+'" loading="lazy"></div><div><div class="t">'+x.title+'</div><div class="m">'+metaOf(x)+'</div></div></div>').join('')||'<div class="muted">空收藏夹</div>');
       document.getElementById('favback').onclick=()=>document.getElementById('fav').click();
-      favlist.querySelectorAll('.hit[data-bv]').forEach(i=>i.onclick=()=>playSource('https://www.bilibili.com/video/'+i.dataset.bv));
+      favlist.querySelectorAll('.hit[data-bv]').forEach(i=>i.onclick=()=>playSource('https://www.bilibili.com/video/'+i.dataset.bv,0,i.querySelector('img')?.src));markPlaying();
     });
   }catch(err){favlist.textContent='ERR '+err.message}
 };
 const showVideos=(items)=>{
   favlist.innerHTML=items.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><div class="cov"><img src="'+x.cover+'" loading="lazy"></div><div><div class="t">'+x.title+'</div><div class="m">'+metaOf(x)+'</div></div></div>').join('')||'<div class="muted">无内容</div>';
-  favlist.querySelectorAll('.hit').forEach(i=>i.onclick=()=>playSource('https://www.bilibili.com/video/'+i.dataset.bv));
+  favlist.querySelectorAll('.hit').forEach(i=>i.onclick=()=>playSource('https://www.bilibili.com/video/'+i.dataset.bv,0,i.querySelector('img')?.src));markPlaying();
 };
 document.getElementById('hot').onclick=async()=>{
   markChip('hot');sect.style.display='';sect.textContent='热门视频';favlist.innerHTML=skeleton(5);
