@@ -1,0 +1,35 @@
+// Minimal PlaybackSession registry — single-user prototype.
+// Mirrors session/item identity (session_id, item_id, item_revision,
+// media_generation) but has no CAS/revision machinery: the Rust layer owns
+// that, and the prototype must not pretend to validate it.
+
+import { randomUUID } from 'node:crypto';
+
+const sessions = new Map();
+let currentId = null;
+
+export function createSession(locator, media) {
+  const session = {
+    session_id: `s-${randomUUID().replaceAll('-', '')}`,
+    current_item: {
+      item_id: `i-${randomUUID().replaceAll('-', '')}`,
+      item_revision: 1,
+      source_locator: locator,
+      resolved_media: media,
+      media_generation: 0,
+    },
+    active_display: null,
+    created_at: Date.now(),
+  };
+  sessions.set(session.session_id, session);
+  currentId = session.session_id;
+  return session;
+}
+
+export function getSession(id) {
+  return sessions.get(id) ?? null;
+}
+
+export function currentSession() {
+  return currentId ? sessions.get(currentId) : null;
+}

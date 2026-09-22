@@ -1,0 +1,9 @@
+{
+  "name": "bilibili-live-proto",
+  "private": true,
+  "type": "module",
+  "description": "Disposable Node prototype: real Bilibili public video -> gateway-style proxy/remux -> iPhone playback. Research spike; not part of the Rust workspace.",
+  "scripts": {
+    "start": "node src/server.js"
+  }
+}
