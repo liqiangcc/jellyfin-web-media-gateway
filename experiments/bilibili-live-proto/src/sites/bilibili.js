@@ -408,6 +408,50 @@ export async function subtitles(locator) {
 }
 
 /**
+ * Post a scroll danmaku at the current position. Requires login —
+ * bili_jct in the cookie doubles as the CSRF token.
+ */
+export async function sendDanmaku(locator, text, progressSec = 0) {
+  if (!authCookie) throw new Error('NOT_LOGGED_IN');
+  const { bvid, page = 1 } = locator.opaque_payload;
+  const pages = await api(`/x/player/pagelist?bvid=${bvid}`);
+  const entry = pages[Math.min(page, pages.length) - 1];
+  if (!entry) throw new Error('PAGE_NOT_FOUND');
+  let aid = entry.aid;
+  if (!aid) {
+    const v = await api(`/x/web-interface/view?bvid=${bvid}`);
+    aid = v.aid;
+  }
+  const csrf = /bili_jct=([^;]+)/.exec(authCookie)?.[1];
+  if (!csrf) throw new Error('NO_CSRF');
+  const body = new URLSearchParams({
+    type: '1',
+    oid: String(entry.cid),
+    aid: String(aid || ''),
+    bvid,
+    msg: text,
+    progress: String(Math.floor(progressSec * 1000)),
+    color: '16777215',
+    fontsize: '25',
+    mode: '1',
+    rnd: String(Math.floor(Date.now() / 1000)),
+    csrf,
+  });
+  const r = await fetch('https://api.bilibili.com/x/v2/dm/post', {
+    method: 'POST',
+    headers: {
+      'User-Agent': UA,
+      Referer: `https://www.bilibili.com/video/${bvid}`,
+      Cookie: authCookie,
+      'content-type': 'application/x-www-form-urlencoded',
+    },
+    body,
+  }).then((x) => x.json());
+  if (r.code !== 0) throw new Error(`DM_POST ${r.code} ${r.message || ''}`);
+  return { ok: true };
+}
+
+/**
  * Fetch one subtitle track's cue list: [{from,to,content}].
  */
 export async function subtitleCues(url) {

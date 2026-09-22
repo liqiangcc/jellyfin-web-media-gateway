@@ -14,6 +14,7 @@ import {
   subtitles,
   subtitleCues,
   navigation,
+  sendDanmaku,
   qrLoginStart,
   qrLoginPoll,
   setAuthCookie,
@@ -138,6 +139,7 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
   <div class="row"><span class="lbl">音量</span><div class="opts"><button data-vd="-0.1">−</button><button id="vmute">🔇</button><button data-vd="0.1">＋</button></div></div>
   <div class="row"><span class="lbl">弹幕</span><div class="opts"><button id="dmt" class="on">开</button></div>
     <span class="opts" style="margin-left:auto"><button id="tstop" style="color:#ff8fa3">■ 停止</button></span></div>
+  <div class="row" id="dmrow"><input id="dminput" type="text" maxlength="100" placeholder="发条弹幕…" style="flex:1"><button class="primary" id="dmsend">发送</button></div>
   <div class="section" id="relsec" style="display:none">相关推荐</div>
   <div id="rel" class="list"></div>
 </div>
@@ -207,6 +209,16 @@ async function renderSession(j){
     cmd('seek',Math.floor((e.clientX-r.left)/r.width*x.dur));
     setTimeout(pollPos,800);
   };
+  // 发弹幕
+  const sendDm=async()=>{
+    const t=document.getElementById('dminput').value.trim();if(!t)return;
+    const r=await fetch('/api/session/'+j.session_id+'/senddm',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:t})});
+    const x=await r.json().catch(()=>({}));
+    out.textContent=r.ok?'弹幕已发送':'发送失败: '+(x.error||r.status);
+    if(r.ok)document.getElementById('dminput').value='';
+  };
+  document.getElementById('dmsend').onclick=sendDm;
+  document.getElementById('dminput').addEventListener('keydown',e=>{if(e.key==='Enter')sendDm()});
   // 弹幕开关
   document.getElementById('dmt').onclick=async()=>{
     const x=await st();const on=x?x.dm_on===false:true;
@@ -223,10 +235,11 @@ async function renderSession(j){
     document.getElementById('sess').style.display='none';
     out.textContent='已停止';
   };
-  // 直播：隐藏进度条和 seek 按钮
+  // 直播：隐藏进度条和 seek 按钮 + 弹幕输入
   const live=j.media_mode==='hls-live';
   document.querySelector('.prog').style.display=live?'none':'';
   document.querySelector('.ptimes').style.display=live?'none':'';
+  document.getElementById('dmrow').style.display=live?'none':'';
   document.getElementById('tback').style.display=live?'none':'';
   document.getElementById('tfwd').style.display=live?'none':'';
   document.getElementById('tprev').style.display=live?'none':'';
@@ -406,6 +419,14 @@ const bufEl=document.getElementById('buf');
 v.addEventListener('waiting',()=>bufEl.classList.add('on'));
 v.addEventListener('playing',()=>bufEl.classList.remove('on'));
 v.addEventListener('canplay',()=>bufEl.classList.remove('on'));
+// 播放错误自动重试一次
+let errRetried=false;
+v.addEventListener('error',()=>{
+  if(!v.src||errRetried)return;
+  errRetried=true;flash('播放出错，重试中…');
+  setTimeout(()=>{v.load();v.play().catch(()=>{})},1500);
+});
+v.addEventListener('playing',()=>{errRetried=false});
 // 播完自动连播下一集（BV 分 P 场景）
 v.addEventListener('ended',async()=>{
   if(!sid)return;
@@ -894,6 +915,31 @@ setInterval(async()=>{
         s.paused = paused;
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ ok: true }));
+      }
+      // Send a danmaku from control at the display's current position.
+      const sendDm = /^\/api\/session\/([\w-]+)\/senddm$/.exec(url.pathname);
+      if (sendDm && req.method === 'POST') {
+        const s = getSession(sendDm[1]);
+        if (!s) {
+          res.writeHead(404);
+          return res.end('no session');
+        }
+        let raw = '';
+        for await (const c of req) raw += c;
+        const { text } = JSON.parse(raw || '{}');
+        try {
+          await sendDanmaku(
+            s.current_item.source_locator,
+            String(text || '').slice(0, 100),
+            s.pos || 0,
+          );
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ ok: true }));
+        } catch (e) {
+          res.writeHead(400, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ error: String(e.message || e) }));
+        }
+        return;
       }
       // Volume: {vol 0..1} or {delta}; display applies to v.volume.
       const volSel = /^\/api\/session\/([\w-]+)\/vol$/.exec(url.pathname);
