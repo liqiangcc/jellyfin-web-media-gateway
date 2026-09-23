@@ -1285,6 +1285,21 @@ setInterval(async()=>{
         res.writeHead(200, { 'content-type': 'application/json' });
         return res.end(JSON.stringify(nav));
       }
+      const epsMatch = /^\/api\/session\/([\w-]+)\/episodes$/.exec(url.pathname);
+      if (epsMatch && req.method === 'GET') {
+        const s = getSession(epsMatch[1]);
+        const site = SITES[s?.current_item.source_locator?.site_id];
+        if (!s || !site?.episodes) {
+          res.writeHead(404);
+          return res.end('no session/episodes');
+        }
+        const eps =
+          s.current_item.resolved_media?.episodes?.length
+            ? s.current_item.resolved_media.episodes
+            : await site.episodes(s.current_item.source_locator).catch(() => []);
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify(eps));
+      }
       const subsMatch = /^\/api\/session\/([\w-]+)\/subs$/.exec(url.pathname);
       if (subsMatch && req.method === 'GET') {
         const s = getSession(subsMatch[1]);

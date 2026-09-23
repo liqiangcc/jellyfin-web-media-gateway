@@ -64,12 +64,23 @@ async function pickMirror(urls) {
 
 export async function resolve(locator, { prefer = {} } = {}) {
   const { vid, cid } = locator.opaque_payload;
-  const vinfo = await evalInPage(
+  const bundle = await evalInPage(
     PAGE(vid, cid),
     'typeof window.__VINFO_DATA__==="object"&&!!window.__VINFO_DATA__.proxyhttp',
-    `window.__VINFO_DATA__.proxyhttp.vinfo`,
+    `JSON.stringify({v:window.__VINFO_DATA__.proxyhttp.vinfo,cid:window.__VINFO_DATA__.coverInfo?.cid||"",eps:window.__VINFO_DATA__.coverInfo?.video_ids||[]})`,
     30000,
   );
+  const meta = (() => {
+    try {
+      return JSON.parse(bundle || '{}');
+    } catch {
+      return {};
+    }
+  })();
+  const vinfo = meta.v;
+  // Backfill cid into the locator so episodes() works for /x/page/ links.
+  if (meta.cid && !locator.opaque_payload.cid)
+    locator.opaque_payload.cid = meta.cid;
   if (!vinfo || typeof vinfo !== 'string')
     throw Object.assign(new Error('BROWSER_BLOCKED'), { code: 'BROWSER_BLOCKED' });
   const d = JSON.parse(vinfo);
@@ -115,6 +126,15 @@ export async function resolve(locator, { prefer = {} } = {}) {
     stream_idx: 0,
     streams,
     quality_options: streams.map((s) => ({ qn: s.height, label: `${s.height}p` })),
+    // coverInfo.video_ids is the full ordered episode list for the
+    // show (all 186 verified) — stashed so /api/session/episodes is a
+    // lookup, not another page load.
+    episodes: (meta.eps || []).map((v, i) => ({
+      vid: v,
+      cid: meta.cid || cid || '',
+      ep: i + 1,
+      title: `${i + 1}`,
+    })),
   };
 }
 
@@ -171,6 +191,79 @@ export async function search(keyword, { limit = 20 } = {}) {
     });
   }
   return hits.slice(0, limit);
+}
+
+/**
+ * Episode list — trpc.vector_layout.page_view.PageService/getPage.
+ * Plain POST, no signing — but the page_params field set is strict:
+ * removing any of the captured fields returns an empty CardList, so
+ * we replay the full set with only cid/vid swapped in.
+ * Episodes live in CardList[type=pc_web_episode_list].children_list
+ * → cards[].params {id, c_title_output(ep#), duration}.
+ */
+export async function episodes(locator) {
+  const { vid, cid } = locator.opaque_payload;
+  const r = await fetch(
+    'https://pbaccess.video.qq.com/trpc.vector_layout.page_view.PageService/getPage?vplatform=2',
+    {
+      method: 'POST',
+      headers: {
+        'User-Agent': UA,
+        'content-type': 'application/json',
+        origin: 'https://v.qq.com',
+        referer: 'https://v.qq.com/',
+      },
+      body: JSON.stringify({
+        page_params: {
+          ad_wechat_authorization_status: '0',
+          req_from: 'web_vsite',
+          ad_exp_ids: '',
+          pc_sdk_version: '',
+          pc_oaid: '',
+          new_mark_label_enabled: '1',
+          pc_device_info: '',
+          support_pc_yyb_mobile_app_engine: '0',
+          pc_wegame_version: '',
+          cid: cid || '',
+          history_vid: '',
+          vid,
+          is_pc_new_detail_page: '1',
+          is_from_web_flyflow: '1',
+          lid: '',
+        },
+        page_bypass_params: {
+          params: { caller_id: '3000010', platform_id: '2' },
+          scene: 'desk_detail',
+          app_version: '',
+          abtest_bypass_id: '86102e9dbb915b07',
+        },
+        page_context: {},
+      }),
+    },
+  );
+  const d = await r.json();
+  const eps = [];
+  for (const c of d?.data?.CardList || []) {
+    if (c.type !== 'pc_web_episode_list') continue;
+    for (const ch of Object.values(c.children_list || {})) {
+      for (const card of ch.cards || []) {
+        const p = card.params || {};
+        const id = card.id || p.cid;
+        const ep = p.c_title_output;
+        if (!id || !ep) continue;
+        eps.push({
+          vid: id,
+          cid,
+          ep: Number(ep) || ep,
+          title: `${ep}`,
+          img: p.image_url || '',
+          duration: p.duration || '',
+        });
+      }
+    }
+  }
+  eps.sort((a, b) => (Number(a.ep) || 0) - (Number(b.ep) || 0));
+  return eps;
 }
 
 export async function danmaku(locator, { mats = [0, 1, 2] } = {}) {
