@@ -97,28 +97,35 @@ export async function resolve(locator, { prefer = {} } = {}) {
 /**
  * Danmaku via the page's own mtop signer — mopen.youku.danmu.list is
  * called inside the loaded show page so lib.mtop.request produces a
- * valid sign. mat is a per-minute bucket; we fetch the first N
- * minutes (bounded — long videos stream the rest later).
+ * valid sign.
+ * Lazy by design: caller passes the mat (per-minute) buckets it needs
+ * so call volume tracks playhead like the real player, not a
+ * full-video crawl (mtop has anti-flood; bulk pulls get the egress IP
+ * throttled).
  */
-export async function danmaku(locator, { maxMin = 30 } = {}) {
+export const lazy_danmaku = true;
+export async function danmaku(locator, { mats = [0, 1, 2] } = {}) {
   const vid = locator.opaque_payload.vid;
   const expr = `(async()=>{
     const out=[];
-    for(let mat=0;mat<${maxMin};mat++){
+    for(const mat of ${JSON.stringify(mats)}){
       try{
         const d=await lib.mtop.request({api:"mopen.youku.danmu.list",v:"1.0",data:{pid:0,ctype:10004,vid:${JSON.stringify(vid)},mat,mcount:1,type:1}});
         const inner=JSON.parse(d?.data?.result||"{}");
         const list=inner?.data?.result||[];
-        if(!list.length) break;
         for(const it of list){
           const props=typeof it.propertis==="string"?JSON.parse(it.propertis):(it.propertis||{});
-          out.push({time_ms:Math.round(Number(it.playat||0)*1000),text:it.content||"",color:props.color?("#"+Number(props.color).toString(16).padStart(6,"0")):"#ffffff",mode:1});
+          const t=Number(it.playat||0);
+          const text=String(it.content||"").trim();
+          if(Number.isFinite(t)&&text)
+            out.push({t,mode:1,color:Number(props.color)||16777215,text});
         }
+        await new Promise(r=>setTimeout(r,200+Math.random()*300));
       }catch(e){break}
     }
     return out;
   })()`;
-  const list = await evalInPage(SHOW(vid), 'typeof lib!=="undefined"&&!!lib.mtop', expr, 20000);
+  const list = await evalInPage(SHOW(vid), 'typeof lib!=="undefined"&&!!lib.mtop', expr, 30000);
   return Array.isArray(list) ? list : [];
 }
 

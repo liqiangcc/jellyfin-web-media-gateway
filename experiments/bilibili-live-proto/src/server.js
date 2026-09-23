@@ -640,7 +640,7 @@ setInterval(async()=>{
       cur=j.session.session_id+'|'+j.session.media_url;
       if(hls){hls.destroy();hls=null}
       pool=[];pidx=0;dm.innerHTML='';laneFree.length=0;topFree.length=0;botFree.length=0;
-      fetch('/dm/'+j.session.session_id).then(r=>r.json()).then(l=>{pool=l;pidx=0}).catch(()=>{});
+      fetch('/dm/'+j.session.session_id+'?m='+Math.floor((v.currentTime||0)/60)).then(r=>r.json()).then(l=>{pool=l;pidx=0}).catch(()=>{});
       // Load subtitle cues if control picked a track.
       cuesUrl=j.session.subtitle_url;
       if(cuesUrl){
@@ -689,8 +689,8 @@ setInterval(()=>{
 },2000);
 // Re-fetch the danmaku pool every 60s so newly-posted ones appear.
 setInterval(()=>{
-  if(!sid||!pool.length)return;
-  fetch('/dm/'+sid).then(r=>r.json()).then(l=>{
+  if(!sid)return;
+  fetch('/dm/'+sid+'?m='+Math.floor((v.currentTime||0)/60)).then(r=>r.json()).then(l=>{
     const t=v.currentTime;
     pool=l;pidx=pool.findIndex(d=>d.t>t);if(pidx<0)pidx=pool.length;
   }).catch(()=>{});
@@ -1198,6 +1198,24 @@ setInterval(async()=>{
           return res.end('no session');
         }
         const site = SITES[s.current_item.source_locator?.site_id];
+        if (site?.lazy_danmaku) {
+          // Per-minute lazy pull: fetch only mats not yet fetched,
+          // up to current playhead minute + 2min lookahead.
+          const cur = Math.max(0, Number(url.searchParams.get('m') || 0));
+          if (!s.dm_lazy) s.dm_lazy = { pool: [], fetched: -1 };
+          const laz = s.dm_lazy;
+          const want = [];
+          for (let m = laz.fetched + 1; m <= cur + 2 && want.length < 6; m++)
+            want.push(m);
+          if (want.length) {
+            const got = await site.danmaku(s.current_item.source_locator, { mats: want }).catch(() => []);
+            for (const it of got) laz.pool.push(it);
+            laz.fetched = want[want.length - 1];
+            laz.pool.sort((a, b) => a.t - b.t);
+          }
+          res.writeHead(200, { 'content-type': 'application/json' });
+          return res.end(JSON.stringify(laz.pool));
+        }
         const list = site?.danmaku
           ? await site.danmaku(s.current_item.source_locator)
           : await danmaku(s.current_item.source_locator);
