@@ -173,8 +173,48 @@ v.youku.com/v_show/id_<vid>.html
 
 - [x] 实现 youku adapter（recognize `id_*.html` + browser-driven resolve）
 - [x] 弹幕协议（`mopen.youku.danmu.list` mtop，页内 `lib.mtop.request` 代签，按 mat 分钟桶懒拉）
+- [x] 弹幕改为纯 HTTP mtop（见下）——浏览器不再需要
 - [ ] 登录/VIP 链路
 - [ ] 搜索（`yksearch` 只给热搜榜，`so.youku.com` 全线 punish——真结果不可达）
+- [ ] 选集（`columbus` 需要 `ms_codes` 内部模块码，页面被风控时无法获取）
+
+### 第三轮补充：纯 HTTP mtop 签名突破 (2026-09-23)
+
+**关键发现**：mtop API 网关（`acs.youku.com`/`un-acs.youku.com`）不受 IP 风控影响——只有 HTML 页面被 rgv587 拦截。
+
+```
+_m_h5_tk cookie (任何 mtop 响应 set-cookie 获取)
++ md5(token & timestamp & appKey & data) = sign
+→ 所有 mtop API 纯 HTTP 可达
+```
+
+| API | 纯 HTTP | 浏览器 | 说明 |
+|---|---|---|---|
+| `danmu.list` | ✅ 719条实测 | 之前也能用 | `{t,mode,color,text}` 对齐 bilibili 格式 |
+| `yksearch` | ✅ 热搜榜 | 之前也能用 | `encodeShowId` → `v_nextstage` → vid |
+| `ups.appinfo.get` | ❌ UNKNOWN_FAIL | 必需 | `steal_params.ckey` 是独立签名层 |
+| `columbus.*` | ⚠️ 需 ms_codes | 未知 | 内部模块码，页面加载时发出 |
+| `danmu.common.profile` | ✅ | - | 弹幕配置 + `groupListUrl` |
+| `passport.youku.com` | ❌ 000 | - | 登录入口完全不可达 |
+
+**弹幕字段结构**（`mopen.youku.danmu.list` 实测）：
+```json
+{
+  "playat": 0,           // 秒
+  "content": "弹幕文本",
+  "propertis": "{\"size\":2,\"color\":16432790,\"pos\":3,\"alpha\":1}",
+  "mat": 0,              // 分钟桶
+  "type": 1
+}
+```
+`pos` 映射：3=滚动弹幕（mode 1），4=顶部固定（mode 5），0=默认。
+
+**`__PAGE_CONF__` 可用字段**（纯 HTTP 页面 HTML 内嵌）：
+- `title`/`desc`/`shareImg`/`seconds` — 元数据
+- `showVideostage` — 当前集数
+- `videoId` — 当前 vid
+- `showId`/`showid` — 剧集 ID
+- `defaultCkey`/`ikuDefaultCkey` — ckey 但格式不匹配 `steal_params`（需确认用途）
 
 ## 第三轮：腾讯视频 (2026-09-23)
 
