@@ -171,7 +171,51 @@ v.youku.com/v_show/id_<vid>.html
 
 ### 待办
 
-- [ ] 实现 youku adapter（recognize `id_*.html` + browser-driven resolve）
-- [ ] 弹幕协议（优酷弹幕是不同格式，需探）
+- [x] 实现 youku adapter（recognize `id_*.html` + browser-driven resolve）
+- [x] 弹幕协议（`mopen.youku.danmu.list` mtop，页内 `lib.mtop.request` 代签，按 mat 分钟桶懒拉）
 - [ ] 登录/VIP 链路
-- [ ] 搜索
+- [ ] 搜索（`yksearch` 只给热搜榜，`so.youku.com` 全线 punish——真结果不可达）
+
+## 第三轮：腾讯视频 (2026-09-23)
+
+对比验证第三个站点，证明多站点架构泛化。
+
+### 腾讯视频 vs B站 vs 优酷
+
+| 维度 | B 站 | 优酷 | 腾讯视频 |
+|---|---|---|---|
+| **播放页** | VM/ECS 全通 | VM 拦/ECS 通（现限流冷却中） | VM/ECS 全通 |
+| **取流协议** | `playurl` 纯 GET | mtop 签名 | `vinfo_proxy` POST + **加密响应** |
+| **签名** | 无 | mtop sign + ckey | 响应加密（页面 JS 解密） |
+| **清晰度** | qn 数字档 | stream[] 数组 | `fl.fi[]` 格式表（480p/720p/1080p/4K） |
+| **流格式** | MP4/DASH | HLS m3u8 | HLS m3u8 |
+| **CDN** | bilivideo.com | cibntv.net | smtcdns/apdcdn.tc.qq.com |
+| **弹幕** | XML API | mtop `danmu.list` | trpc `pbaccess.video.qq.com` |
+| **选集** | pagelist | 未探 | `getPage` trpc（CardList 含剧集模块） |
+
+### 实测验证（ECS）
+
+```
+✅ v.qq.com 页面加载 → __VINFO_DATA__ 可 evalInPage 提取
+✅ vinfo_proxy POST → proxyhttp.vinfo 加密载荷 → 页面解密后
+   {"dltype":8,"fl":{"fi":[hd/shd/fhd/uhd]},"vl":{"vi":[{ul:{ui:[4个CDN]}}]}}
+✅ CDN apd-vlive.apdcdn.tc.qq.com → m3u8 playlist → 段 200（908KB TS）
+⚠️ smtcdns.com CDN 对 ECS TLS 层拒绝（只 apdcdn 通）——需 CDN 镜像降级
+```
+
+### 架构含义
+
+**第三种站点形态**：
+- B 站 = API-first（无签名，浏览器只在搜索降级）
+- 优酷 = Browser-first（mtop 签名 + IP 风控）
+- 腾讯 = **Encrypted-response**（API 可发但响应加密，解密在页面 JS 内）
+
+取流路径：`captureResponse(vinfo_proxy)` 不行（响应加密）→ 必须 `evalInPage` 读 `__VINFO_DATA__`（页面自己解密的）。这比优酷还依赖浏览器——但页面不被风控，所以更稳定。
+
+### 待办
+
+- [ ] 实现 tencent adapter（`v.qq.com/x/cover/...` → evalInPage 读 `__VINFO_DATA__`）
+- [ ] CDN 镜像降级（smtcdns TLS 拒 → 遍历 ul.ui 找能通的）
+- [ ] 弹幕 trpc 协议（`pbaccess.video.qq.com/trpc.danmu.*`）
+- [ ] 搜索（v.qq.com/x/search/ 是否 punish 未探）
+- [ ] VIP 内容（加密 vinfo 对 VIP 内容可能返回 DRM 流）
