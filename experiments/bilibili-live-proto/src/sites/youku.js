@@ -153,12 +153,45 @@ export const lazy_danmaku = true;
 
 /**
  * Episode list — the mobile page's SSR `__INITIAL_DATA__` embeds the
- * "h5-detail-anthology" component with up to ~50 episodes:
+ * "h5-detail-anthology" component with a ~50-80 episode window centered
+ * on the current vid:
  *   dataNode[].data { stage(ep#), title, img, action.value=vid }
  * Pure HTTP — m.youku.com is not rgv587-punished.
+ * For long shows the window shifts with the current episode, so we
+ * walk: fetch the last episode's mobile page → its window covers the
+ * next range → merge until no new stages appear (cap 4 fetches).
  */
 export async function episodes(locator) {
-  const vid = await vidOf(locator);
+  const first = await vidOf(locator);
+  const seen = new Map(); // stage → episode
+  let vid = first;
+  for (let hop = 0; hop < 6; hop++) {
+    const batch = await anthologyOf(vid);
+    let added = 0;
+    for (const e of batch) {
+      const key = String(e.ep);
+      if (!seen.has(key)) { seen.set(key, e); added++; }
+    }
+    // Stop when a hop yields no new episodes (window fully covered).
+    if (!added) break;
+    // Jump to the numerically-last known episode to slide the window.
+    const numeric = [...seen.values()].filter((e) => Number.isFinite(e.ep));
+    const last = numeric.sort((a, b) => a.ep - b.ep).pop();
+    if (!last || last.vid === vid) break;
+    vid = last.vid;
+  }
+  const out = [...seen.values()];
+  out.sort((a, b) => {
+    const an = Number(a.ep), bn = Number(b.ep);
+    return Number.isFinite(an) && Number.isFinite(bn)
+      ? an - bn
+      : String(a.ep).localeCompare(String(b.ep));
+  });
+  return out;
+}
+
+/** Fetch one mobile play page and extract its anthology window. */
+async function anthologyOf(vid) {
   const r = await fetch(MOBILE_SHOW(vid), {
     headers: { 'User-Agent': MOBILE_UA },
   });
@@ -166,7 +199,6 @@ export async function episodes(locator) {
   const i = html.indexOf('__INITIAL_DATA__');
   if (i < 0) return [];
   const j = html.indexOf('{', i);
-  // Brace-match the JSON object (strings may contain braces).
   let depth = 0, end = j, inStr = false, esc = false;
   for (let k = j; k < html.length; k++) {
     const c = html[k];
@@ -198,7 +230,6 @@ export async function episodes(locator) {
       });
     }
   }
-  eps.sort((a, b) => a.ep - b.ep);
   return eps;
 }
 
