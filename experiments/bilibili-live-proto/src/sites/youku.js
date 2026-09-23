@@ -14,14 +14,26 @@ import { captureResponse, evalInPage } from '../browser.js';
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36';
 
-/** v.youku.com/v_show/id_<vid>.html | m.youku.com/video/id_<vid>.html */
+/** v.youku.com/v_show/id_<vid>.html | m.youku.com/video/id_<vid>.html | youku:vid:<vid> | youku:show:<encodeShowId> */
 export function recognize(source) {
   const m =
     /v\.youku\.com\/v_show\/id_([A-Za-z0-9=]+)/i.exec(source) ||
     /m\.youku\.com\/(?:mid_)?video\/id_([A-Za-z0-9=]+)/i.exec(source) ||
-    /^youku:(vid:[A-Za-z0-9=]+)$/i.exec(source);
+    /^youku:(vid:[A-Za-z0-9=]+|show:[A-Za-z0-9=]+)$/i.exec(source);
   if (!m) return { matched: false };
-  const vid = m[1].startsWith('vid:') ? m[1].slice(4) : m[1];
+  const raw = m[1];
+  if (raw.startsWith('show:')) {
+    return {
+      matched: true,
+      site_id: 'youku',
+      locator: {
+        site_id: 'youku',
+        locator_version: 1,
+        opaque_payload: { showId: raw.slice(5) },
+      },
+    };
+  }
+  const vid = raw.startsWith('vid:') ? raw.slice(4) : raw;
   return {
     matched: true,
     site_id: 'youku',
@@ -35,13 +47,25 @@ export function recognize(source) {
 
 const SHOW = (vid) => `https://v.youku.com/v_show/id_${vid}.html`;
 
+/** vid or showId → vid (via v_nextstage redirect). */
+async function vidOf(locator) {
+  if (locator.opaque_payload.vid) return locator.opaque_payload.vid;
+  const r = await fetch(
+    `https://v.youku.com/v_nextstage/id_${locator.opaque_payload.showId}.html`,
+    { headers: { 'User-Agent': UA }, redirect: 'follow' },
+  );
+  const m = /id_([A-Za-z0-9=]+)\.html/.exec(r.url);
+  if (!m) throw new Error('SHOW_RESOLVE_FAILED');
+  return m[1];
+}
+
 /**
  * Resolve a youku vid to m3u8 ladders by letting a real headless Chrome
  * load the show page and capturing the player's own ups.appinfo.get
  * response — the mtop signature is computed by the site JS itself.
  */
 export async function resolve(locator, { prefer = {} } = {}) {
-  const vid = locator.opaque_payload.vid;
+  const vid = await vidOf(locator);
   const body = await captureResponse(SHOW(vid), /ups\.appinfo\.get/, 25000);
   if (!body) throw Object.assign(new Error('BROWSER_BLOCKED'), { code: 'BROWSER_BLOCKED' });
   // Strip the mtopjsonpN(...) wrapper.
@@ -104,55 +128,125 @@ export async function resolve(locator, { prefer = {} } = {}) {
  * throttled).
  */
 export const lazy_danmaku = true;
-export async function danmaku(locator, { mats = [0, 1, 2] } = {}) {
-  const vid = locator.opaque_payload.vid;
-  const expr = `(async()=>{
-    const out=[];
-    for(const mat of ${JSON.stringify(mats)}){
-      try{
-        const d=await lib.mtop.request({api:"mopen.youku.danmu.list",v:"1.0",data:{pid:0,ctype:10004,vid:${JSON.stringify(vid)},mat,mcount:1,type:1}});
-        const inner=JSON.parse(d?.data?.result||"{}");
-        const list=inner?.data?.result||[];
-        for(const it of list){
-          const props=typeof it.propertis==="string"?JSON.parse(it.propertis):(it.propertis||{});
-          const t=Number(it.playat||0);
-          const text=String(it.content||"").trim();
-          if(Number.isFinite(t)&&text)
-            out.push({t,mode:1,color:Number(props.color)||16777215,text});
-        }
-        await new Promise(r=>setTimeout(r,200+Math.random()*300));
-      }catch(e){break}
+
+// --- pure-HTTP mtop signing ---
+// _m_h5_tk cookie + md5(token&t&appKey&data) = sign. No browser needed
+// for API calls — only the initial play-page resolve needs Chrome
+// (steal_params.ckey lives in page JS, not mtop).
+
+const MTOP_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36';
+const MTOP_APPKEY = '23774304';
+let _mtopTk = null;
+let _mtopTkEnc = null;
+
+async function mtopTk() {
+  if (_mtopTk) return;
+  const r = await fetch(
+    `https://acs.youku.com/h5/mtop.youku.danmu.common.profile/1.0/?jsv=2.6.1&appKey=${MTOP_APPKEY}&t=1&sign=x&api=x&v=1.0&type=originaljson&data=%7B%7D`,
+    { headers: { 'User-Agent': MTOP_UA, Referer: 'https://v.youku.com/' } },
+  );
+  const cookies = r.headers.getSetCookie?.() || [];
+  for (const c of cookies) {
+    const m = c.match(/^(_m_h5_tk|_m_h5_tk_enc)=([^;]+)/);
+    if (m) {
+      if (m[1] === '_m_h5_tk') _mtopTk = m[2];
+      else _mtopTkEnc = m[2];
     }
-    return out;
-  })()`;
-  const list = await evalInPage(SHOW(vid), 'typeof lib!=="undefined"&&!!lib.mtop', expr, 30000);
-  return Array.isArray(list) ? list : [];
+  }
+}
+
+async function mtop(api, v, data) {
+  await mtopTk();
+  const t = String(Date.now());
+  const ds = JSON.stringify(data);
+  const { createHash } = await import('node:crypto');
+  const sign = createHash('md5')
+    .update(`${_mtopTk.split('_')[0]}&${t}&${MTOP_APPKEY}&${ds}`)
+    .digest('hex');
+  const url =
+    `https://acs.youku.com/h5/${api}/${v}/?jsv=2.6.1&appKey=${MTOP_APPKEY}` +
+    `&t=${t}&sign=${sign}&api=${api}&v=${v}&type=originaljson&data=${encodeURIComponent(ds)}`;
+  const r = await fetch(url, {
+    headers: {
+      'User-Agent': MTOP_UA,
+      Referer: 'https://v.youku.com/',
+      Cookie: `_m_h5_tk=${_mtopTk};_m_h5_tk_enc=${_mtopTkEnc}`,
+    },
+  });
+  return r.json();
 }
 
 /**
- * Search via yksearch — the real-result variant is appScene=default_page
- * + searchFrom=search (other scenes return only hot-keyword suggestions
- * or FAIL_BIZ_EMPTY_RESULT). Extracts leaf nodes carrying a playable id.
+ * Danmaku — pure HTTP via mtop signing. mat is a per-minute bucket;
+ * lazy caller passes which buckets to fetch so call volume tracks
+ * playhead like the real player.
+ */
+export async function danmaku(locator, { mats = [0, 1, 2] } = {}) {
+  const vid = await vidOf(locator);
+  const out = [];
+  for (const mat of mats) {
+    try {
+      const d = await mtop('mopen.youku.danmu.list', '1.0', {
+        pid: 0, ctype: 10004, vid, mat, mcount: 1, type: 1,
+      });
+      const inner = JSON.parse(d?.data?.result || '{}');
+      const items = inner?.data?.result || [];
+      for (const it of items) {
+        const props =
+          typeof it.propertis === 'string'
+            ? JSON.parse(it.propertis)
+            : it.propertis || {};
+        const t = Number(it.playat || 0);
+        const text = String(it.content || '').trim();
+        if (Number.isFinite(t) && text)
+          out.push({
+            t,
+            // pos: 3=scroll 4=top 0=default; map to bilibili mode
+            mode: props.pos === 4 ? 5 : 1,
+            color: Number(props.color) || 16777215,
+            text,
+          });
+      }
+      await new Promise((r) => setTimeout(r, 150 + Math.random() * 200));
+    } catch {
+      break;
+    }
+  }
+  return out;
+}
+
+/**
+ * Search — yksearch only exposes the hot-keyword board (default_page);
+ * real keyword search requires so.youku.com which is rgv587-punished.
+ * Returns hot-search items with encodeShowId (playable via v_nextstage).
  */
 export async function search(keyword, { limit = 20 } = {}) {
-  const expr = `(async()=>{
-    const d=await lib.mtop.request({api:"mtop.youku.soku.yksearch",v:"2.0",data:{keyword:${JSON.stringify(keyword)},pg:1,pz:${limit},appScene:"default_page",appCaller:"youku-search-sdk",searchFrom:"search",sdkver:314,pcKuFlixMode:1}});
-    const hits=[];
-    const walk=(o)=>{
-      if(!o||typeof o!=="object")return;
-      const vid=o.vid||o.encodeVid||o.encodeShowId;
-      const title=o.title||o.mainTitle||o.showTitle;
-      if(vid&&title&&!o.rank)hits.push({vid:String(vid),title:String(title).replace(/<[^>]+>/g,""),img:o.posterImage||o.img||"",duration:o.duration||o.seconds||"",mark:o.displayMark||o.videoInfo||""});
-      for(const v of Object.values(o))walk(v);
-    };
-    walk(d.data);
-    return hits.slice(0,${limit});
-  })()`;
-  const list = await evalInPage(
-    SHOW('XNjQ3MzY2MzkyNA=='),
-    'typeof lib!=="undefined"&&!!lib.mtop',
-    expr,
-    25000,
-  );
-  return Array.isArray(list) ? list : [];
+  const d = await mtop('mtop.youku.soku.yksearch', '2.0', {
+    keyword: keyword || '',
+    pg: 1,
+    pz: limit,
+    appScene: 'default_page',
+    appCaller: 'youku-search-sdk',
+    searchFrom: 'search',
+    sdkver: 314,
+    pcKuFlixMode: 1,
+  });
+  const hits = [];
+  const walk = (o) => {
+    if (!o || typeof o !== 'object') return;
+    const sid = o.encodeShowId || o.showId;
+    const title = o.title || o.mainTitle || o.showTitle;
+    if (sid && title)
+      hits.push({
+        vid: `show:${sid}`,
+        title: String(title).replace(/<[^>]+>/g, ''),
+        img: o.posterImage || o.img || o.poster || '',
+        duration: o.duration || o.seconds || '',
+        mark: `热搜${o.rank ? ' #' + o.rank : ''}`,
+      });
+    for (const v of Object.values(o)) walk(v);
+  };
+  walk(d?.data);
+  return hits.slice(0, limit);
 }
