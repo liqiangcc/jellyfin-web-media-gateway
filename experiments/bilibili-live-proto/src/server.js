@@ -2,6 +2,8 @@
 // framework, no build step. Bind to the tailnet IP only.
 
 import http from 'node:http';
+import { pipeline } from 'node:stream/promises';
+import { Readable } from 'node:stream';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
@@ -812,8 +814,18 @@ if (process.env.PROTO_RELAY === '1') {
         const r = await fetch(u, { headers: { 'User-Agent': 'Mozilla/5.0' } });
         res.writeHead(r.status, {
           'content-type': r.headers.get('content-type') || 'video/mp2t',
+          ...(r.headers.get('content-length')
+            ? { 'content-length': r.headers.get('content-length') }
+            : {}),
         });
-        res.end(Buffer.from(await r.arrayBuffer()));
+        if (!r.body) return res.end();
+        try {
+          await pipeline(Readable.fromWeb(r.body), res);
+        } catch {
+          /* client abort */
+        } finally {
+          r.body?.cancel().catch(() => {});
+        }
       } catch (e) {
         res.writeHead(502);
         res.end(String(e.message || e));
@@ -1089,7 +1101,15 @@ setInterval(async()=>{
         res.writeHead(img.status, {
           'content-type': img.headers.get('content-type') || 'image/jpeg',
         });
-        return res.end(Buffer.from(await img.arrayBuffer()));
+        if (!img.body) return res.end();
+        try {
+          await pipeline(Readable.fromWeb(img.body), res);
+        } catch {
+          /* client abort */
+        } finally {
+          img.body?.cancel().catch(() => {});
+        }
+        return;
       }
       const livepl = /^\/livepl\/([\w-]+)\/index\.m3u8$/.exec(url.pathname);
       if (livepl && req.method === 'GET') {
@@ -1182,8 +1202,19 @@ setInterval(async()=>{
           );
           res.writeHead(r.status, {
             'content-type': r.headers.get('content-type') || 'video/mp2t',
+            ...(r.headers.get('content-length')
+              ? { 'content-length': r.headers.get('content-length') }
+              : {}),
           });
-          return res.end(Buffer.from(await r.arrayBuffer()));
+          if (!r.body) return res.end();
+          try {
+            await pipeline(Readable.fromWeb(r.body), res);
+          } catch {
+            /* client abort */
+          } finally {
+            r.body?.cancel().catch(() => {});
+          }
+          return;
         }
         return proxyStream(req, res, {
           url: u,
