@@ -26,11 +26,12 @@ import {
   loggedIn,
 } from './sites/bilibili.js';
 import * as youku from './sites/youku.js';
+import * as tencent from './sites/tencent.js';
 import { search } from './browser.js';
 
 // Site registry — recognize/resolve dispatch by site_id (proto mirror of
 // SiteAdapterRegistry: core routes, plugins own the semantics).
-const SITES = { bilibili: { recognize, resolve, danmaku }, youku };
+const SITES = { bilibili: { recognize, resolve, danmaku }, youku, tencent };
 function siteRecognize(source) {
   for (const s of Object.values(SITES)) {
     const r = s.recognize(source);
@@ -791,7 +792,7 @@ async function play(body) {
 // to known CDN hosts. Deploy on the node whose egress IP the site
 // credentials were resolved from (segments are IP-bound).
 if (process.env.PROTO_RELAY === '1') {
-  const RELAY_HOSTS = /\.(bilivideo\.com|cibntv\.net|youku\.com|hdslb\.com)$/;
+  const RELAY_HOSTS = /\.(bilivideo\.com|cibntv\.net|youku\.com|hdslb\.com|tc\.qq\.com|smtcdns\.com)$/;
   http
     .createServer(async (req, res) => {
       try {
@@ -1176,7 +1177,9 @@ setInterval(async()=>{
         !(
           /^[a-z0-9-]+\.bilivideo\.com$/.test(up.hostname) ||
           /\.cibntv\.net$/.test(up.hostname) ||
-          /\.youku\.com$/.test(up.hostname)
+          /\.youku\.com$/.test(up.hostname) ||
+          /\.tc\.qq\.com$/.test(up.hostname) ||
+          /\.smtcdns\.com$/.test(up.hostname)
         )
       ) {
         res.writeHead(403);
