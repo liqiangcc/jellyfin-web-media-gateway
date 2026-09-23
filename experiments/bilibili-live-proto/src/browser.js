@@ -141,6 +141,44 @@ export async function captureResponse(url, urlRe, waitMs = 25000) {
   }
 }
 
+/**
+ * Navigate a fresh tab to `url`, poll until `waitFor` is truthy (or
+ * waitMs elapses), then evaluate `expr` in page context and return the
+ * value. Used by browser-first sites that need the page's own JS
+ * (e.g. youku's lib.mtop.request which signs API calls).
+ */
+export async function evalInPage(url, waitFor, expr, waitMs = 20000) {
+  const tab = await fetch(`${CDP_HTTP}/json/new`, { method: 'PUT' }).then(
+    (r) => r.json(),
+  );
+  try {
+    const ws = await new Promise((res, rej) => {
+      const w = new WebSocket(tab.webSocketDebuggerUrl);
+      w.onopen = () => res(w);
+      w.onerror = () => rej(new Error('cdp ws failed'));
+    });
+    try {
+      await rpc(ws, 'Runtime.enable');
+      await rpc(ws, 'Page.enable');
+      await rpc(ws, 'Page.navigate', { url });
+      const deadline = Date.now() + waitMs;
+      while (Date.now() < deadline) {
+        try {
+          if (await evaluate(ws, waitFor)) break;
+        } catch {
+          /* navigation in flight */
+        }
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      return await evaluate(ws, expr);
+    } finally {
+      ws.close();
+    }
+  } finally {
+    await fetch(`${CDP_HTTP}/json/close/${tab.id}`).catch(() => {});
+  }
+}
+
 /** Search bilibili via the real search page; extract result cards. */
 export async function search(keyword, { limit = 12, cookies } = {}) {
   const url = `https://search.bilibili.com/all?keyword=${encodeURIComponent(keyword)}`;

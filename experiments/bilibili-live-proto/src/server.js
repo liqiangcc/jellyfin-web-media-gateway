@@ -176,7 +176,11 @@ button.on{background:#4a7dff;border-color:#4a7dff;color:#fff}
 </div>
 <pre id="out">就绪</pre>
 <form id="f"><input id="src" type="text" placeholder="粘贴 BV 链接 / 番剧 ep / 直播房号…"><button class="primary">播放</button></form>
-<form id="sf"><input id="q" type="search" placeholder="搜索 bilibili…"><button>搜索</button></form>
+<form id="sf"><input id="q" type="search" placeholder="搜索…"><button>搜索</button></form>
+<div class="chips" id="sitechips">
+  <button class="chip on" data-site="bilibili">B站</button>
+  <button class="chip" data-site="youku">优酷</button>
+</div>
 <div class="chips">
   <button class="chip" id="fav">⭐ 收藏夹</button>
   <button class="chip" id="hot">🔥 热门</button>
@@ -382,20 +386,26 @@ document.getElementById('sf').onsubmit=async e=>{
   e.preventDefault();
   results.innerHTML=skeleton(4);
   favlistClear();
+  const site=curSite;
   try{
-    const r=await fetch('/api/search?q='+encodeURIComponent(document.getElementById('q').value));
+    const r=await fetch('/api/search?q='+encodeURIComponent(document.getElementById('q').value)+'&site='+site);
     const list=await r.json();
     if(!r.ok)throw new Error(JSON.stringify(list));
     document.getElementById('sect').textContent='搜索结果';
     document.getElementById('sect').style.display='';
-    results.innerHTML=list.map(x=>'<div class="hit" data-bv="'+x.bvid+'"><div class="cov"><img src="'+x.cover+'" loading="lazy"></div><div><div class="t">'+x.title+'</div><div class="m">'+metaOf(x)+'</div></div></div>').join('')||'<div class="muted">无结果</div>';
-    results.querySelectorAll('.hit').forEach(el=>el.onclick=()=>playSource('https://www.bilibili.com/video/'+el.dataset.bv,0,el.querySelector('img')?.src));markPlaying();
+    results.innerHTML=list.map(x=>'<div class="hit" data-bv="'+(x.bvid||x.vid||'')+'" data-src="'+(x.source||'')+'"><div class="cov"><img src="'+x.cover+'" loading="lazy"></div><div><div class="t">'+x.title+'</div><div class="m">'+(x.mark||metaOf(x))+'</div></div></div>').join('')||'<div class="muted">无结果</div>';
+    results.querySelectorAll('.hit').forEach(el=>el.onclick=()=>playSource(el.dataset.src||('https://www.bilibili.com/video/'+el.dataset.bv),0,el.querySelector('img')?.src));markPlaying();
   }catch(err){results.textContent='ERR '+err}
 };
+let curSite='bilibili';
+document.querySelectorAll('#sitechips .chip').forEach(c=>c.onclick=()=>{
+  document.querySelectorAll('#sitechips .chip').forEach(x=>x.classList.remove('on'));
+  c.classList.add('on');curSite=c.dataset.site;
+});
 const favlist=document.getElementById('favlist'),sect=document.getElementById('sect');
 const favlistClear=()=>{favlist.innerHTML=''};
 const clearSearch=()=>{results.innerHTML='';document.getElementById('sect').style.display='none'};
-const markChip=id=>{document.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));document.getElementById(id).classList.add('on');clearSearch()};
+const markChip=id=>{['fav','hot','feed','rank','hist'].forEach(i=>document.getElementById(i).classList.remove('on'));document.getElementById(id).classList.add('on');clearSearch()};
 document.getElementById('fav').onclick=async()=>{
   markChip('fav');sect.style.display='';sect.textContent='收藏夹';favlist.innerHTML=skeleton(3);
   try{
@@ -842,10 +852,20 @@ http
           res.writeHead(400, { 'content-type': 'application/json' });
           return res.end(JSON.stringify({ error: 'EMPTY_QUERY' }));
         }
-        // HTML SSR path first (no browser needed); fall back to headless
-        // Chrome when the page is soft-blocked (empty card list).
-        let list = await searchHtml(q).catch(() => []);
-        if (!list.length) list = await search(q, { cookies: getAuthCookie() });
+        const siteQ = url.searchParams.get('site') || 'bilibili';
+        let list = [];
+        if (siteQ === 'youku') {
+          list = await youku.search(q).catch(() => []);
+          for (const x of list) {
+            x.source = `https://v.youku.com/v_show/id_${x.vid}.html`;
+            x.cover = x.img?.startsWith('//') ? 'https:' + x.img : x.img || '';
+          }
+        } else {
+          // HTML SSR path first (no browser needed); fall back to headless
+          // Chrome when the page is soft-blocked (empty card list).
+          list = await searchHtml(q).catch(() => []);
+          if (!list.length) list = await search(q, { cookies: getAuthCookie() });
+        }
         // Route covers through the gateway so no third-party host is
         // contacted by the client (same-origin boundary).
         for (const x of list) {

@@ -9,7 +9,7 @@
 // Caveat: VM IPs get rgv587 slider-punished even in real Chrome; the
 // datacenter egress (ecs-node) passes cleanly.
 
-import { captureResponse } from '../browser.js';
+import { captureResponse, evalInPage } from '../browser.js';
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36';
@@ -94,6 +94,58 @@ export async function resolve(locator, { prefer = {} } = {}) {
   };
 }
 
-export async function danmaku() {
-  return [];
+/**
+ * Danmaku via the page's own mtop signer — mopen.youku.danmu.list is
+ * called inside the loaded show page so lib.mtop.request produces a
+ * valid sign. mat is a per-minute bucket; we fetch the first N
+ * minutes (bounded — long videos stream the rest later).
+ */
+export async function danmaku(locator, { maxMin = 30 } = {}) {
+  const vid = locator.opaque_payload.vid;
+  const expr = `(async()=>{
+    const out=[];
+    for(let mat=0;mat<${maxMin};mat++){
+      try{
+        const d=await lib.mtop.request({api:"mopen.youku.danmu.list",v:"1.0",data:{pid:0,ctype:10004,vid:${JSON.stringify(vid)},mat,mcount:1,type:1}});
+        const inner=JSON.parse(d?.data?.result||"{}");
+        const list=inner?.data?.result||[];
+        if(!list.length) break;
+        for(const it of list){
+          const props=typeof it.propertis==="string"?JSON.parse(it.propertis):(it.propertis||{});
+          out.push({time_ms:Math.round(Number(it.playat||0)*1000),text:it.content||"",color:props.color?("#"+Number(props.color).toString(16).padStart(6,"0")):"#ffffff",mode:1});
+        }
+      }catch(e){break}
+    }
+    return out;
+  })()`;
+  const list = await evalInPage(SHOW(vid), 'typeof lib!=="undefined"&&!!lib.mtop', expr, 20000);
+  return Array.isArray(list) ? list : [];
+}
+
+/**
+ * Search via yksearch — the real-result variant is appScene=default_page
+ * + searchFrom=search (other scenes return only hot-keyword suggestions
+ * or FAIL_BIZ_EMPTY_RESULT). Extracts leaf nodes carrying a playable id.
+ */
+export async function search(keyword, { limit = 20 } = {}) {
+  const expr = `(async()=>{
+    const d=await lib.mtop.request({api:"mtop.youku.soku.yksearch",v:"2.0",data:{keyword:${JSON.stringify(keyword)},pg:1,pz:${limit},appScene:"default_page",appCaller:"youku-search-sdk",searchFrom:"search",sdkver:314,pcKuFlixMode:1}});
+    const hits=[];
+    const walk=(o)=>{
+      if(!o||typeof o!=="object")return;
+      const vid=o.vid||o.encodeVid||o.encodeShowId;
+      const title=o.title||o.mainTitle||o.showTitle;
+      if(vid&&title&&!o.rank)hits.push({vid:String(vid),title:String(title).replace(/<[^>]+>/g,""),img:o.posterImage||o.img||"",duration:o.duration||o.seconds||"",mark:o.displayMark||o.videoInfo||""});
+      for(const v of Object.values(o))walk(v);
+    };
+    walk(d.data);
+    return hits.slice(0,${limit});
+  })()`;
+  const list = await evalInPage(
+    SHOW('XNjQ3MzY2MzkyNA=='),
+    'typeof lib!=="undefined"&&!!lib.mtop',
+    expr,
+    25000,
+  );
+  return Array.isArray(list) ? list : [];
 }
