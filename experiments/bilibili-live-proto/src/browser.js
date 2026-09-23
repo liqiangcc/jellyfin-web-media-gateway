@@ -97,7 +97,7 @@ export async function observe(url, waitFor, extract, cookies) {
  * string, or null on timeout/punish. Used by browser-first sites (youku)
  * where the API request must be signed by the page's own JS.
  */
-export async function captureResponse(url, urlRe, waitMs = 25000) {
+export async function captureResponse(url, urlRe, waitMs = 25000, opts = {}) {
   const tab = await fetch(`${CDP_HTTP}/json/new`, { method: 'PUT' }).then(
     (r) => r.json(),
   );
@@ -112,6 +112,10 @@ export async function captureResponse(url, urlRe, waitMs = 25000) {
       await rpc(ws, 'Page.enable');
       await rpc(ws, 'Runtime.enable');
       await rpc(ws, 'Network.enable');
+      if (opts.ua)
+        await rpc(ws, 'Emulation.setUserAgentOverride', {
+          userAgent: opts.ua,
+        });
       const rid = {};
       let hit = null;
       ws.addEventListener('message', (ev) => {

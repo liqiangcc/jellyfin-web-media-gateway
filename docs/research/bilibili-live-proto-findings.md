@@ -196,6 +196,21 @@ _m_h5_tk cookie (任何 mtop 响应 set-cookie 获取)
 | `columbus.*` | ⚠️ 需 ms_codes | 未知 | 内部模块码，页面加载时发出 |
 | `danmu.common.profile` | ✅ | - | 弹幕配置 + `groupListUrl` |
 | `passport.youku.com` | ❌ 000 | - | 登录入口完全不可达 |
+| `ups.youku.com/ups/get.json` | ❌ -6004 | 需页面生成 ckey | 但移动端页内调用实测成功 |
+
+### 第四轮补充：移动端页面突破 (2026-09-23)
+
+**`m.youku.com/video/id_<vid>.html` 不受 rgv587 影响**——桌面页全封时移动页正常加载。
+
+```
+移动页 → 页面 JS 自生成 ckey → ups.youku.com/ups/get.json (纯 GET)
+       → data.stream[] m3u8_url (ccode=0501 通道)
+```
+
+- 实测：ECS Chrome 加载移动页 → captureResponse 抓到 `ups.get.json` → **2 档流 + 1078 条弹幕**端到端全通
+- `resolve()` 现在移动页优先、`v.youku.com` 兜底
+- `ups.get.json` 裸调（无 ckey/无效 ckey）返回 `-6004 账号可疑`——ckey 必须由页面 JS 生成，但页面本身不风控即可
+- 移动端 `componentList`/页面模块数据仍在 `__INITIAL_DATA__`，剧集列表 API 仍依赖 `ms_codes`（未解）
 
 **弹幕字段结构**（`mopen.youku.danmu.list` 实测）：
 ```json

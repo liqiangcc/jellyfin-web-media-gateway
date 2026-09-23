@@ -59,18 +59,40 @@ async function vidOf(locator) {
   return m[1];
 }
 
+const MOBILE_UA =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148';
+const MOBILE_SHOW = (vid) => `https://m.youku.com/video/id_${vid}.html`;
+
 /**
- * Resolve a youku vid to m3u8 ladders by letting a real headless Chrome
- * load the show page and capturing the player's own ups.appinfo.get
- * response — the mtop signature is computed by the site JS itself.
+ * Resolve a youku vid to m3u8 ladders. Two browser paths:
+ *  1. m.youku.com/video/id_<vid>.html — mobile player calls
+ *     ups.youku.com/ups/get.json with a self-generated ckey.
+ *     Mobile pages are NOT rgv587-punished (verified 2026-09-23 while
+ *     v.youku.com was fully captcha-blocked).
+ *  2. v.youku.com fallback — PC player calls mtop ups.appinfo.get
+ *     (blocked whenever the IP/device is flagged).
+ * Both return data.stream[] with m3u8_url ladders.
  */
 export async function resolve(locator, { prefer = {} } = {}) {
   const vid = await vidOf(locator);
-  const body = await captureResponse(SHOW(vid), /ups\.appinfo\.get/, 25000);
-  if (!body) throw Object.assign(new Error('BROWSER_BLOCKED'), { code: 'BROWSER_BLOCKED' });
-  // Strip the mtopjsonpN(...) wrapper.
-  const json = JSON.parse(body.slice(body.indexOf('(') + 1, body.lastIndexOf(')')));
-  const d = json?.data?.data;
+  // Mobile path first — survives page punishment.
+  let body = await captureResponse(
+    MOBILE_SHOW(vid),
+    /ups\.youku\.com\/ups\/get\.json/,
+    40000,
+    { ua: MOBILE_UA },
+  );
+  let d;
+  if (body) {
+    d = JSON.parse(body)?.data;
+  } else {
+    // PC fallback (mtop JSONP wrapper).
+    body = await captureResponse(SHOW(vid), /ups\.appinfo\.get/, 25000);
+    if (!body)
+      throw Object.assign(new Error('BROWSER_BLOCKED'), { code: 'BROWSER_BLOCKED' });
+    const json = JSON.parse(body.slice(body.indexOf('(') + 1, body.lastIndexOf(')')));
+    d = json?.data?.data;
+  }
   if (!d) throw Object.assign(new Error('UPSTREAM_ERROR'), { code: 'UPSTREAM_ERROR' });
   const err = d.error;
   if (err) {
