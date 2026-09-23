@@ -870,7 +870,17 @@ http
         if (siteQ === 'youku') {
           list = await youku.search(q).catch(() => []);
           for (const x of list) {
-            x.source = `https://v.youku.com/v_show/id_${x.vid}.html`;
+            // Hot-search items carry show:<encodeShowId> — play via the
+            // show locator so resolve() does the v_nextstage redirect.
+            x.source = x.vid.startsWith('show:')
+              ? `youku:${x.vid}`
+              : `https://v.youku.com/v_show/id_${x.vid}.html`;
+            x.cover = x.img?.startsWith('//') ? 'https:' + x.img : x.img || '';
+          }
+        } else if (siteQ === 'tencent') {
+          list = await tencent.search(q).catch(() => []);
+          for (const x of list) {
+            x.source = `https://v.qq.com/x/page/${x.vid}.html`;
             x.cover = x.img?.startsWith('//') ? 'https:' + x.img : x.img || '';
           }
         } else {
@@ -1092,7 +1102,14 @@ setInterval(async()=>{
         } catch {
           up = null;
         }
-        if (!up || !/^[a-z0-9-]+\.hdslb\.com$/.test(up.hostname)) {
+        if (
+          !up ||
+          !(
+            /^[a-z0-9-]+\.hdslb\.com$/.test(up.hostname) ||
+            /^[a-z0-9-]+\.ykimg\.com$/.test(up.hostname) ||
+            /^[a-z0-9-]+\.qpic\.cn$/.test(up.hostname)
+          )
+        ) {
           res.writeHead(403);
           return res.end('host not allowed');
         }

@@ -117,3 +117,95 @@ export async function resolve(locator, { prefer = {} } = {}) {
     quality_options: streams.map((s) => ({ qn: s.height, label: `${s.height}p` })),
   };
 }
+
+/**
+ * Danmaku — dm.video.qq.com/barrage/segment/<vid>/t/v1/<start>/<end>
+ * is a plain GET (no auth/signing), paginated in 30s windows.
+ * Lazy: mats are per-minute buckets → two 30s segment fetches each.
+ * Field map: time_offset=ms, content=text, content_style JSON has
+ * color/position when non-empty.
+ */
+export const lazy_danmaku = true;
+
+/**
+ * Search — trpc.videosearch.mobile_search.MultiTerminalSearch/MbSearch
+ * is a plain POST (no signing). Results live in
+ * data.normalList.itemList[].videoInfo.videoDoc {id,title,imgUrl,timeLong}.
+ */
+export async function search(keyword, { limit = 20 } = {}) {
+  const r = await fetch(
+    'https://pbaccess.video.qq.com/trpc.videosearch.mobile_search.MultiTerminalSearch/MbSearch?vplatform=2',
+    {
+      method: 'POST',
+      headers: {
+        'User-Agent': UA,
+        'content-type': 'application/json',
+        origin: 'https://v.qq.com',
+        referer: 'https://v.qq.com/x/search/',
+      },
+      body: JSON.stringify({
+        version: '26022601',
+        clientType: 1,
+        query: keyword,
+        pagenum: 0,
+        pagesize: Math.max(limit, 10),
+        queryFrom: 0,
+        isPrefetch: true,
+        isneedQc: true,
+      }),
+    },
+  );
+  const d = await r.json();
+  const items = d?.data?.normalList?.itemList || [];
+  const hits = [];
+  for (const it of items) {
+    const vid = it?.doc?.id;
+    const vi = it?.videoInfo;
+    if (!vid || !vi) continue;
+    hits.push({
+      vid,
+      title: String(vi.title || '').replace(/<[^>]+>/g, ''),
+      img: vi.imgUrl || '',
+      duration: vi.videoDoc?.timeLong || '',
+      mark: vi.views || vi.typeName || '',
+    });
+  }
+  return hits.slice(0, limit);
+}
+
+export async function danmaku(locator, { mats = [0, 1, 2] } = {}) {
+  const vid = locator.opaque_payload.vid;
+  const out = [];
+  for (const mat of mats) {
+    for (const half of [0, 1]) {
+      const start = mat * 60000 + half * 30000;
+      const end = start + 30000;
+      try {
+        const r = await fetch(
+          `https://dm.video.qq.com/barrage/segment/${vid}/t/v1/${start}/${end}`,
+          { headers: { 'User-Agent': UA, Referer: 'https://v.qq.com/' } },
+        );
+        const d = await r.json();
+        for (const it of d.barrage_list || []) {
+          let color = 16777215;
+          let mode = 1;
+          if (it.content_style) {
+            try {
+              const st = JSON.parse(it.content_style);
+              if (st.color) color = parseInt(st.color, 16);
+              if (st.position === 2) mode = 5; // top
+              else if (st.position === 3) mode = 4; // bottom
+            } catch {}
+          }
+          const t = Number(it.time_offset) / 1000;
+          const text = String(it.content || '').trim();
+          if (Number.isFinite(t) && text) out.push({ t, mode, color, text });
+        }
+        await new Promise((r2) => setTimeout(r2, 100 + Math.random() * 150));
+      } catch {
+        /* skip window */
+      }
+    }
+  }
+  return out;
+}

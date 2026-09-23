@@ -254,8 +254,26 @@ _m_h5_tk cookie (任何 mtop 响应 set-cookie 获取)
 
 ### 待办
 
-- [ ] 实现 tencent adapter（`v.qq.com/x/cover/...` → evalInPage 读 `__VINFO_DATA__`）
-- [ ] CDN 镜像降级（smtcdns TLS 拒 → 遍历 ul.ui 找能通的）
-- [ ] 弹幕 trpc 协议（`pbaccess.video.qq.com/trpc.danmu.*`）
-- [ ] 搜索（v.qq.com/x/search/ 是否 punish 未探）
+- [x] 实现 tencent adapter（`v.qq.com/x/cover/...` → evalInPage 读 `__VINFO_DATA__`）
+- [x] CDN 镜像降级（`pickMirror` HEAD 探测各镜像取首个可达）
+- [x] 弹幕（`dm.video.qq.com/barrage/segment/<vid>/t/v1/<start>/<end>` 纯 GET，30s 窗口分页——实测 75 条/窗口）
+- [x] 搜索（`trpc.videosearch.mobile_search.MultiTerminalSearch/MbSearch` 纯 POST 无签名——31 条实测）
 - [ ] VIP 内容（加密 vinfo 对 VIP 内容可能返回 DRM 流）
+- [ ] 清晰度切换（需按 `defn` 参数重调 vinfo_proxy 取其他格式）
+
+### 腾讯弹幕字段（实测）
+
+```json
+{
+  "time_offset": "0",       // 毫秒
+  "content": "弹幕文本",
+  "content_style": "{\"color\":\"ffffff\",\"position\":1}",  // 可空
+  "up_count": "2"
+}
+```
+`position` 映射：2=顶部（mode 5）、3=底部（mode 4）、其他=滚动（mode 1）。
+
+### 腾讯搜索字段
+
+`POST pbaccess.video.qq.com/trpc.videosearch.mobile_search.MultiTerminalSearch/MbSearch`
+结果在 `data.normalList.itemList[]`：`item.doc.id` = vid，`item.videoInfo.title/imgUrl/views/typeName` = 元数据，`item.videoInfo.videoDoc.timeLong` = 秒数。
