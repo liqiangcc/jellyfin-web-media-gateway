@@ -151,6 +151,57 @@ export async function resolve(locator, { prefer = {} } = {}) {
  */
 export const lazy_danmaku = true;
 
+/**
+ * Episode list — the mobile page's SSR `__INITIAL_DATA__` embeds the
+ * "h5-detail-anthology" component with up to ~50 episodes:
+ *   dataNode[].data { stage(ep#), title, img, action.value=vid }
+ * Pure HTTP — m.youku.com is not rgv587-punished.
+ */
+export async function episodes(locator) {
+  const vid = await vidOf(locator);
+  const r = await fetch(MOBILE_SHOW(vid), {
+    headers: { 'User-Agent': MOBILE_UA },
+  });
+  const html = await r.text();
+  const i = html.indexOf('__INITIAL_DATA__');
+  if (i < 0) return [];
+  const j = html.indexOf('{', i);
+  // Brace-match the JSON object (strings may contain braces).
+  let depth = 0, end = j, inStr = false, esc = false;
+  for (let k = j; k < html.length; k++) {
+    const c = html[k];
+    if (esc) { esc = false; continue; }
+    if (c === '\\') { esc = true; continue; }
+    if (c === '"') inStr = !inStr;
+    if (inStr) continue;
+    if (c === '{') depth++;
+    else if (c === '}' && --depth === 0) { end = k; break; }
+  }
+  let init;
+  try {
+    init = JSON.parse(html.slice(j, end + 1));
+  } catch {
+    return [];
+  }
+  const eps = [];
+  for (const c of init.componentList || []) {
+    if (c.componentId !== 'h5-detail-anthology') continue;
+    for (const node of c.dataNode || []) {
+      const d = node.data || {};
+      const ev = d.action?.value;
+      if (!ev || d.stage == null) continue;
+      eps.push({
+        vid: ev,
+        ep: d.stage,
+        title: d.title || `第${d.stage}集`,
+        img: d.img || '',
+      });
+    }
+  }
+  eps.sort((a, b) => a.ep - b.ep);
+  return eps;
+}
+
 // --- pure-HTTP mtop signing ---
 // _m_h5_tk cookie + md5(token&t&appKey&data) = sign. No browser needed
 // for API calls — only the initial play-page resolve needs Chrome

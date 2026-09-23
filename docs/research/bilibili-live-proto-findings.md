@@ -212,6 +212,11 @@ _m_h5_tk cookie (任何 mtop 响应 set-cookie 获取)
 - `ups.get.json` 裸调（无 ckey/无效 ckey）返回 `-6004 账号可疑`——ckey 必须由页面 JS 生成，但页面本身不风控即可
 - 移动端 `componentList`/页面模块数据仍在 `__INITIAL_DATA__`，剧集列表 API 仍依赖 `ms_codes`（未解）
 
+**选集已解**：`__INITIAL_DATA__.componentList[componentId=="h5-detail-anthology"].dataNode[]`
+嵌入完整剧集列表——`data.stage`=集号、`data.action.value`=vid、`data.title`、`data.img`。
+纯 HTTP fetch 移动页 HTML 即可（无需浏览器/mtop）。实测 50 集（师兄啊师兄）。
+长剧（>50 集）可能分页——component dataNode 上限 50，翻页机制未探。
+
 **弹幕字段结构**（`mopen.youku.danmu.list` 实测）：
 ```json
 {
